@@ -1,1 +1,8 @@
+# folders
 Zaeem-info/
+node_modules/ 
+dist/
+
+
+# files
+.env

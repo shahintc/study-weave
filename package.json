@@ -1,0 +1,22 @@
+{
+  "name": "study-weave",
+  "version": "1.0.0",
+  "description": "CS319 Project - Artifact Comparator Web App with Human Study Module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CS319-25-FA/S1-T9-study-weave.git"
+  },
+  "keywords": ["CS319", "software-engineering", "artifact-comparison", "react", "node"],
+  "author": "Runtime Terror",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/CS319-25-FA/S1-T9-study-weave/issues"
+  },
+  "homepage": "https://github.com/CS319-25-FA/S1-T9-study-weave#readme"
+}
+
+
