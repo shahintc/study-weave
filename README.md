@@ -1,6 +1,8 @@
+Issue Link:
+Fixes: #1
+
 ## Study Weave: an Artifact Comparator Internet Program with Human Study Module
 
-Issue: #11163
 
 ## Team members
 
