@@ -10,7 +10,13 @@
     "type": "git",
     "url": "git+https://github.com/CS319-25-FA/S1-T9-study-weave.git"
   },
-  "keywords": ["CS319", "software-engineering", "artifact-comparison", "react", "node"],
+  "keywords": [
+    "CS319",
+    "software-engineering",
+    "artifact-comparison",
+    "react",
+    "node"
+  ],
   "author": "Runtime Terror",
   "license": "ISC",
   "bugs": {
@@ -18,5 +24,3 @@
   },
   "homepage": "https://github.com/CS319-25-FA/S1-T9-study-weave#readme"
 }
-
-
