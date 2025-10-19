@@ -11,11 +11,16 @@ export default function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
+
     try {
       const res = await axios.post("/api/auth/login", { email, password });
+
       localStorage.setItem("token", res.data.token);
+      //
+      localStorage.setItem("user", JSON.stringify(res.data.user));
+
       alert(`Welcome back, ${res.data.user.name}!`);
-      navigate("/");
+      navigate("/profile");
     } catch (err) {
       alert(err.response?.data?.message || "Login failed");
     } finally {

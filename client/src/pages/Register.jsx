@@ -13,15 +13,19 @@ export default function Register() {
     e.preventDefault();
     if (form.password !== form.confirm) return alert("Passwords do not match!");
     setLoading(true);
+
     try {
-      await axios.post("/api/auth/register", {
+      const response = await axios.post("/api/auth/register", {
         name: form.name,
         email: form.email,
         password: form.password,
         role: form.role
       });
-      alert("Registration successful!");
+      
+      alert("Registration successful! User ID: " + response.data.user.id);
+      console.log("Created user:", response.data.user);
       navigate("/login");
+
     } catch (err) {
       alert(err.response?.data?.message || "Registration failed");
     } finally {

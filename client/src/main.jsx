@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import Register from "./pages/Register";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import Profile from "./pages/Profile";
 import "./assets/App.css";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
@@ -16,6 +17,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         {/* Auth Pages */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/profile" element={<Profile />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password/:token" element={<ResetPassword />} />
 
