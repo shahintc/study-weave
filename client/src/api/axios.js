@@ -1,5 +1,6 @@
 import axios from "axios";
 
+// This instance will be the base for all API calls
 const instance = axios.create({
   baseURL: "http://localhost:5000",  // backend base URL
   withCredentials: false,
