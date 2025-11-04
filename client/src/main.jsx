@@ -9,6 +9,7 @@ import ResetPassword from "./pages/ResetPassword";
 import Profile from "./pages/Profile";
 import ParticipantDashboard from "./pages/participant-dashboard";
 import ResearcherDashboard from "./pages/researcher-dashboard";
+import Test from "./pages/test";
 import "./assets/App.css";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
@@ -24,6 +25,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <Route path="/reset-password/:token" element={<ResetPassword />} />
         <Route path="/participant-dashboard" element={<ParticipantDashboard />} />
         <Route path="/researcher-dashboard" element={<ResearcherDashboard />} />
+        <Route path="/test" element={<Test />} />
 
         {/* later adding other app routes here (e.g., Dashboards, Study pages)
           Example: <Route path="/dashboard" element={<ResearcherDashboard />} /> 
