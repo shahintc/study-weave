@@ -11,26 +11,27 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Plus, LineChart, Settings2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
-export default function ParticipantDashboard() {
+export default function ResearcherDashboard() {
   const location = useLocation();
   const nav = [
-    { to: "/participant", label: "Dashboard" },
-    { to: "/studies", label: "Studies" },
-    { to: "/history", label: "My History" },
+    { to: "/researcher", label: "Dashboard" },
+    { to: "/researcher/studies", label: "My Studies" },
+    { to: "/researcher/artifacts", label: "Artifacts" },
+    { to: "/researcher/assess", label: "Assess" },
   ];
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
       {/* Top bar */}
       <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Study Weave</h1>
-        <UserNav />
+        <h1 className="text-2xl font-semibold tracking-tight">Study Weave (Researcher)</h1>
+        <UserNav displayName="Dr. Ali" />
       </header>
 
-      {/* Simple navbar */}
+      {/* Navbar */}
       <nav className="flex items-center gap-2 border-b pb-4">
         {nav.map((item) => (
           <Button
@@ -44,54 +45,31 @@ export default function ParticipantDashboard() {
         ))}
       </nav>
 
-      {/* Greeting */}
+      {/* Researcher Dashboard CTA */}
       <section>
-        <h2 className="text-xl font-semibold">Welcome back, Zaeem!</h2>
-      </section>
-
-      {/* Notifications + Quick actions */}
-      <section className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Notifications</CardTitle>
-            <CardDescription>Recent activity</CardDescription>
+            <CardTitle>Researcher Dashboard</CardTitle>
+            <CardDescription>Create and manage your studies</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 text-yellow-600" />
-              <p>
-                You have been invited to <span className="font-medium">“Study X”</span>.
-                <span className="text-muted-foreground"> (Due Oct 30)</span>
-              </p>
-            </div>
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 h-4 w-4 text-green-600" />
-              <p>Your “Study Y” submission was received.</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="hidden md:block">
-          <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
-            <CardDescription>Jump back into your work</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            <Button size="sm">Start next task</Button>
-            <Button size="sm" variant="outline">Browse studies</Button>
-            <Button size="sm" variant="ghost">View history</Button>
+          <CardContent className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Start a new participant study</p>
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Create New Study
+            </Button>
           </CardContent>
         </Card>
       </section>
 
-      {/* Assigned studies */}
+      {/* Active Studies */}
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold">My Assigned Studies</h2>
+        <h2 className="text-lg font-semibold">My Active Studies</h2>
 
         <Card>
           <CardHeader className="pb-2">
             <CardTitle>Study X: AI vs. Human Code Readability</CardTitle>
-            <CardDescription>2 of 3 tasks complete</CardDescription>
+            <CardDescription>70% (14/20 participants)</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between text-sm">
@@ -101,24 +79,30 @@ export default function ParticipantDashboard() {
             <Progress value={70} />
           </CardContent>
           <CardFooter className="justify-end">
-            <Button size="sm">Start Task 3</Button>
+            <Button size="sm">
+              <LineChart className="mr-2 h-4 w-4" />
+              Monitor
+            </Button>
           </CardFooter>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle>Study Y: UML Diagram Clarity</CardTitle>
-            <CardDescription className="text-green-600">Completed</CardDescription>
+            <CardTitle>Study Z: UML Diagram Clarity</CardTitle>
+            <CardDescription className="text-amber-600">Draft • Setup incomplete</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Progress</span>
-              <span className="font-medium">100%</span>
+              <span className="font-medium">Setup incomplete</span>
             </div>
-            <Progress value={100} />
+            <Progress value={20} />
           </CardContent>
           <CardFooter className="justify-end">
-            <Button size="sm" variant="outline">View History</Button>
+            <Button size="sm" variant="outline">
+              <Settings2 className="mr-2 h-4 w-4" />
+              Edit Setup
+            </Button>
           </CardFooter>
         </Card>
       </section>
@@ -126,16 +110,16 @@ export default function ParticipantDashboard() {
   );
 }
 
-export function UserNav() {
+export function UserNav({ displayName = "Researcher" }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="flex items-center gap-2">
           <Avatar className="h-8 w-8">
             <AvatarImage src="https://github.com/shadcn.png" alt="@user" />
-            <AvatarFallback>U</AvatarFallback>
+            <AvatarFallback>{displayName?.[0] || "U"}</AvatarFallback>
           </Avatar>
-          <span className="hidden sm:inline">John Doe</span>
+          <span className="hidden sm:inline">{displayName}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
