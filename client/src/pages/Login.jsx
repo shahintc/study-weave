@@ -24,14 +24,18 @@ export default function Login() {
     setLoading(true);
 
     try {
-      const res = await axios.post("/api/auth/login", { email, password });
+      // when user logins, the react form sends this to backend:
+      const res = await axios.post("/api/auth/login", { email, password });   // should be GET but login is an exception (nodejs tut)
 
       localStorage.setItem("token", res.data.token);
-      //
       localStorage.setItem("user", JSON.stringify(res.data.user));
 
-      alert(`Welcome back, ${res.data.user.name}!`);
-      navigate("/profile");
+      const role = res.data.user?.role;
+      if (role === "researcher") {
+        navigate("/researcher-dashboard");
+      } else {
+        navigate("/participant-dashboard");
+      }
     } catch (err) {
       alert(err.response?.data?.message || "Login failed");
     } finally {

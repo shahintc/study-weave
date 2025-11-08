@@ -8,7 +8,6 @@ export default function Profile() {
   const [form, setForm] = useState({ name: "", email: "", password: "" });
   const [loading, setLoading] = useState(false);
 
-
   // fetching all users from the database
   const fetchUsers = async () => {
     try {
@@ -21,6 +20,7 @@ export default function Profile() {
     }
   };
 
+  // so we use useEffect to prevent recursive calls due to useState like setUser...but if we don’t use useState, then no need to define it here
   useEffect(() => {
     fetchUsers();
   }, []);
