@@ -25,6 +25,7 @@ router.post('/register', async (req, res) => {
       { expiresIn: '24h' }
     );
 
+    // sends final response back to client
     res.status(201).json({
       message: 'User created successfully',
       token,
@@ -52,7 +53,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    // Check password
+    // verify password
     const isMatch = await User.comparePassword(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' });

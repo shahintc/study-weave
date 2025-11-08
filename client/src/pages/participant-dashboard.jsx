@@ -1,5 +1,6 @@
 import React from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -15,6 +16,34 @@ import { AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
 export default function ParticipantDashboard() {
+  const navigate = useNavigate();
+  const [user, setUser] = useState(null);
+
+    useEffect(() => {
+      const raw = localStorage.getItem("user");
+      if (!raw) {
+        navigate("/login");
+        return;
+      }
+      try {
+        const u = JSON.parse(raw);
+        setUser(u);
+        if (u.role !== "participant") {
+          navigate("/researcher-dashboard");     // <-------- 
+        }
+      } catch {
+        navigate("/login");
+      }
+    }, [navigate]);
+
+    const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    navigate("/login");
+  };
+
+
+
   const location = useLocation();
   const nav = [
     { to: "/participant", label: "Dashboard" },
@@ -27,7 +56,7 @@ export default function ParticipantDashboard() {
       {/* Top bar */}
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Study Weave</h1>
-        <UserNav />
+        <UserNav displayName={user?.name || "Participant"} onLogout={handleLogout}/>
       </header>
 
       {/* Simple navbar */}
@@ -46,7 +75,7 @@ export default function ParticipantDashboard() {
 
       {/* Greeting */}
       <section>
-        <h2 className="text-xl font-semibold">Welcome back, Zaeem!</h2>
+        <h2 className="text-xl font-semibold">Welcome back, {user?.name || "Participant"}!</h2>
       </section>
 
       {/* Notifications + Quick actions */}
@@ -126,7 +155,7 @@ export default function ParticipantDashboard() {
   );
 }
 
-export function UserNav() {
+export function UserNav({ displayName = "Participant", onLogout }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -135,7 +164,7 @@ export function UserNav() {
             <AvatarImage src="https://github.com/shadcn.png" alt="@user" />
             <AvatarFallback>U</AvatarFallback>
           </Avatar>
-          <span className="hidden sm:inline">John Doe</span>
+          <span className="hidden sm:inline">{displayName}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
@@ -143,7 +172,7 @@ export function UserNav() {
         <DropdownMenuSeparator />
         <DropdownMenuItem>Profile</DropdownMenuItem>
         <DropdownMenuItem>Settings</DropdownMenuItem>
-        <DropdownMenuItem>Logout</DropdownMenuItem>
+        <DropdownMenuItem onClick={onLogout}>Logout</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
