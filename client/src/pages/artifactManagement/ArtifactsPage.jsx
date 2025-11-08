@@ -12,8 +12,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuCheckboxItem
 } from "@/components/ui/dropdown-menu";
-import { Plus, LineChart, Settings2 } from "lucide-react";
-import { Progress } from "@/components/ui/progress";
+import { IconPlus } from "@tabler/icons-react";
+import { FileUploadModal } from '@/pages/artifactManagement/UploadModal'; // Import the FileUploadModal
+import { ManageModal } from '@/pages/artifactManagement/ManageModal'; // Import the ManageModal
 
 export default function ResearcherDashboard() {
   const location = useLocation();
@@ -26,6 +27,11 @@ export default function ResearcherDashboard() {
 
   const [selectedTypes, setSelectedTypes] = React.useState([]);
   const [selectedTags, setSelectedTags] = React.useState([]);
+  const [isUploadModalOpen, setIsUploadModalOpen] = React.useState(false);
+  const [isManageModalOpen, setIsManageModalOpen] = React.useState(false);
+  const [artifactToManage, setArtifactToManage] = React.useState(null);
+  const [artifactToReplaceId, setArtifactToReplaceId] = React.useState(null); // To track which artifact's file is being replaced
+
 
   const availableTags = [
     "diagram",
@@ -43,6 +49,38 @@ export default function ResearcherDashboard() {
   ];
   const availableTypes = ["human", "AI"];
 
+  // Reorganized placeholder artifact data
+  const artifactsData = [
+    {
+      id: "1",
+      name: "Experiment Setup Diagram",
+      type: "human",
+      tags: ["diagram", "setup", "UX research"],
+      fileName: "experiment-diagram.pdf", // Added for ManageModal display
+    },
+    {
+      id: "2",
+      name: "AI Model Codebase v1.2",
+      type: "AI",
+      tags: ["code", "model", "analysis"],
+      fileName: "ai-model-v1.2.zip", // Added for ManageModal display
+    },
+    {
+      id: "3",
+      name: "User Study Report Q3 2023",
+      type: "human",
+      tags: ["report", "findings", "qualitative"],
+      fileName: "user-study-report.pdf", // Added for ManageModal display
+    },
+    {
+      id: "4",
+      name: "Synthetic Dataset Generation Log",
+      type: "AI",
+      tags: ["data", "log", "generation"],
+      fileName: "synth-data-log.txt", // Added for ManageModal display
+    },
+  ];
+
   const handleTypeChange = (type) => {
     setSelectedTypes((prev) =>
       prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
@@ -53,6 +91,15 @@ export default function ResearcherDashboard() {
     setSelectedTags((prev) =>
       prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
     );
+  };
+
+  // Placeholder for when a file is successfully uploaded (either new or replacement)
+  const handleUploadSuccess = () => {
+    setIsUploadModalOpen(false);
+    setArtifactToReplaceId(null); // Clear replacement context
+    // In a real application, you would typically refetch your artifacts data here
+    // For demonstration, we'll just log
+    console.log("File upload/replacement successful. Refreshing artifact list would happen here.");
   };
 
   return (
@@ -81,10 +128,23 @@ export default function ResearcherDashboard() {
       <section className="space-y-4">
         <div className="flex justify-between items-center">
           <h2 className="text-xl font-semibold">My Artifacts</h2>
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />
-            Upload new artifact
+          {/* Button to open FileUploadModal for new artifacts */}
+          <Button
+            onClick={() => {
+              setArtifactToReplaceId(null); // Ensure no replacement context for new upload
+              setIsUploadModalOpen(true);
+            }}
+            className="flex items-center gap-2"
+          >
+            <IconPlus className="h-4 w-4" />
+            New Artifact
           </Button>
+          <FileUploadModal
+            isOpen={isUploadModalOpen}
+            setIsOpen={setIsUploadModalOpen}
+            artifactToReplaceId={artifactToReplaceId} // Pass null for new uploads, or ID for replacement
+            onUploadSuccess={handleUploadSuccess}
+          />
         </div>
 
         <div className="flex justify-end mb-4">
@@ -144,32 +204,7 @@ export default function ResearcherDashboard() {
 
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[
-            {
-              id: "1",
-              name: "Experiment Setup Diagram",
-              type: "human",
-              tags: ["diagram", "setup", "UX research"],
-            },
-            {
-              id: "2",
-              name: "AI Model Codebase v1.2",
-              type: "AI",
-              tags: ["code", "model", "analysis"],
-            },
-            {
-              id: "3",
-              name: "User Study Report Q3 2023",
-              type: "human",
-              tags: ["report", "findings", "qualitative"],
-            },
-            {
-              id: "4",
-              name: "Synthetic Dataset Generation Log",
-              type: "AI",
-              tags: ["data", "log", "generation"],
-            },
-          ].map((artifact) => (
+          {artifactsData.map((artifact) => (
             <Card key={artifact.id}>
               <CardHeader>
                 <CardTitle>{artifact.name}</CardTitle>
@@ -190,12 +225,48 @@ export default function ResearcherDashboard() {
                 </div>
               </CardContent>
               <CardFooter className="flex justify-end">
-                <Button variant="outline" size="sm">Manage</Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setArtifactToManage(artifact);
+                    setIsManageModalOpen(true);
+                  }}
+                >
+                  Manage
+                </Button>
               </CardFooter>
             </Card>
           ))}
         </div>
       </section>
+
+      {/* Manage Modal */}
+      <ManageModal
+        isOpen={isManageModalOpen}
+        setIsOpen={setIsManageModalOpen}
+        artifact={artifactToManage}
+        onSave={(updatedArtifact) => {
+          console.log("Updated artifact:", updatedArtifact);
+          // In a real application, you would send updatedArtifact to your backend
+          // and then update the local 'artifactsData' state or refetch data.
+          setIsManageModalOpen(false);
+          setArtifactToManage(null); // Clear artifact after saving
+        }}
+        onDelete={(artifactId) => {
+          console.log("Deleted artifact with ID:", artifactId);
+          // In a real application, send delete request to your backend
+          // and then update the local 'artifactsData' state or refetch data.
+          setIsManageModalOpen(false);
+          setArtifactToManage(null); // Clear artifact after deleting
+        }}
+        onFileReplace={(artifactId) => {
+          // This function is called from ManageModal when "Replace File" is clicked
+          setIsManageModalOpen(false); // Close the Manage Modal first
+          setArtifactToReplaceId(artifactId); // Set the ID of the artifact whose file is being replaced
+          setIsUploadModalOpen(true); // Open the FileUploadModal
+        }}
+      />
 
     </div>
   );

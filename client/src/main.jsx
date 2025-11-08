@@ -9,7 +9,7 @@ import ResetPassword from "./pages/ResetPassword";
 import Profile from "./pages/Profile";
 import ParticipantDashboard from "./pages/participant-dashboard";
 import ResearcherDashboard from "./pages/researcher-dashboard";
-import ArtifactsPage from "./pages/ArtifactsPage";
+import ArtifactsPage from "./pages/artifactManagement/ArtifactsPage";
 import Test from "./pages/test";
 import "./assets/App.css";
 
