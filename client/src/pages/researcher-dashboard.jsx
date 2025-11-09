@@ -1,17 +1,8 @@
 import React from "react";
 import { useState, useEffect } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Plus, LineChart, Settings2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
@@ -37,44 +28,10 @@ export default function ResearcherDashboard() {
     }
   }, [navigate]);
 
-  const handleLogout = () => {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    navigate("/login");
-  };
+  // logout handled by layout header
 
-  // nav bar extra for now: will edit later
-  const location = useLocation();
-  const nav = [
-    { to: "/researcher", label: "Dashboard" },
-    { to: "/researcher/studies", label: "My Studies" },
-    { to: "/researcher/artifacts", label: "Artifacts" },
-    { to: "/researcher/assess", label: "Assess" },
-  ];
-
-
- return (
-    <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
-      {/* Top bar */}
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Study Weave (Researcher)</h1>
-        <UserNav displayName={user?.name || "Researcher"} onLogout={handleLogout} />
-      </header>
-
-      {/* Navbar */}
-      <nav className="flex items-center gap-2 border-b pb-4">
-        {nav.map((item) => (
-          <Button
-            key={item.to}
-            asChild
-            variant={location.pathname === item.to ? "secondary" : "ghost"}
-            className="rounded-full"
-          >
-            <Link to={item.to}>{item.label}</Link>
-          </Button>
-        ))}
-      </nav>
-
+  return (
+    <div className="space-y-6">
       {/* Researcher Dashboard CTA */}
       <section>
         <Card>
@@ -137,29 +94,5 @@ export default function ResearcherDashboard() {
         </Card>
       </section>
     </div>
-  );
-}
-
-
-export function UserNav({ displayName = "Researcher", onLogout }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="flex items-center gap-2">
-          <Avatar className="h-8 w-8">
-            <AvatarImage src="https://github.com/shadcn.png" alt="@user" />
-            <AvatarFallback>{displayName?.[0] || "U"}</AvatarFallback>
-          </Avatar>
-          <span className="hidden sm:inline">{displayName}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel>My Account</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem>Profile</DropdownMenuItem>
-        <DropdownMenuItem>Settings</DropdownMenuItem>
-        <DropdownMenuItem onClick={onLogout}>Logout</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

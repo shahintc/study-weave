@@ -32,9 +32,9 @@ export default function Login() {
 
       const role = res.data.user?.role;
       if (role === "researcher") {
-        navigate("/researcher-dashboard");
+        navigate("/researcher");
       } else {
-        navigate("/participant-dashboard");
+        navigate("/participant");
       }
     } catch (err) {
       alert(err.response?.data?.message || "Login failed");
@@ -94,4 +94,3 @@ export default function Login() {
     </div>
   );
 }
-

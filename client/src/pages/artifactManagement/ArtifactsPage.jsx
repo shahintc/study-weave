@@ -1,8 +1,6 @@
 import React from "react";
-import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,14 +15,6 @@ import { FileUploadModal } from '@/pages/artifactManagement/UploadModal'; // Imp
 import { ManageModal } from '@/pages/artifactManagement/ManageModal'; // Import the ManageModal
 
 export default function ResearcherDashboard() {
-  const location = useLocation();
-  const nav = [
-    { to: "/researcher", label: "Dashboard" },
-    { to: "/researcher/studies", label: "My Studies" },
-    { to: "/artifacts", label: "Artifacts" },
-    { to: "/researcher/assess", label: "Assess" },
-  ];
-
   const [selectedTypes, setSelectedTypes] = React.useState([]);
   const [selectedTags, setSelectedTags] = React.useState([]);
   const [isUploadModalOpen, setIsUploadModalOpen] = React.useState(false);
@@ -103,27 +93,7 @@ export default function ResearcherDashboard() {
   };
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
-      {/* Top bar */}
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Study Weave (Researcher)</h1>
-        <UserNav displayName="Dr. Ali" />
-      </header>
-
-      {/* Navbar */}
-      <nav className="flex items-center gap-2 border-b pb-4">
-        {nav.map((item) => (
-          <Button
-            key={item.to}
-            asChild
-            variant={location.pathname === item.to ? "secondary" : "ghost"}
-            className="rounded-full"
-          >
-            <Link to={item.to}>{item.label}</Link>
-          </Button>
-        ))}
-      </nav>
-
+    <div className="space-y-6">
       {/* Artifacts Section */}
       <section className="space-y-4">
         <div className="flex justify-between items-center">
@@ -269,28 +239,5 @@ export default function ResearcherDashboard() {
       />
 
     </div>
-  );
-}
-
-export function UserNav({ displayName = "Researcher" }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="flex items-center gap-2">
-          <Avatar className="h-8 w-8">
-            <AvatarImage src="https://github.com/shadcn.png" alt="@user" />
-            <AvatarFallback>{displayName?.[0] || "U"}</AvatarFallback>
-          </Avatar>
-          <span className="hidden sm:inline">{displayName}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel>My Account</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem>Profile</DropdownMenuItem>
-        <DropdownMenuItem>Settings</DropdownMenuItem>
-        <DropdownMenuItem>Logout</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
