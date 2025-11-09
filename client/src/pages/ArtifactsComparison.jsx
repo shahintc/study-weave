@@ -72,51 +72,32 @@ export default function ArtifactsComparison() {
 
   return (
     <div className="min-h-screen w-full bg-white">
-      {/* ===== Header (left title, centered tabs, right profile; no pill on active) ===== */}
+      {/* ===== Header (title left, profile right) ===== */}
       <header className="w-full bg-white">
         <div className="mx-auto max-w-6xl px-6">
-          {/* Use a 3-column grid so the center stays perfectly centered */}
-          <div className="grid grid-cols-[1fr_auto_1fr] items-center py-4">
+          <div className="flex items-center justify-between py-4">
             {/* Left: title */}
-            <h1 className="justify-self-start text-[26px] font-semibold leading-none text-black">
+            <h1 className="text-[26px] font-semibold leading-none text-black">
               Study Weave <span className="text-gray-600">(Researcher)</span>
             </h1>
 
-            {/* Center: tabs (no outlines) */}
-            <nav className="justify-self-center">
-              <ul className="flex items-center gap-24 text-[15px] text-gray-700">
-                <li><button className="hover:text-black">Dashboard</button></li>
-                <li><button className="hover:text-black">My Studies</button></li>
-
-                {/* Active tab with a subtle underline bar, no pill/outline */}
-                <li className="relative">
-                  <button className="font-medium text-black">Artifacts</button>
-                  <span className="pointer-events-none absolute left-0 right-0 -bottom-2 h-[3px] rounded-full bg-gray-300" />
-                </li>
-
-                <li><button className="hover:text-black">Assess</button></li>
-              </ul>
-            </nav>
-
-            {/* Right: profile (stick to the far right) */}
-            <div className="justify-self-end">
-              <button className="flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-1.5 shadow-sm hover:bg-gray-50">
-                <Avatar className="h-8 w-8">
-                  <AvatarImage src="https://i.pravatar.cc/100?u=DrAli" alt="Dr. Ali" />
-                  <AvatarFallback>DA</AvatarFallback>
-                </Avatar>
-                <span className="text-[15px] font-medium text-black">Dr. Ali</span>
-              </button>
-            </div>
+            {/* Right: profile */}
+            <button className="flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-1.5 shadow-sm hover:bg-gray-50">
+              <Avatar className="h-8 w-8">
+                <AvatarImage src="https://i.pravatar.cc/100?u=DrAli" alt="Dr. Ali" />
+                <AvatarFallback>DA</AvatarFallback>
+              </Avatar>
+              <span className="text-[15px] font-medium text-black">Dr. Ali</span>
+            </button>
           </div>
 
-          {/* Divider under the whole header */}
+          {/* Divider */}
           <div className="h-px w-full bg-gray-200" />
         </div>
       </header>
       {/* ===== End Header ===== */}
 
-      {/* ===== Body (unchanged) ===== */}
+      {/* ===== Body ===== */}
       <div className="p-8 max-w-6xl mx-auto flex flex-col gap-6">
         <div className="mb-2">
           <h2 className="text-lg font-semibold">
