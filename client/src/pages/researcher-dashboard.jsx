@@ -1,5 +1,6 @@
 import React from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -15,6 +16,34 @@ import { Plus, LineChart, Settings2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 
 export default function ResearcherDashboard() {
+  const navigate = useNavigate();
+  const [user, setUser] = useState(null);
+
+  // Load user from localStorage and guard route
+  useEffect(() => {
+    const raw = localStorage.getItem("user");
+    if (!raw) {
+      navigate("/login");
+      return;
+    }
+    try {
+      const u = JSON.parse(raw);
+      setUser(u);
+      if (u.role !== "researcher") {
+        navigate("/participant-dashboard");
+      }
+    } catch {
+      navigate("/login");
+    }
+  }, [navigate]);
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    navigate("/login");
+  };
+
+  // nav bar extra for now: will edit later
   const location = useLocation();
   const nav = [
     { to: "/researcher", label: "Dashboard" },
@@ -23,12 +52,13 @@ export default function ResearcherDashboard() {
     { to: "/researcher/assess", label: "Assess" },
   ];
 
-  return (
+
+ return (
     <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
       {/* Top bar */}
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Study Weave (Researcher)</h1>
-        <UserNav displayName="Dr. Ali" />
+        <UserNav displayName={user?.name || "Researcher"} onLogout={handleLogout} />
       </header>
 
       {/* Navbar */}
@@ -50,7 +80,7 @@ export default function ResearcherDashboard() {
         <Card>
           <CardHeader>
             <CardTitle>Researcher Dashboard</CardTitle>
-            <CardDescription>Create and manage your studies</CardDescription>
+            <CardDescription>Welcome, {user?.name || "Researcher"} • {user?.email || ""}</CardDescription>
           </CardHeader>
           <CardContent className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Start a new participant study</p>
@@ -110,7 +140,8 @@ export default function ResearcherDashboard() {
   );
 }
 
-export function UserNav({ displayName = "Researcher" }) {
+
+export function UserNav({ displayName = "Researcher", onLogout }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -127,7 +158,7 @@ export function UserNav({ displayName = "Researcher" }) {
         <DropdownMenuSeparator />
         <DropdownMenuItem>Profile</DropdownMenuItem>
         <DropdownMenuItem>Settings</DropdownMenuItem>
-        <DropdownMenuItem>Logout</DropdownMenuItem>
+        <DropdownMenuItem onClick={onLogout}>Logout</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

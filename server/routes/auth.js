@@ -25,6 +25,7 @@ router.post('/register', async (req, res) => {
       { expiresIn: '24h' }
     );
 
+    // sends final response back to client
     res.status(201).json({
       message: 'User created successfully',
       token,
@@ -52,7 +53,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    // Check password
+    // verify password
     const isMatch = await User.comparePassword(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' });
@@ -118,7 +119,7 @@ router.delete('/delete', async (req, res) => {
   }
 });
 
-// getting all users (for demo video purposes D2)
+// getting all users 
 router.get('/users', async (req, res) => {
   try {
     const query = 'SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC';
@@ -133,5 +134,27 @@ router.get('/users', async (req, res) => {
     res.status(500).json({ message: 'Server error while fetching users' });
   }
 });
+
+//getting user by id
+// router.get('/users/:id', async (req, res) => {
+//   try {
+//     const userId = req.params.id;        // id is the 1st element so: $1
+//     const query = 'SELECT * FROM users WHERE id = $1';      //return only one row where the user is so row[0]
+//     const result = await pool.query(query, [userId]); 
+    
+//     if (result.rows.length === 0) {
+//       return res.status(404).json({ message: `User with id=${userId} not found` });
+//     }
+//     res.json({
+//       message: `User with id=${userId} fetched successfully`,
+//       user: result.rows[0],
+//     });
+//   } catch (error) {
+//     console.error(`Error fetching user id=${req.params.id}:`, error);
+//     res.status(500).json({ message: 'Server error while fetching user' });
+//   }
+// });
+
+
 
 module.exports = router;
