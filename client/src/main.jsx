@@ -13,6 +13,7 @@ import ArtifactsPage from "./pages/artifactManagement/ArtifactsPage";
 import Test from "./pages/test";
 import StudyCreationWizard from "./pages/StudyCreationWizard";
 import "./assets/App.css";
+import ArtifactsComparison from "./pages/ArtifactsComparison";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <BrowserRouter>
@@ -36,6 +37,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           Example: <Route index element={<HomePage />} />
         */}
         <Route path="/study-creation-wizard" element={<StudyCreationWizard />} />
+        <Route path="/artifacts-comparison" element={<ArtifactsComparison />} />
       </Route>
     </Routes>
   </BrowserRouter>
