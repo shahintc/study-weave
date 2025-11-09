@@ -46,7 +46,7 @@ function StudyCreationWizard() {
   };
 
   return (
-    <div className="flex min-h-screen w-full items-center justify-center bg-gray-100 p-8">
+    <div className="flex min-h-screen w-full items-center justify-center p-8">
       <Card className="w-full max-w-2xl">
         <CardHeader>
           <CardTitle>Study Creation Wizard</CardTitle>
