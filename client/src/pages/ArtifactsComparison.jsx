@@ -9,7 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+// header avatar removed; layout provides header/nav
 
 /* demo content */
 const artifactA = Array.from({ length: 120 }, (_, i) =>
@@ -71,34 +71,7 @@ export default function ArtifactsComparison() {
   }, [syncScroll]);
 
   return (
-    <div className="min-h-screen w-full bg-white">
-      {/* ===== Header (title left, profile right) ===== */}
-      <header className="w-full bg-white">
-        <div className="mx-auto max-w-6xl px-6">
-          <div className="flex items-center justify-between py-4">
-            {/* Left: title */}
-            <h1 className="text-[26px] font-semibold leading-none text-black">
-              Study Weave <span className="text-gray-600">(Researcher)</span>
-            </h1>
-
-            {/* Right: profile */}
-            <button className="flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-1.5 shadow-sm hover:bg-gray-50">
-              <Avatar className="h-8 w-8">
-                <AvatarImage src="https://i.pravatar.cc/100?u=DrAli" alt="Dr. Ali" />
-                <AvatarFallback>DA</AvatarFallback>
-              </Avatar>
-              <span className="text-[15px] font-medium text-black">Dr. Ali</span>
-            </button>
-          </div>
-
-          {/* Divider */}
-          <div className="h-px w-full bg-gray-200" />
-        </div>
-      </header>
-      {/* ===== End Header ===== */}
-
-      {/* ===== Body ===== */}
-      <div className="p-8 max-w-6xl mx-auto flex flex-col gap-6">
+    <div className="p-8 max-w-6xl mx-auto flex flex-col gap-6">
         <div className="mb-2">
           <h2 className="text-lg font-semibold">
             Study: AI vs. Human Code Readability (Task 3 of 3)
@@ -191,7 +164,6 @@ export default function ArtifactsComparison() {
             </div>
           </CardFooter>
         </Card>
-      </div>
     </div>
   );
 }

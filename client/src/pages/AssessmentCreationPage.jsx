@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -13,11 +12,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
-  DropdownMenuSeparator, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+// removed page-level header/nav; layout provides them
 
 
 // --- ZOD SCHEMA (Assessment Builder) ---
@@ -49,40 +44,7 @@ const assessmentSchema = z.object({
 const defaultQuestion = { title: "", type: "multiple_choice", options: [{ text: "Option A", isCorrect: false }, { text: "Option B", isCorrect: true }] };
 
 
-// --- INLINED HEADER COMPONENTS ---
-// 1. User Profile Dropdown
-function UserNav() {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="flex items-center gap-2 p-1">
-          <Avatar className="h-8 w-8">
-            <AvatarImage src="https://github.com/shadcn.png" alt="Dr. Ali" />
-            <AvatarFallback className="bg-blue-200 text-blue-800">DA</AvatarFallback>
-          </Avatar>
-          <span className="hidden sm:inline">Dr. Ali (User)</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel>Researcher Account</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem>Profile</DropdownMenuItem>
-        <DropdownMenuItem>Settings</DropdownMenuItem>
-        <DropdownMenuItem>Logout</DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-// 2. Main Page Header
-function PageHeader() {
-  return (
-    <header className="flex items-center justify-between">
-      <h1 className="text-2xl font-semibold tracking-tight">Study Weave (Researcher)</h1>
-      <UserNav />
-    </header>
-  );
-}
+// header/nav removed
 
 
 // --- Dynamic Options Component ---
@@ -221,18 +183,8 @@ export default function AssessmentCreationPage() {
 
     return (
         <div className="container mx-auto max-w-7xl px-4 py-6 space-y-6">
-            
-            {/* 🛑 INLINED HEADER 🛑 */}
-            <PageHeader /> 
-            
-            {/* Navigation Links (Researcher View) */}
-            <nav className="flex space-x-6 border-b pb-3 text-sm font-medium">
-                <Link to="/researcher-dashboard" className="text-muted-foreground hover:text-primary">Dashboard</Link>
-                <Link to="/my-studies" className="text-muted-foreground hover:text-primary">My Studies</Link>
-                <Link to="/artifacts" className="text-muted-foreground hover:text-primary">Artifacts</Link>
-                <Link to="/assessments" className="text-primary font-bold">Assess</Link>
-            </nav>
-            
+            {/* header/nav provided by layout */}
+
             <h1 className="text-3xl font-bold">Competency Assessment Creation Page</h1>
 
             <Form {...form}>
