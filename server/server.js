@@ -16,10 +16,11 @@ app.use(express.json());
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));  // means any request whose path starts with /api/auth should be handled by routes/auth.js
-app.use('/api/analytics', require('./routes/analytics'));
+app.use('/api/artifacts', require('./routes/artifacts'));
+app.use('/api/tags', require('./routes/tags'));
 
 app.get('/', (req, res) => res.send('Backend ready with PostgreSQL!'));
 
-sequelize.sync().then(() => { // Use { force: true } only in development, it drops existing tables!
+sequelize.sync({ force: false }).then(() => { // Use { force: true } only in development, it drops existing tables!
   app.listen(port, () => console.log(`Server running on port ${port}`));
 });
