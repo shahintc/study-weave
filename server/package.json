@@ -6,12 +6,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "db:migrate": "sequelize-cli db:migrate --env development",
-    "db:migrate:undo": "sequelize-cli db:migrate:undo --env development",
-    "db:migrate:undo:all": "sequelize-cli db:migrate:undo:all --env development",
     "db:seed": "sequelize-cli db:seed:all --env development",
-    "db:seed:undo": "sequelize-cli db:seed:undo:all --env development",
-    "db:migration:create": "sequelize-cli migration:generate --name"
+    "db:seed:undo": "sequelize-cli db:seed:undo:all --env development"
   },
   "keywords": [],
   "author": "",

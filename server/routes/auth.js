@@ -7,7 +7,7 @@ const router = express.Router();
 // Register
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, roleId } = req.body;
 
     // Check if user already exists
     const existingUser = await User.findByEmail(email);
@@ -16,11 +16,11 @@ router.post('/register', async (req, res) => {
     }
 
     // Create new user
-    const user = await User.create({ name, email, password, role });
+    const user = await User.create({ name, email, password, role, roleId });
     
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role },
+      { userId: user.id, email: user.email, role: user.role, roleId: user.roleId },
       process.env.JWT_SECRET || 'fallback_secret',
       { expiresIn: '24h' }
     );
@@ -33,7 +33,8 @@ router.post('/register', async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: user.role
+        role: user.role,
+        roleId: user.roleId,
       }
     });
   } catch (error) {
@@ -61,7 +62,7 @@ router.post('/login', async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role },
+      { userId: user.id, email: user.email, role: user.role, roleId: user.roleId },
       process.env.JWT_SECRET || 'fallback_secret',
       { expiresIn: '24h' }
     );
@@ -73,7 +74,8 @@ router.post('/login', async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: user.role
+        role: user.role,
+        roleId: user.roleId,
       }
     });
   } catch (error) {
@@ -85,9 +87,9 @@ router.post('/login', async (req, res) => {
 // Update User
 router.put('/update', async (req, res) => {
   try {
-    const { id, name, email, password } = req.body;
+    const { id, name, email, password, role, roleId } = req.body;
 
-    const updatedUser = await User.update(id, { name, email, password });
+    const updatedUser = await User.update(id, { name, email, password, role, roleId });
     if (!updatedUser) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -122,7 +124,8 @@ router.delete('/delete', async (req, res) => {
 // getting all users 
 router.get('/users', async (req, res) => {
   try {
-    const query = 'SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC';
+    const query =
+      'SELECT id, name, email, role, role_id AS "roleId", created_at FROM users ORDER BY created_at DESC';
     const result = await pool.query(query); // Now pool is defined
     
     res.json({
@@ -156,5 +159,63 @@ router.get('/users', async (req, res) => {
 // });
 
 
+// Add this new code block right before "module.exports = router;"
+
+// GET request to fetch *only* participants
+router.get('/participants', async (req, res) => {
+  try {
+    // This is the SQL query you need
+    const query = "SELECT id, name, email, role, created_at FROM users WHERE role = 'participant' ORDER BY created_at DESC";
+    
+    // We use the 'pool' variable that is already defined at the top of your file
+    const result = await pool.query(query); 
+    
+    // Send the data back as JSON  
+    res.json({
+      message: 'Participants fetched successfully',
+      users: result.rows
+    });
+    
+
+  } catch (error) {
+    console.error('Get participants error:', error);
+    res.status(500).json({ message: 'Server error while fetching participants' });
+  }
+});
+
+router.put('/update-role/:id', async (req, res) => {
+  try {
+    const { id } = req.params; // Get the ID from the URL
+
+    // This is the SQL query to *swap* the role
+    // It uses a CASE statement to be efficient
+    const query = `
+      UPDATE users 
+      SET role = CASE
+        WHEN role = 'participant' THEN 'researcher'
+        ELSE 'participant'
+      END
+      WHERE id = $1
+      RETURNING id, name, email, role;
+    `;
+    
+    // We use the 'pool' variable, just like your other routes
+    const result = await pool.query(query, [id]); 
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Send the *updated* user back to the frontend
+    res.json({
+      message: 'User role updated successfully',
+      user: result.rows[0] 
+    });
+
+  } catch (error) {
+    console.error('Update role error:', error);
+    res.status(500).json({ message: 'Server error while updating role' });
+  }
+});
 
 module.exports = router;
