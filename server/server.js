@@ -6,6 +6,7 @@ require('dotenv').config(
 
 );
 
+const { sequelize } = require('./models'); // Import sequelize instance
 const app = express();
 const port = process.env.PORT || 5200;
 
@@ -18,4 +19,6 @@ app.use('/api/auth', require('./routes/auth'));  // means any request whose path
 
 app.get('/', (req, res) => res.send('Backend ready with PostgreSQL!'));
 
-app.listen(port, () => console.log(`Server running on port ${port}`));
+sequelize.sync({ force: true }).then(() => { // Use { force: true } only in development, it drops existing tables!
+  app.listen(port, () => console.log(`Server running on port ${port}`));
+});
