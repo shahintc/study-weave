@@ -159,5 +159,63 @@ router.get('/users', async (req, res) => {
 // });
 
 
+// Add this new code block right before "module.exports = router;"
+
+// GET request to fetch *only* participants
+router.get('/participants', async (req, res) => {
+  try {
+    // This is the SQL query you need
+    const query = "SELECT id, name, email, role, created_at FROM users WHERE role = 'participant' ORDER BY created_at DESC";
+    
+    // We use the 'pool' variable that is already defined at the top of your file
+    const result = await pool.query(query); 
+    
+    // Send the data back as JSON  
+    res.json({
+      message: 'Participants fetched successfully',
+      users: result.rows
+    });
+    
+
+  } catch (error) {
+    console.error('Get participants error:', error);
+    res.status(500).json({ message: 'Server error while fetching participants' });
+  }
+});
+
+router.put('/update-role/:id', async (req, res) => {
+  try {
+    const { id } = req.params; // Get the ID from the URL
+
+    // This is the SQL query to *swap* the role
+    // It uses a CASE statement to be efficient
+    const query = `
+      UPDATE users 
+      SET role = CASE
+        WHEN role = 'participant' THEN 'researcher'
+        ELSE 'participant'
+      END
+      WHERE id = $1
+      RETURNING id, name, email, role;
+    `;
+    
+    // We use the 'pool' variable, just like your other routes
+    const result = await pool.query(query, [id]); 
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Send the *updated* user back to the frontend
+    res.json({
+      message: 'User role updated successfully',
+      user: result.rows[0] 
+    });
+
+  } catch (error) {
+    console.error('Update role error:', error);
+    res.status(500).json({ message: 'Server error while updating role' });
+  }
+});
 
 module.exports = router;

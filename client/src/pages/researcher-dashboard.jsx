@@ -291,6 +291,7 @@ export default function ResearcherDashboard() {
               Welcome, {user?.name || "Researcher"} • {user?.email || ""}
             </CardDescription>
           </CardHeader>
+<<<<<<< HEAD
           <CardContent className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-sm text-muted-foreground">Spin up a cohort or pair artifacts for review.</p>
@@ -306,6 +307,28 @@ export default function ResearcherDashboard() {
                 Create new study
               </Button>
             </div>
+=======
+          <CardContent className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Start a new participant study</p>
+            
+            {/* --- THIS IS THE ONLY UPDATED PART --- */}
+            {/* We wrap the buttons in a div to keep them grouped */}
+            <div className="flex gap-2">
+              
+              {/* This button now links to your new page */}
+              <Button variant="outline" onClick={() => navigate("participants-list")}>
+                Show Participants
+              </Button>
+
+              {/* This button now links to your wizard page (using relative path) */}
+              <Button onClick={() => navigate("study-creation-wizard")}>
+                <Plus className="mr-2 h-4 w-4" />
+                Create New Study
+              </Button>
+            </div>
+            {/* --- END OF UPDATED PART --- */}
+
+>>>>>>> 1d5eff1 (create participation list)
           </CardContent>
         </Card>
       </section>
@@ -379,6 +402,7 @@ export default function ResearcherDashboard() {
                   </div>
                 </div>
 
+<<<<<<< HEAD
                 <div>
                   <p className="text-sm text-muted-foreground">Progress</p>
                   <div className="flex items-center gap-2">
@@ -416,7 +440,30 @@ export default function ResearcherDashboard() {
               </div>
             ))}
           </CardContent>
+=======
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle>Study Z: UML Diagram Clarity</CardTitle>
+            <CardDescription className="text-amber-600">
+              Draft • Setup incomplete
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Progress</span>
+              <span className="font-medium">Setup incomplete</span>
+            </div>
+            <Progress value={20} />
+          </CardContent> {/* ✅ Corrected closing tag */}
+          <CardFooter className="justify-end">
+            <Button size="sm" variant="outline">
+              <Settings2 className="mr-2 h-4 w-4" />
+              Edit Setup
+            </Button>
+          </CardFooter>
+>>>>>>> 1d5eff1 (create participation list)
         </Card>
+
       </section>
 
       <Dialog open={monitorDialogOpen} onOpenChange={setMonitorDialogOpen}>
