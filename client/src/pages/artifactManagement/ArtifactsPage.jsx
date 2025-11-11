@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+import api from '@/api/axios';
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import {
@@ -11,65 +12,78 @@ import {
   DropdownMenuCheckboxItem
 } from "@/components/ui/dropdown-menu";
 import { IconPlus } from "@tabler/icons-react";
-import { FileUploadModal } from '@/pages/artifactManagement/UploadModal'; // Import the FileUploadModal
+import { FileUploadModal } from '@/pages/artifactManagement/UploadModal'; // Import the FileUploadModal (for replacements)
+import { DetailedUploadModal } from '@/pages/artifactManagement/DetailedUploadModal'; // Import the DetailedUploadModal (for new artifacts)
 import { ManageModal } from '@/pages/artifactManagement/ManageModal'; // Import the ManageModal
 
 export default function ResearcherDashboard() {
-  const [selectedTypes, setSelectedTypes] = React.useState([]);
-  const [selectedTags, setSelectedTags] = React.useState([]);
-  const [isUploadModalOpen, setIsUploadModalOpen] = React.useState(false);
-  const [isManageModalOpen, setIsManageModalOpen] = React.useState(false);
-  const [artifactToManage, setArtifactToManage] = React.useState(null);
-  const [artifactToReplaceId, setArtifactToReplaceId] = React.useState(null); // To track which artifact's file is being replaced
+  // Placeholder for current user ID. In a real app, this would come from auth context/state.
+  const currentUserId = 1; // Assuming user with ID 1 exists for demonstration
+
+  const [selectedTypes, setSelectedTypes] = useState([]);
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [isNewArtifactModalOpen, setIsNewArtifactModalOpen] = useState(false);
+  const [isReplaceUploadModalOpen, setIsReplaceUploadModalOpen] = useState(false);
+  const [isManageModalOpen, setIsManageModalOpen] = useState(false);
+  const [artifactToManage, setArtifactToManage] = useState(null);
+  const [artifactToReplaceId, setArtifactToReplaceId] = useState(null); // To track which artifact\'s file is being replaced by the
+
+  // State for fetched data
+  const [availableTags, setAvailableTags] = useState([]);
+  const [artifactsData, setArtifactsData] = useState([]);
+  const [loadingTags, setLoadingTags] = useState(true);
+  const [loadingArtifacts, setLoadingArtifacts] = useState(true);
+  const [errorTags, setErrorTags] = useState(null);
+  const [errorArtifacts, setErrorArtifacts] = useState(null);
 
 
-  const availableTags = [
-    "diagram",
-    "setup",
-    "UX research",
-    "code",
-    "model",
-    "analysis",
-    "report",
-    "findings",
-    "qualitative",
-    "data",
-    "log",
-    "generation",
-  ];
   const availableTypes = ["human", "AI"];
 
-  // Reorganized placeholder artifact data
-  const artifactsData = [
-    {
-      id: "1",
-      name: "Experiment Setup Diagram",
-      type: "human",
-      tags: ["diagram", "setup", "UX research"],
-      fileName: "experiment-diagram.pdf", // Added for ManageModal display
-    },
-    {
-      id: "2",
-      name: "AI Model Codebase v1.2",
-      type: "AI",
-      tags: ["code", "model", "analysis"],
-      fileName: "ai-model-v1.2.zip", // Added for ManageModal display
-    },
-    {
-      id: "3",
-      name: "User Study Report Q3 2023",
-      type: "human",
-      tags: ["report", "findings", "qualitative"],
-      fileName: "user-study-report.pdf", // Added for ManageModal display
-    },
-    {
-      id: "4",
-      name: "Synthetic Dataset Generation Log",
-      type: "AI",
-      tags: ["data", "log", "generation"],
-      fileName: "synth-data-log.txt", // Added for ManageModal display
-    },
-  ];
+  // Function to fetch artifacts
+  const fetchArtifacts = async () => {
+    setLoadingArtifacts(true);
+    setErrorArtifacts(null);
+    try {
+      const response = await api.get(`/api/artifacts/user/${currentUserId}`);
+      console.log(response.data.artifacts)
+      setArtifactsData(response.data.artifacts);
+      console.log(artifactsData)
+    } catch (error) {
+      if (error.response && error.response.status === 404) {
+        // No artifacts found, which is a valid scenario
+        setArtifactsData([]);
+      } else {
+        console.error("Error fetching artifacts:", error);
+        setErrorArtifacts(error.message);
+        setArtifactsData([]); // Clear artifacts on error
+      }
+    } finally {
+      setLoadingArtifacts(false);
+    }
+  };
+
+  // Function to fetch available tags
+  const fetchAvailableTags = async () => {
+    setLoadingTags(true);
+    setErrorTags(null);
+    try {
+      const response = await api.get("/api/tags");
+      // Extract just the names for the filter dropdown, or full objects if needed elsewhere
+      setAvailableTags(response.data.tags.map(tag => tag.name));
+    } catch (error) {
+      console.error("Error fetching tags:", error);
+      setErrorTags(error.message);
+      setAvailableTags([]); // Clear tags on error
+    } finally {
+      setLoadingTags(false);
+    }
+  };
+
+  // useEffect to fetch data on component mount
+  useEffect(() => {
+    fetchArtifacts();
+    fetchAvailableTags();
+  }, [currentUserId]); // Re-fetch if currentUserId changes
 
   const handleTypeChange = (type) => {
     setSelectedTypes((prev) =>
@@ -85,12 +99,20 @@ export default function ResearcherDashboard() {
 
   // Placeholder for when a file is successfully uploaded (either new or replacement)
   const handleUploadSuccess = () => {
-    setIsUploadModalOpen(false);
+    setIsNewArtifactModalOpen(false);
+    setIsReplaceUploadModalOpen(false);
     setArtifactToReplaceId(null); // Clear replacement context
-    // In a real application, you would typically refetch your artifacts data here
-    // For demonstration, we'll just log
-    console.log("File upload/replacement successful. Refreshing artifact list would happen here.");
+    // Refetch artifacts after a successful upload/replacement
+    console.log("File upload/replacement successful. Refreshing artifact list...");
+    fetchArtifacts();
   };
+
+  // Filtered artifacts based on selected types and tags
+  const filteredArtifacts = artifactsData.filter(artifact => {
+    const matchesType = selectedTypes.length === 0 || selectedTypes.includes(artifact.type);
+    const matchesTags = selectedTags.length === 0 || selectedTags.every(tag => artifact.tags.includes(tag));
+    return matchesType && matchesTags;
+  });
 
   return (
     <div className="space-y-6">
@@ -101,18 +123,26 @@ export default function ResearcherDashboard() {
           {/* Button to open FileUploadModal for new artifacts */}
           <Button
             onClick={() => {
-              setArtifactToReplaceId(null); // Ensure no replacement context for new upload
-              setIsUploadModalOpen(true);
+              setIsNewArtifactModalOpen(true);
             }}
             className="flex items-center gap-2"
           >
             <IconPlus className="h-4 w-4" />
             New Artifact
           </Button>
+          {/* DetailedUploadModal for new artifacts */}
+          <DetailedUploadModal
+            isOpen={isNewArtifactModalOpen}
+            setIsOpen={setIsNewArtifactModalOpen}
+            artifactToReplaceId={null} // Always null for new artifacts
+            onUploadSuccess={handleUploadSuccess}
+          />
+
+          {/* FileUploadModal for file replacements */}
           <FileUploadModal
-            isOpen={isUploadModalOpen}
-            setIsOpen={setIsUploadModalOpen}
-            artifactToReplaceId={artifactToReplaceId} // Pass null for new uploads, or ID for replacement
+            isOpen={isReplaceUploadModalOpen}
+            setIsOpen={setIsReplaceUploadModalOpen}
+            artifactToReplaceId={artifactToReplaceId} // Pass artifact ID for replacement
             onUploadSuccess={handleUploadSuccess}
           />
         </div>
@@ -186,10 +216,10 @@ export default function ResearcherDashboard() {
                 <div className="flex flex-wrap gap-2">
                   {artifact.tags.map((tag) => (
                     <span
-                      key={tag}
+                      key={tag.id}
                       className="px-2 py-1 text-xs font-semibold rounded-full bg-muted text-muted-foreground"
                     >
-                      {tag}
+                      {tag.name}
                     </span>
                   ))}
                 </div>
@@ -234,7 +264,7 @@ export default function ResearcherDashboard() {
           // This function is called from ManageModal when "Replace File" is clicked
           setIsManageModalOpen(false); // Close the Manage Modal first
           setArtifactToReplaceId(artifactId); // Set the ID of the artifact whose file is being replaced
-          setIsUploadModalOpen(true); // Open the FileUploadModal
+          setIsReplaceUploadModalOpen(true); // Open the FileUploadModal
         }}
       />
 
