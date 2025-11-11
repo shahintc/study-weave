@@ -17,6 +17,7 @@ import AssessmentCreation from "./pages/AssessmentCreationPage";
 import ParticipantCompetencyAssessment from "./pages/participant_competency_assessment";
 import ResearcherLayout from "./pages/ResearcherLayout";
 import ParticipantLayout from "./pages/ParticipantLayout";
+import ParticipantsListPage from "./pages/ParticipantsListPage";
 
 
 ReactDOM.createRoot(document.getElementById("root")).render(
@@ -40,7 +41,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <Route path="artifacts" element={<ArtifactsPage />} />
           <Route path="assess" element={<AssessmentCreation />} />
           <Route path="assessment-creation" element={<AssessmentCreation />} />
-          <Route path="study-creation-wizard" element={<StudyCreationWizard />} />
+          <Route path="study-creation-wizard" element={<StudyCreationWizard />} /> 
+          <Route path="participants-list" element={<ParticipantsListPage />} />
           {/* Alias for older links */}
           <Route path="studies" element={<StudyCreationWizard />} />
         </Route>

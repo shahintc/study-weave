@@ -41,10 +41,24 @@ export default function ResearcherDashboard() {
           </CardHeader>
           <CardContent className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Start a new participant study</p>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              Create New Study
-            </Button>
+            
+            {/* --- THIS IS THE ONLY UPDATED PART --- */}
+            {/* We wrap the buttons in a div to keep them grouped */}
+            <div className="flex gap-2">
+              
+              {/* This button now links to your new page */}
+              <Button variant="outline" onClick={() => navigate("participants-list")}>
+                Show Participants
+              </Button>
+
+              {/* This button now links to your wizard page (using relative path) */}
+              <Button onClick={() => navigate("study-creation-wizard")}>
+                <Plus className="mr-2 h-4 w-4" />
+                Create New Study
+              </Button>
+            </div>
+            {/* --- END OF UPDATED PART --- */}
+
           </CardContent>
         </Card>
       </section>
@@ -76,7 +90,9 @@ export default function ResearcherDashboard() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle>Study Z: UML Diagram Clarity</CardTitle>
-            <CardDescription className="text-amber-600">Draft • Setup incomplete</CardDescription>
+            <CardDescription className="text-amber-600">
+              Draft • Setup incomplete
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between text-sm">
@@ -84,7 +100,7 @@ export default function ResearcherDashboard() {
               <span className="font-medium">Setup incomplete</span>
             </div>
             <Progress value={20} />
-          </CardContent>
+          </CardContent> {/* ✅ Corrected closing tag */}
           <CardFooter className="justify-end">
             <Button size="sm" variant="outline">
               <Settings2 className="mr-2 h-4 w-4" />
@@ -92,6 +108,7 @@ export default function ResearcherDashboard() {
             </Button>
           </CardFooter>
         </Card>
+
       </section>
     </div>
   );
