@@ -180,4 +180,39 @@ router.get('/participants', async (req, res) => {
   }
 });
 
+router.put('/update-role/:id', async (req, res) => {
+  try {
+    const { id } = req.params; // Get the ID from the URL
+
+    // This is the SQL query to *swap* the role
+    // It uses a CASE statement to be efficient
+    const query = `
+      UPDATE users 
+      SET role = CASE
+        WHEN role = 'participant' THEN 'researcher'
+        ELSE 'participant'
+      END
+      WHERE id = $1
+      RETURNING id, name, email, role;
+    `;
+    
+    // We use the 'pool' variable, just like your other routes
+    const result = await pool.query(query, [id]); 
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Send the *updated* user back to the frontend
+    res.json({
+      message: 'User role updated successfully',
+      user: result.rows[0] 
+    });
+
+  } catch (error) {
+    console.error('Update role error:', error);
+    res.status(500).json({ message: 'Server error while updating role' });
+  }
+});
+
 module.exports = router;
