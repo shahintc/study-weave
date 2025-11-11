@@ -156,5 +156,28 @@ router.get('/users', async (req, res) => {
 // });
 
 
+// Add this new code block right before "module.exports = router;"
+
+// GET request to fetch *only* participants
+router.get('/participants', async (req, res) => {
+  try {
+    // This is the SQL query you need
+    const query = "SELECT id, name, email, role, created_at FROM users WHERE role = 'participant' ORDER BY created_at DESC";
+    
+    // We use the 'pool' variable that is already defined at the top of your file
+    const result = await pool.query(query); 
+    
+    // Send the data back as JSON  
+    res.json({
+      message: 'Participants fetched successfully',
+      users: result.rows
+    });
+    
+
+  } catch (error) {
+    console.error('Get participants error:', error);
+    res.status(500).json({ message: 'Server error while fetching participants' });
+  }
+});
 
 module.exports = router;
