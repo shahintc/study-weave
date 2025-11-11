@@ -7,7 +7,7 @@ const router = express.Router();
 // Register
 router.post('/register', async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password, role, roleId } = req.body;
 
     // Check if user already exists
     const existingUser = await User.findByEmail(email);
@@ -16,11 +16,11 @@ router.post('/register', async (req, res) => {
     }
 
     // Create new user
-    const user = await User.create({ name, email, password, role });
+    const user = await User.create({ name, email, password, role, roleId });
     
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role },
+      { userId: user.id, email: user.email, role: user.role, roleId: user.roleId },
       process.env.JWT_SECRET || 'fallback_secret',
       { expiresIn: '24h' }
     );
@@ -33,7 +33,8 @@ router.post('/register', async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: user.role
+        role: user.role,
+        roleId: user.roleId,
       }
     });
   } catch (error) {
@@ -61,7 +62,7 @@ router.post('/login', async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role },
+      { userId: user.id, email: user.email, role: user.role, roleId: user.roleId },
       process.env.JWT_SECRET || 'fallback_secret',
       { expiresIn: '24h' }
     );
@@ -73,7 +74,8 @@ router.post('/login', async (req, res) => {
         id: user.id,
         name: user.name,
         email: user.email,
-        role: user.role
+        role: user.role,
+        roleId: user.roleId,
       }
     });
   } catch (error) {
@@ -85,9 +87,9 @@ router.post('/login', async (req, res) => {
 // Update User
 router.put('/update', async (req, res) => {
   try {
-    const { id, name, email, password } = req.body;
+    const { id, name, email, password, role, roleId } = req.body;
 
-    const updatedUser = await User.update(id, { name, email, password });
+    const updatedUser = await User.update(id, { name, email, password, role, roleId });
     if (!updatedUser) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -122,7 +124,8 @@ router.delete('/delete', async (req, res) => {
 // getting all users 
 router.get('/users', async (req, res) => {
   try {
-    const query = 'SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC';
+    const query =
+      'SELECT id, name, email, role, role_id AS "roleId", created_at FROM users ORDER BY created_at DESC';
     const result = await pool.query(query); // Now pool is defined
     
     res.json({

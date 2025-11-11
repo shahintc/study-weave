@@ -20,6 +20,6 @@ app.use('/api/analytics', require('./routes/analytics'));
 
 app.get('/', (req, res) => res.send('Backend ready with PostgreSQL!'));
 
-sequelize.sync({ force: true }).then(() => { // Use { force: true } only in development, it drops existing tables!
+sequelize.sync().then(() => { // Use { force: true } only in development, it drops existing tables!
   app.listen(port, () => console.log(`Server running on port ${port}`));
 });

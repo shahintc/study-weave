@@ -22,6 +22,17 @@ const User = sequelize.define(
       type: DataTypes.STRING,
       allowNull: false,
     },
+    roleId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'roles',
+        key: 'id',
+      },
+      field: 'role_id',
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
+    },
     role: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -40,4 +51,3 @@ const User = sequelize.define(
 );
 
 module.exports = User;
-
