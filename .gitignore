@@ -1,7 +1,8 @@
 # folders
 Zaeem-info/
-node_modules/ 
+node_modules/
 dist/
+server/uploads/
 
 
 # files
