@@ -17,6 +17,7 @@ app.use(express.json());
 // Routes
 app.use('/api/auth', require('./routes/auth'));  // means any request whose path starts with /api/auth should be handled by routes/auth.js
 app.use('/api/analytics', require('./routes/analytics'));
+app.use('/api/studies', require('./routes/study'));
 
 app.get('/', (req, res) => res.send('Backend ready with PostgreSQL!'));
 
