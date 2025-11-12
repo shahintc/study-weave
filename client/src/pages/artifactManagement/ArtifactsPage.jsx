@@ -107,13 +107,6 @@ export default function ResearcherDashboard() {
     fetchArtifacts();
   };
 
-  // Filtered artifacts based on selected types and tags
-  const filteredArtifacts = artifactsData.filter(artifact => {
-    const matchesType = selectedTypes.length === 0 || selectedTypes.includes(artifact.type);
-    const matchesTags = selectedTags.length === 0 || selectedTags.every(tag => artifact.tags.includes(tag));
-    return matchesType && matchesTags;
-  });
-
   return (
     <div className="space-y-6">
       {/* Artifacts Section */}
@@ -248,23 +241,15 @@ export default function ResearcherDashboard() {
         artifact={artifactToManage}
         onSave={(updatedArtifact) => {
           console.log("Updated artifact:", updatedArtifact);
-          // In a real application, you would send updatedArtifact to your backend
-          // and then update the local 'artifactsData' state or refetch data.
           setIsManageModalOpen(false);
           setArtifactToManage(null); // Clear artifact after saving
+          fetchArtifacts(); // Refresh the artifact list
         }}
         onDelete={(artifactId) => {
           console.log("Deleted artifact with ID:", artifactId);
-          // In a real application, send delete request to your backend
-          // and then update the local 'artifactsData' state or refetch data.
           setIsManageModalOpen(false);
           setArtifactToManage(null); // Clear artifact after deleting
-        }}
-        onFileReplace={(artifactId) => {
-          // This function is called from ManageModal when "Replace File" is clicked
-          setIsManageModalOpen(false); // Close the Manage Modal first
-          setArtifactToReplaceId(artifactId); // Set the ID of the artifact whose file is being replaced
-          setIsReplaceUploadModalOpen(true); // Open the FileUploadModal
+          fetchArtifacts(); // Refresh the artifact list
         }}
       />
 

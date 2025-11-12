@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import api from '@/api/axios'; // Import the axios instance
 import { Button } from '@/components/ui/button';
 import {
@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { X } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -18,6 +20,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  DropdownMenuCheckboxItem
+} from "@/components/ui/dropdown-menu";
+import { Plus } from 'lucide-react';
 import { cn } from '@/lib/utils'; // Assuming this utility is available in a shadcn project
 
 const MAX_FILE_SIZE_MB = 100;
@@ -31,9 +43,16 @@ export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess }) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [error, setError] = useState('');
   const [artifactName, setArtifactName] = useState('');
-  const [artifactTags, setArtifactTags] = useState(''); // Assuming comma-separated tags for now
   const [artifactType, setArtifactType] = useState(''); // "AI" or "human"
   const [isLoading, setIsLoading] = useState(false); // New loading state
+
+  // States for Tag management
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [newTagInput, setNewTagInput] = useState('');
+  const [fetchedAvailableTags, setFetchedAvailableTags] = useState([]);
+  const [loadingTags, setLoadingTags] = useState(true);
+  const [errorFetchingTags, setErrorFetchingTags] = useState(null);
+
   const fileInputRef = useRef(null);
 
   const handleFileChange = useCallback((files) => {
@@ -63,8 +82,30 @@ export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess }) {
     // Optionally pre-fill artifact name from file name, without extension, only if currently empty
     if (!artifactName.trim()) {
       setArtifactName(file.name.split('.').slice(0, -1).join('.') || '');
+    }
+  }, [artifactName]);
+
+  // useEffect to fetch available tags when modal opens
+  useEffect(() => {
+    const fetchTags = async () => {
+      setLoadingTags(true);
+      setErrorFetchingTags(null);
+      try {
+        const response = await api.get("/api/tags");
+        setFetchedAvailableTags(response.data.tags.map(tag => tag.name));
+      } catch (err) {
+        console.error("Error fetching available tags:", err);
+        setErrorFetchingTags("Failed to load available tags.");
+        setFetchedAvailableTags([]);
+      } finally {
+        setLoadingTags(false);
       }
-    }, [artifactName]);
+    };
+
+    if (isOpen) { // Only fetch when modal is open
+      fetchTags();
+    }
+  }, [isOpen]);
 
   const handleDrop = useCallback((event) => {
     event.preventDefault();
@@ -114,7 +155,7 @@ export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess }) {
     formData.append('artifactFile', selectedFile); // 'artifactFile' must match the Multer field name in the backend
     formData.append('name', artifactName);
     // Backend expects tags as a JSON string for easy parsing
-    formData.append('tags', JSON.stringify(artifactTags.split(',').map(tag => tag.trim()).filter(tag => tag)));
+    formData.append('tags', JSON.stringify(selectedTags)); // Use selectedTags
     formData.append('type', artifactType);
     formData.append('userId', currentUserId); // Attach the user ID
 
@@ -131,7 +172,7 @@ export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess }) {
       setSelectedFile(null);
       setIsDragOver(false);
       setArtifactName('');
-      setArtifactTags('');
+      setSelectedTags([]); // Clear selected tags
       setArtifactType('');
       onUploadSuccess(); // Notify parent of success
 
@@ -159,9 +200,37 @@ export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess }) {
     setError('');
     setIsDragOver(false);
     setArtifactName('');
-    setArtifactTags('');
+    setSelectedTags([]); // Clear selected tags
     setArtifactType('');
     setIsLoading(false); // Reset loading state on close
+    setNewTagInput(''); // Clear new tag input
+    setFetchedAvailableTags([]); // Clear fetched tags
+    setLoadingTags(true); // Reset loading tags state
+    setErrorFetchingTags(null); // Clear tag errors
+  };
+
+  const handleTagAdd = async () => {
+    const tagToAdd = newTagInput.trim().toLowerCase();
+    if (tagToAdd && !selectedTags.includes(tagToAdd)) {
+      try {
+        // Attempt to create the tag in the backend first (if it doesn't exist)
+        const response = await api.post('/api/tags', { name: tagToAdd });
+        // After successful "creation" (or finding), add to local state
+        setSelectedTags((prevTags) => [...prevTags, response.data.tag.name]);
+        setNewTagInput('');
+        // Also update fetchedAvailableTags so it appears in the dropdown
+        if (!fetchedAvailableTags.includes(response.data.tag.name)) {
+          setFetchedAvailableTags((prev) => [...prev, response.data.tag.name].sort());
+        }
+      } catch (err) {
+        console.error("Error adding new tag:", err);
+        setError(err.response?.data?.message || "Failed to add new tag.");
+      }
+    }
+  };
+
+  const handleTagRemove = (tagToRemove) => {
+    setSelectedTags((prevTags) => prevTags.filter((tag) => tag !== tagToRemove));
   };
 
   const isUploadDisabled = !selectedFile || !!error || !artifactName.trim() || !artifactType || isLoading;
@@ -190,17 +259,83 @@ export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess }) {
             />
           </div>
 
-          <div className="grid grid-cols-4 items-center gap-4">
-            <Label htmlFor="artifactTags" className="text-right">
+          <div className="grid grid-cols-4 items-start gap-4"> {/* Changed to items-start */}
+            <Label htmlFor="artifactTags" className="text-right mt-2">
               Tags
             </Label>
-            <Input
-              id="artifactTags"
-              value={artifactTags}
-              onChange={(e) => setArtifactTags(e.target.value)}
-              className="col-span-3"
-              placeholder="e.g., project, report, analysis (comma-separated)"
-            />
+            <div className="col-span-3 flex flex-wrap gap-2 items-center">
+              {selectedTags.map((tag) => (
+                <Badge key={tag} className="flex items-center gap-1">
+                  {tag}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-4 w-4 rounded-full p-0"
+                    onClick={() => handleTagRemove(tag)}
+                  >
+                    <X className="h-3 w-3" />
+                    <span className="sr-only">Remove tag</span>
+                  </Button>
+                </Badge>
+              ))}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-8 gap-1">
+                    <Plus className="h-3.5 w-3.5" />
+                    Add Tag
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-[200px]" align="end">
+                  <DropdownMenuLabel>Add Tags</DropdownMenuLabel>
+                  {loadingTags ? (
+                    <div className="p-2">Loading tags...</div>
+                  ) : errorFetchingTags ? (
+                    <div className="p-2 text-destructive">{errorFetchingTags}</div>
+                  ) : (
+                    <>
+                      <DropdownMenuSeparator />
+                      <div className="max-h-48 overflow-y-auto">
+                        {fetchedAvailableTags
+                          .filter((tag) => !selectedTags.includes(tag)) // Only show unselected tags
+                          .map((tag) => (
+                            <DropdownMenuItem
+                              key={tag}
+                              onSelect={() => setSelectedTags((prev) => [...prev, tag])}
+                            >
+                              {tag}
+                            </DropdownMenuItem>
+                          ))}
+                          {fetchedAvailableTags.filter((tag) => !selectedTags.includes(tag)).length === 0 && (
+                            <DropdownMenuDescription className="p-2">All available tags are selected.</DropdownMenuDescription>
+                          )}
+                      </div>
+                    </>
+                  )}
+                  <DropdownMenuSeparator />
+                  <div className="p-2">
+                    <Input
+                      placeholder="New tag..."
+                      value={newTagInput}
+                      onChange={(e) => setNewTagInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleTagAdd();
+                        }
+                      }}
+                    />
+                    <Button
+                      size="sm"
+                      className="mt-2 w-full"
+                      onClick={handleTagAdd}
+                      disabled={!newTagInput.trim()}
+                    >
+                      Create & Add
+                    </Button>
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
 
           <div className="grid grid-cols-4 items-center gap-4">

@@ -163,6 +163,33 @@ class Artifact {
       throw error;
     }
   }
+  static async delete(id) {
+    try {
+      const artifact = await SequelizeArtifact.findByPk(id);
+      if (!artifact) {
+        return null; // Artifact not found
+      }
+
+      // Delete the associated file from the file system
+      if (artifact.filePath) {
+        await fs.unlink(artifact.filePath).catch(err => {
+          console.error(`Error deleting artifact file ${artifact.filePath}: ${err.message}`);
+          // Decide whether to throw here or proceed with DB deletion anyway
+          // For now, we\'ll log and proceed with DB deletion
+        });
+      }
+
+      // Delete the artifact record from the database
+      // Sequelize will automatically handle the deletion of entries in the ArtifactTag join table
+      // because of the defined many-to-many association.
+      await artifact.destroy();
+
+      return { id }; // Return the ID of the deleted artifact
+    } catch (error) {
+      console.error(`Error deleting artifact ${id}:`, error);
+      throw error;
+    }
+  }
 }
 
 module.exports = Artifact;
