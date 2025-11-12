@@ -122,8 +122,8 @@ module.exports = {
       const assignmentRows = [];
       for (let i = 0; i < participants.length; i++) {
         const p = participants[i];
-        const status = i < 3 ? 'submitted' : i === 3 ? 'in_progress' : 'pending';
-        const decision = i < 2 ? 'approved' : i === 2 ? 'rejected' : 'undecided';
+        const status = 'submitted';
+        const decision = 'approved';
         assignmentRows.push({
           assessment_id: assessment.id,
           participant_id: p.id,
@@ -131,11 +131,11 @@ module.exports = {
           status,
           decision,
           responses: JSON.stringify({ q1: 'demo', q2: 4 }),
-          score: i < 2 ? 80 + i * 5 : 40,
+          score: 70 + i * 5,
           started_at: now,
-          submitted_at: status === 'submitted' ? now : null,
-          reviewed_at: decision !== 'undecided' ? now : null,
-          reviewer_notes: decision === 'approved' ? 'Looks good' : decision === 'rejected' ? 'Needs work' : null,
+          submitted_at: now,
+          reviewed_at: now,
+          reviewer_notes: 'Approved for study',
           createdAt: now,
           updatedAt: now,
         });
@@ -160,7 +160,14 @@ module.exports = {
             timeline_end: new Date(now.getTime() + 7 * 24 * 3600 * 1000),
             status: 'active',
             is_archived: false,
-            metadata: JSON.stringify({ phase: 1 }),
+            metadata: JSON.stringify({
+              phase: 1,
+              participantTarget: 10,
+              nextMilestone: 'Synthesis workshop • Mar 14',
+              health: 'on-track',
+              progressDelta: 12,
+              statusLabel: 'In field',
+            }),
             createdAt: now,
             updatedAt: now,
           },
@@ -226,20 +233,30 @@ module.exports = {
       );
 
       // 7) Study participants (use approved ones)
-      const approvedAssignments = assignments.filter((a) => a.decision === 'approved');
-      const studyParticipants = approvedAssignments.map((a, idx) => ({
-        study_id: study.id,
-        participant_id: a.participant_id,
-        competency_assignment_id: a.id,
-        invitation_status: 'accepted',
-        participation_status: idx === 0 ? 'completed' : 'in_progress',
-        progress_percent: idx === 0 ? 100 : 40,
-        started_at: now,
-        completed_at: idx === 0 ? now : null,
-        last_checkpoint: JSON.stringify({ step: idx === 0 ? 2 : 1 }),
-        createdAt: now,
-        updatedAt: now,
-      }));
+      const approvedAssignments = assignments; // all 5 approved above
+      const participantProfiles = [
+        { persona: 'Senior Engineer', region: 'North America' },
+        { persona: 'Data Scientist', region: 'EMEA' },
+        { persona: 'UX Researcher', region: 'APAC' },
+      ];
+      const progressByIndex = [100, 80, 60, 40, 20];
+      const statusByIndex = (idx) => (idx === 0 || idx === 3 ? 'completed' : 'in_progress');
+      const studyParticipants = approvedAssignments.map((a, idx) => {
+        const profile = participantProfiles[idx] || { persona: 'Participant', region: 'Unknown' };
+        return {
+          study_id: study.id,
+          participant_id: a.participant_id,
+          competency_assignment_id: a.id,
+          invitation_status: 'accepted',
+          participation_status: statusByIndex(idx),
+          progress_percent: progressByIndex[idx] ?? 40,
+          started_at: now,
+          completed_at: statusByIndex(idx) === 'completed' ? now : null,
+          last_checkpoint: JSON.stringify({ step: idx === 0 ? 2 : 1, persona: profile.persona, region: profile.region }),
+          createdAt: now,
+          updatedAt: now,
+        };
+      });
       await queryInterface.bulkInsert('study_participants', studyParticipants, { transaction: t });
 
       const [studyParticipantRows] = await queryInterface.sequelize.query(
@@ -247,49 +264,26 @@ module.exports = {
         { transaction: t }
       );
 
-      // 8) Evaluations for two participants
-      const evals = [];
-      if (studyParticipantRows.length > 0) {
-        evals.push({
-          study_id: study.id,
-          comparison_id: comparison.id,
-          participant_id: studyParticipantRows[0].participant_id,
-          study_participant_id: studyParticipantRows[0].id,
-          status: 'submitted',
-          preference: 'primary',
-          annotations: JSON.stringify([{ artifact: 'A', range: [0, 12], note: 'Good intro' }]),
-          highlights: JSON.stringify([{ artifact: 'B', range: [10, 30] }]),
-          notes: 'Prefers A for clarity',
-          rating: 5,
-          metrics: JSON.stringify({ timeSeconds: 120 }),
-          summary: 'A explains better',
-          submitted_at: now,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
-      if (studyParticipantRows.length > 1) {
-        evals.push({
-          study_id: study.id,
-          comparison_id: comparison.id,
-          participant_id: studyParticipantRows[1].participant_id,
-          study_participant_id: studyParticipantRows[1].id,
-          status: 'draft',
-          preference: null,
-          annotations: JSON.stringify([]),
-          highlights: JSON.stringify([]),
-          notes: 'Will complete later',
-          rating: null,
-          metrics: JSON.stringify({ timeSeconds: 35 }),
-          summary: null,
-          submitted_at: null,
-          createdAt: now,
-          updatedAt: now,
-        });
-      }
-      if (evals.length) {
-        await queryInterface.bulkInsert('evaluations', evals, { transaction: t });
-      }
+      // 8) Evaluations for all participants (submitted with ratings)
+      const baseRatings = [5, 4, 3, 5, 4];
+      const evals = studyParticipantRows.slice(0, 5).map((row, idx) => ({
+        study_id: study.id,
+        comparison_id: comparison.id,
+        participant_id: row.participant_id,
+        study_participant_id: row.id,
+        status: 'submitted',
+        preference: idx % 2 === 0 ? 'primary' : 'secondary',
+        annotations: JSON.stringify([]),
+        highlights: JSON.stringify([]),
+        notes: idx % 2 === 0 ? 'Prefers primary for clarity' : 'Secondary feels more accurate',
+        rating: baseRatings[idx] ?? 4,
+        metrics: JSON.stringify({ timeSeconds: 60 + idx * 15 }),
+        summary: 'Seeded evaluation',
+        submitted_at: new Date(now.getTime() - idx * 60 * 60 * 1000),
+        createdAt: now,
+        updatedAt: now,
+      }));
+      await queryInterface.bulkInsert('evaluations', evals, { transaction: t });
 
       await t.commit();
     } catch (err) {
@@ -318,4 +312,3 @@ module.exports = {
     }
   },
 };
-

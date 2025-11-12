@@ -1,5 +1,13 @@
 const express = require('express');
-const { mockStudyAnalytics } = require('../data/mockStudyAnalytics');
+const {
+  Study,
+  StudyParticipant,
+  Evaluation,
+  StudyComparison,
+  StudyArtifact,
+  Artifact,
+  User,
+} = require('../models');
 
 const router = express.Router();
 
@@ -7,18 +15,21 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOW_DAYS = 30;
 const REFRESH_SECONDS = 30;
 
-router.get('/study/:studyId', (req, res) => {
+router.get('/study/:studyId', async (req, res) => {
   try {
     const { studyId } = req.params;
     const { from, to, participantId } = req.query;
 
-    const study = mockStudyAnalytics[studyId];
+    const study = await buildStudySnapshot(studyId);
     if (!study) {
       return res.status(404).json({ message: `Study ${studyId} was not found` });
     }
 
-    const toDate = parseDateOrDefault(to, new Date());
-    const fromDate = parseDateOrDefault(from, new Date(toDate.getTime() - DEFAULT_WINDOW_DAYS * DAY_IN_MS));
+    const toRaw = parseDateOrDefault(to, new Date());
+    const fromRaw = parseDateOrDefault(from, new Date(toRaw.getTime() - DEFAULT_WINDOW_DAYS * DAY_IN_MS));
+    // Normalize range to whole days so events on the "to" day are included
+    const fromDate = startOfDay(fromRaw);
+    const toDate = endOfDay(toRaw);
 
     if (!toDate || !fromDate) {
       return res.status(400).json({ message: 'Invalid date filter provided' });
@@ -28,7 +39,7 @@ router.get('/study/:studyId', (req, res) => {
       return res.status(400).json({ message: 'The start date must be before the end date' });
     }
 
-    const normalizedParticipantId = participantId && participantId !== 'all' ? participantId : null;
+    const normalizedParticipantId = participantId && participantId !== 'all' ? String(participantId) : null;
 
     const filteredParticipants = study.participants.filter((participant) => {
       if (normalizedParticipantId && participant.id !== normalizedParticipantId) {
@@ -65,7 +76,7 @@ router.get('/study/:studyId', (req, res) => {
 
     const responsePayload = {
       study: extractMetadata(study),
-      filters: serializeFilters(fromDate, toDate, normalizedParticipantId),
+      filters: serializeFilters(fromDate, toDate, normalizedParticipantId || 'all'),
       summary: {
         averageRating,
         completionPercentage,
@@ -240,6 +251,12 @@ function startOfDay(date) {
   return copy;
 }
 
+function endOfDay(date) {
+  const copy = new Date(date);
+  copy.setHours(23, 59, 59, 999);
+  return copy;
+}
+
 function buildParticipantSummaries(participants, ratingEvents) {
   return participants
     .map((participant) => {
@@ -274,6 +291,217 @@ function extractMetadata(study) {
     principalInvestigator: study.principalInvestigator,
     startDate: study.startDate,
     endDate: study.endDate,
+  };
+}
+
+async function buildStudySnapshot(studyId) {
+  const studyInstance = await Study.findByPk(studyId, {
+    include: [
+      { model: User, as: 'researcher', attributes: ['id', 'name', 'email'] },
+      {
+        model: StudyArtifact,
+        as: 'studyArtifacts',
+        include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name'] }],
+      },
+      {
+        model: StudyComparison,
+        as: 'comparisons',
+        include: [
+          {
+            model: StudyArtifact,
+            as: 'primaryArtifact',
+            include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name'] }],
+          },
+          {
+            model: StudyArtifact,
+            as: 'secondaryArtifact',
+            include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name'] }],
+          },
+        ],
+      },
+    ],
+  });
+
+  if (!studyInstance) {
+    return null;
+  }
+
+  const participantRows = await StudyParticipant.findAll({
+    where: { studyId: studyInstance.id },
+    include: [{ model: User, as: 'participant', attributes: ['id', 'name', 'email'] }],
+    order: [['createdAt', 'ASC']],
+  });
+
+  const evaluationRows = await Evaluation.findAll({
+    where: { studyId: studyInstance.id },
+    include: [
+      {
+        model: StudyComparison,
+        as: 'comparison',
+        include: [
+          {
+            model: StudyArtifact,
+            as: 'primaryArtifact',
+            include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name'] }],
+          },
+          {
+            model: StudyArtifact,
+            as: 'secondaryArtifact',
+            include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name'] }],
+          },
+        ],
+      },
+    ],
+    order: [['createdAt', 'ASC']],
+  });
+
+  const study = studyInstance.get({ plain: true });
+  const metadata = normalizeJson(study.metadata);
+
+  const artifacts = (study.studyArtifacts || []).map((entry) => ({
+    id: String(entry.artifact?.id || entry.id),
+    name: formatArtifactName(entry),
+  }));
+
+  const participants = participantRows.map((row) => {
+    const plain = row.get({ plain: true });
+    const profile = normalizeJson(plain.lastCheckpoint);
+    return {
+      id: String(plain.participantId),
+      name: plain.participant?.name || `Participant ${plain.participantId}`,
+      region: profile.region || 'Unknown',
+      persona: profile.persona || 'Participant',
+      progress: plain.progressPercent || 0,
+      joinedAt: toIsoString(plain.startedAt || plain.createdAt) || new Date().toISOString(),
+      completedAt: toIsoString(plain.completedAt),
+      ratings: [],
+      participationStatus: plain.participationStatus,
+    };
+  });
+
+  const participantsById = new Map(participants.map((participant) => [Number(participant.id), participant]));
+
+  evaluationRows.forEach((row) => {
+    const evaluation = row.get({ plain: true });
+    if (evaluation.status !== 'submitted' || evaluation.rating === null) {
+      return;
+    }
+    const participant = participantsById.get(evaluation.participantId);
+    if (!participant) {
+      return;
+    }
+    const timestamp = resolveEventDate(evaluation);
+    if (!timestamp) {
+      return;
+    }
+    const artifact = pickArtifactFromEvaluation(evaluation);
+    participant.ratings.push({
+      artifactId: artifact.id,
+      artifactName: artifact.name,
+      rating: Number(evaluation.rating),
+      submittedAt: timestamp.toISOString(),
+    });
+  });
+
+  return {
+    id: String(study.id),
+    title: study.title,
+    studyCode: metadata.studyCode || `STD-${String(study.id).padStart(3, '0')}`,
+    principalInvestigator: study.researcher?.name || 'Researcher',
+    startDate: study.timelineStart,
+    endDate: study.timelineEnd,
+    artifacts,
+    participants,
+  };
+}
+
+function formatArtifactName(studyArtifact) {
+  const artifactName = studyArtifact.artifact?.name;
+  if (studyArtifact.label && artifactName) {
+    return `${studyArtifact.label}: ${artifactName}`;
+  }
+  return artifactName || studyArtifact.label || `Artifact ${studyArtifact.id}`;
+}
+
+function normalizeJson(value) {
+  if (!value) {
+    return {};
+  }
+  if (typeof value === 'object') {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+}
+
+function toIsoString(value) {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.toISOString();
+}
+
+function resolveEventDate(evaluation) {
+  const candidates = [evaluation.submittedAt, evaluation.updatedAt, evaluation.createdAt];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const date = candidate instanceof Date ? candidate : new Date(candidate);
+    if (!Number.isNaN(date.getTime())) {
+      return date;
+    }
+  }
+  return null;
+}
+
+function pickArtifactFromEvaluation(evaluation) {
+  const comparison = evaluation.comparison;
+  const fallback = {
+    id: `comparison-${evaluation.comparisonId}`,
+    name: comparison?.prompt || `Comparison ${evaluation.comparisonId}`,
+  };
+
+  if (!comparison) {
+    return fallback;
+  }
+
+  if (evaluation.preference === 'primary') {
+    const artifact = unwrapStudyArtifact(comparison.primaryArtifact);
+    if (artifact) {
+      return artifact;
+    }
+  }
+
+  if (evaluation.preference === 'secondary') {
+    const artifact = unwrapStudyArtifact(comparison.secondaryArtifact);
+    if (artifact) {
+      return artifact;
+    }
+  }
+
+  const primary = unwrapStudyArtifact(comparison.primaryArtifact);
+  const secondary = unwrapStudyArtifact(comparison.secondaryArtifact);
+
+  if (primary && secondary) {
+    return { id: fallback.id, name: `${primary.name} vs ${secondary.name}` };
+  }
+
+  return primary || secondary || fallback;
+}
+
+function unwrapStudyArtifact(studyArtifact) {
+  if (!studyArtifact) {
+    return null;
+  }
+  return {
+    id: String(studyArtifact.artifact?.id || studyArtifact.id),
+    name: formatArtifactName(studyArtifact),
   };
 }
 

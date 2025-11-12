@@ -39,48 +39,6 @@ import LineChart from "@/components/charts/LineChart";
 const REFRESH_INTERVAL_MS = 30_000;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
-const ACTIVE_STUDIES = [
-  {
-    id: "study-ai-readability",
-    title: "AI vs. Human Code Readability",
-    description: "Benchmarking comprehension speed for AI vs human generated snippets.",
-    status: "In field",
-    health: "on-track",
-    progress: 72,
-    progressDelta: 12,
-    participants: 24,
-    participantTarget: 32,
-    avgRating: 4.2,
-    window: "Feb 01 – Mar 15",
-    nextMilestone: "Synthesis workshop • Mar 14",
-    participantsList: [
-      { id: "p-101", name: "Nia Patel" },
-      { id: "p-104", name: "Marco Alvarez" },
-      { id: "p-112", name: "Harper Watanabe" },
-      { id: "p-129", name: "Sonia Mbatha" },
-    ],
-  },
-  {
-    id: "study-uml-clarity",
-    title: "UML Diagram Clarity",
-    description: "Validating the clarity of refreshed UML diagrams before pilot launch.",
-    status: "Ramp up",
-    health: "attention",
-    progress: 38,
-    progressDelta: -4,
-    participants: 18,
-    participantTarget: 40,
-    avgRating: 3.8,
-    window: "Jan 20 – Apr 01",
-    nextMilestone: "Facilitator dry run • Mar 10",
-    participantsList: [
-      { id: "p-301", name: "Avery Brooks" },
-      { id: "p-318", name: "Liam Fischer" },
-      { id: "p-333", name: "Fatima Noor" },
-    ],
-  },
-];
-
 const createDefaultFilters = () => {
   const to = new Date();
   const from = new Date(to.getTime() - 30 * DAY_IN_MS);
@@ -139,7 +97,24 @@ export default function ResearcherDashboard() {
   const [analyticsError, setAnalyticsError] = useState("");
   const [isAnalyticsLoading, setIsAnalyticsLoading] = useState(false);
   const [lastRefreshAt, setLastRefreshAt] = useState(null);
+  const [studies, setStudies] = useState([]);
+  const [isStudiesLoading, setIsStudiesLoading] = useState(false);
+  const [studiesError, setStudiesError] = useState("");
   const analyticsRef = useRef(null);
+
+  const loadStudies = useCallback(async () => {
+    setIsStudiesLoading(true);
+    setStudiesError("");
+    try {
+      const { data } = await api.get("/api/researcher/studies");
+      setStudies(data.studies || []);
+    } catch (error) {
+      const message = error.response?.data?.message || "Unable to load studies";
+      setStudiesError(message);
+    } finally {
+      setIsStudiesLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -158,28 +133,49 @@ export default function ResearcherDashboard() {
     }
   }, [navigate]);
 
-  const selectedStudy = useMemo(
-    () => ACTIVE_STUDIES.find((study) => study.id === monitoringStudyId),
-    [monitoringStudyId],
-  );
+  useEffect(() => {
+    if (user?.role === "researcher") {
+      loadStudies();
+    }
+  }, [user, loadStudies]);
+
+  const selectedStudy = useMemo(() => {
+    if (!monitoringStudyId) return null;
+    return studies.find((study) => String(study.id) === String(monitoringStudyId)) || null;
+  }, [studies, monitoringStudyId]);
 
   const dashboardHighlights = useMemo(() => {
-    const totalParticipants = ACTIVE_STUDIES.reduce((sum, study) => sum + study.participants, 0);
+    if (!studies.length) {
+      return [
+        { label: "Active studies", value: 0, helper: "Syncing data…", icon: Activity },
+        { label: "Participants engaged", value: 0, helper: "Invite participants to begin", icon: Users },
+        { label: "Avg artifact rating", value: "0.0", helper: "No submissions yet", icon: LineChartIcon },
+      ];
+    }
+
+    const totalParticipants = studies.reduce((sum, study) => sum + (study.participants || 0), 0);
+    const participantTargetTotal = studies.reduce(
+      (sum, study) => sum + (study.participantTarget || 0),
+      0,
+    );
     const avgRating =
-      ACTIVE_STUDIES.length > 0
-        ? (ACTIVE_STUDIES.reduce((sum, study) => sum + study.avgRating, 0) / ACTIVE_STUDIES.length).toFixed(1)
+      studies.length > 0
+        ? (
+            studies.reduce((sum, study) => sum + Number(study.avgRating || 0), 0) / studies.length
+          ).toFixed(1)
         : "0.0";
+
     return [
-      { label: "Active studies", value: ACTIVE_STUDIES.length, helper: "+1 vs last sprint", icon: Activity },
+      { label: "Active studies", value: studies.length, helper: "+ new insights", icon: Activity },
       {
         label: "Participants engaged",
         value: totalParticipants,
-        helper: `${Math.max(0, 60 - totalParticipants)} seats open`,
+        helper: `${Math.max(0, participantTargetTotal - totalParticipants)} seats open`,
         icon: Users,
       },
-      { label: "Avg artifact rating", value: avgRating, helper: "Studio benchmark", icon: LineChartIcon },
+      { label: "Avg artifact rating", value: avgRating, helper: "Latest submissions", icon: LineChartIcon },
     ];
-  }, []);
+  }, [studies]);
 
   const participantOptions = useMemo(() => {
     if (analytics?.participantFilters?.length) {
@@ -351,82 +347,90 @@ export default function ResearcherDashboard() {
             <CardDescription>Progress, quality, and handoffs per study.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {ACTIVE_STUDIES.map((study) => (
-              <div
-                key={study.id}
-                className="grid gap-4 border-b pb-6 last:border-none last:pb-0 lg:grid-cols-[2fr,1.2fr,1fr,auto]"
-              >
-                <div className="space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="font-semibold">{study.title}</h3>
-                    <Badge
-                      variant="outline"
-                      className={
-                        study.health === "attention"
-                          ? "border-amber-200 text-amber-600"
-                          : "border-emerald-200 text-emerald-600"
-                      }
-                    >
-                      {study.status}
-                    </Badge>
+            {isStudiesLoading ? (
+              <p className="text-sm text-muted-foreground">Loading studies…</p>
+            ) : studiesError ? (
+              <p className="text-sm text-destructive">{studiesError}</p>
+            ) : !studies.length ? (
+              <p className="text-sm text-muted-foreground">No studies yet. Create one to get started.</p>
+            ) : (
+              studies.map((study) => (
+                <div
+                  key={study.id}
+                  className="grid gap-4 border-b pb-6 last:border-none last:pb-0 lg:grid-cols-[2fr,1.2fr,1fr,auto]"
+                >
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-semibold">{study.title}</h3>
+                      <Badge
+                        variant="outline"
+                        className={
+                          study.health === "attention"
+                            ? "border-amber-200 text-amber-600"
+                            : "border-emerald-200 text-emerald-600"
+                        }
+                      >
+                        {study.status}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground">{study.description}</p>
+                    <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1">
+                        <CalendarDays className="h-3.5 w-3.5" />
+                        {study.window}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Users className="h-3.5 w-3.5" />
+                        {study.participants}/{study.participantTarget} participants
+                      </span>
+                      <span>{study.nextMilestone}</span>
+                    </div>
                   </div>
-                  <p className="text-sm text-muted-foreground">{study.description}</p>
-                  <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1">
-                      <CalendarDays className="h-3.5 w-3.5" />
-                      {study.window}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Users className="h-3.5 w-3.5" />
-                      {study.participants}/{study.participantTarget} participants
-                    </span>
-                    <span>{study.nextMilestone}</span>
+
+                  <div>
+                    <p className="text-sm text-muted-foreground">Progress</p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl font-semibold">{study.progress}%</span>
+                      <Badge
+                        variant="outline"
+                        className={
+                          study.progressDelta >= 0
+                            ? "border-emerald-200 text-emerald-600"
+                            : "border-rose-200 text-rose-600"
+                        }
+                      >
+                        {study.progressDelta > 0 ? `+${study.progressDelta}%` : `${study.progressDelta}%`}
+                      </Badge>
+                    </div>
+                    <Progress value={study.progress} className="mt-2" />
+                  </div>
+
+                  <div>
+                    <p className="text-sm text-muted-foreground">Quality signal</p>
+                    <p className="text-2xl font-semibold">{Number(study.avgRating ?? 0).toFixed(1)}</p>
+                    <p className="text-xs text-muted-foreground">Avg participant rating</p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <Button variant="ghost" size="sm">
+                      <Settings2 className="mr-2 h-4 w-4" />
+                      Edit setup
+                    </Button>
+                    <Button size="sm" onClick={() => openMonitor(study.id)}>
+                      <LineChartIcon className="mr-2 h-4 w-4" />
+                      Monitor
+                    </Button>
                   </div>
                 </div>
-
-                <div>
-                  <p className="text-sm text-muted-foreground">Progress</p>
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl font-semibold">{study.progress}%</span>
-                    <Badge
-                      variant="outline"
-                      className={
-                        study.progressDelta >= 0
-                          ? "border-emerald-200 text-emerald-600"
-                          : "border-rose-200 text-rose-600"
-                      }
-                    >
-                      {study.progressDelta > 0 ? `+${study.progressDelta}%` : `${study.progressDelta}%`}
-                    </Badge>
-                  </div>
-                  <Progress value={study.progress} className="mt-2" />
-                </div>
-
-                <div>
-                  <p className="text-sm text-muted-foreground">Quality signal</p>
-                  <p className="text-2xl font-semibold">{study.avgRating.toFixed(1)}</p>
-                  <p className="text-xs text-muted-foreground">Avg participant rating</p>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <Button variant="ghost" size="sm">
-                    <Settings2 className="mr-2 h-4 w-4" />
-                    Edit setup
-                  </Button>
-                  <Button size="sm" onClick={() => openMonitor(study.id)}>
-                    <LineChartIcon className="mr-2 h-4 w-4" />
-                    Monitor
-                  </Button>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </CardContent>
         </Card>
 
       </section>
 
       <Dialog open={monitorDialogOpen} onOpenChange={setMonitorDialogOpen}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Study monitor</DialogTitle>
             <DialogDescription>Live analytics refresh automatically every 30 seconds.</DialogDescription>
