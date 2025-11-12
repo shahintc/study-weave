@@ -72,7 +72,7 @@ function StudyCreationWizard() {
       // We can pass the new study's ID to the next page
       // navigate(`/researcher/study/${newStudy.id}/select-artifacts`);
       alert("Study Created Successfully! (ID: " + newStudy.id + "). We can now go to the next page.");
-
+      navigate("/researcher/artifacts");
 
     } catch (err) {
       console.error('Failed to create study:', err);
