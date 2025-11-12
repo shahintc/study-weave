@@ -20,6 +20,8 @@ app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/studies', require('./routes/study'));
 app.use('/api/artifacts', require('./routes/artifacts'));
 app.use('/api/tags', require('./routes/tags'));
+app.use('/api/analytics', require('./routes/analytics'));
+app.use('/api/researcher', require('./routes/researcher'));
 
 app.get('/', (req, res) => res.send('Backend ready with PostgreSQL!'));
 
