@@ -1,4 +1,6 @@
-import { useState } from "react"; // We must import this to use state
+import { useState } from "react";
+import { useNavigate } from "react-router-dom"; // 1. Import for navigation
+import axios from '../api/axios'; // 2. Import your team's "waiter" (like you said!)
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -15,34 +17,67 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog"; // The "small tab" component
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 
 function StudyCreationWizard() {
-  // --- 1. SET UP OUR STATE ---
-  // A list to hold our criteria. We start with the two defaults.
+  const navigate = useNavigate(); // For going to the next page
+
+  // --- 1. SET UP *ALL* OUR STATE ---
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [isBlinded, setIsBlinded] = useState(false);
   const [criteria, setCriteria] = useState([
     "Readability",
     "Correctness",
   ]);
-  // A boolean to control if the dialog is open or closed
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  // A string to hold the text of the new criterion as you type
   const [newCriterionText, setNewCriterionText] = useState("");
+  const [error, setError] = useState(null); // To show any save errors
 
-  // --- 2. A FUNCTION TO HANDLE SAVING ---
+  // --- 2. FUNCTION TO ADD NEW CRITERIA (Your old code, no change) ---
   const handleSaveCriterion = () => {
-    if (newCriterionText.trim() === "") return; // Don't add empty text
-
-    // Add the new criterion to our existing list
+    if (newCriterionText.trim() === "") return;
     setCriteria([...criteria, newCriterionText]);
-    
-    // Clear the input field and close the dialog
     setNewCriterionText("");
     setIsDialogOpen(false);
+  };
+
+  // --- 3. NEW FUNCTION TO SAVE THE STUDY! ---
+  const handleCreateStudy = async () => {
+    setError(null); // Clear any old errors
+
+    // 1. Bundle up our data
+    const studyData = {
+      title: title,
+      description: description,
+      criteria: criteria, // Your backend will save this JSON
+      isBlinded: isBlinded,
+    };
+
+    try {
+      // 2. Send the "order" to the "kitchen"
+      // This calls your new 'POST /api/studies' endpoint!
+      // (axios automatically adds the /api/studies part)
+      const response = await axios.post('/api/studies', studyData);
+
+      // 3. Success!
+      const newStudy = response.data;
+      console.log('Study created successfully:', newStudy);
+
+      // 4. Go to the next step of the wizard (we'll make a fake route for now)
+      // We can pass the new study's ID to the next page
+      // navigate(`/researcher/study/${newStudy.id}/select-artifacts`);
+      alert("Study Created Successfully! (ID: " + newStudy.id + "). We can now go to the next page.");
+
+
+    } catch (err) {
+      console.error('Failed to create study:', err);
+      setError("Failed to create study. Please try again.");
+    }
   };
 
   return (
@@ -56,66 +91,73 @@ function StudyCreationWizard() {
         </CardHeader>
 
         <CardContent className="space-y-6">
-          {/* Study Title Section (no change) */}
+          {/* --- 4. CONNECT THE INPUTS TO STATE --- */}
           <div className="space-y-2">
             <Label htmlFor="study-title">Study Title</Label>
             <Input
               id="study-title"
               placeholder="AI vs. Human Code Readability"
+              value={title} // Connect to state
+              onChange={(e) => setTitle(e.target.value)} // Update state
             />
           </div>
 
-          {/* Description Section (no change) */}
           <div className="space-y-2">
             <Label htmlFor="description">Description for Participants</Label>
             <Textarea
               id="description"
               placeholder="You will compare two code snippets..."
+              value={description} // Connect to state
+              onChange={(e) => setDescription(e.target.value)} // Update state
             />
           </div>
 
-          {/* --- 3. UPDATED CRITERIA SECTION --- */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>Evaluation Criteria (What participants will rate)</Label>
-              {/* This button now just opens the dialog */}
               <Button variant="ghost" size="sm" onClick={() => setIsDialogOpen(true)}>
                 Add New +
               </Button>
             </div>
             
             <div className="space-y-2 rounded-md border p-4">
-              {/* We now dynamically map over our state to create the list */}
               {criteria.map((item, index) => (
                 <div key={index} className="flex items-center justify-between">
                   <span>{item}</span>
-                  {/* We could add an "X" button here later to remove items */}
                 </div>
               ))}
             </div>
           </div>
-          {/* --- END OF UPDATED SECTION --- */}
-
-          {/* Settings Section (no change) */}
+          
           <div className="space-y-2">
             <Label>Settings</Label>
             <div className="flex items-center space-x-2 rounded-md border p-4">
-              <Checkbox id="blinded" />
+              <Checkbox 
+                id="blinded"
+                checked={isBlinded} // Connect to state
+                onCheckedChange={setIsBlinded} // Update state
+              />
               <Label htmlFor="blinded" className="font-normal">
                 Blinded Evaluation (Hide artifact origin)
               </Label>
             </div>
           </div>
+
+          {/* This will show an error if saving fails */}
+          {error && (
+            <p className="text-center text-red-600">{error}</p>
+          )}
+
         </CardContent>
 
         <CardFooter className="flex justify-between">
           <Button variant="outline">Cancel</Button>
-          <Button>Next: Select Artifacts &gt;</Button>
+          {/* --- 5. CONNECT THE "NEXT" BUTTON --- */}
+          <Button onClick={handleCreateStudy}>Next: Select Artifacts &gt;</Button>
         </CardFooter>
       </Card>
 
-      {/* --- 4. THE DIALOG (MODAL) --- */}
-      {/* This component is hidden until isDialogOpen is true */}
+      {/* --- DIALOG (No change) --- */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent>
           <DialogHeader>
