@@ -129,7 +129,7 @@ export default function ArtifactsComparison() {
       }
       leftEditRef.current.innerText = leftDraftRef.current;
     }
-  }, [leftEditing, leftAnn.length, showBig, viewMode]); // include showBig & viewMode
+  }, [leftEditing, leftAnn.length, showBig, viewMode]);
 
   useLayoutEffect(() => {
     if (rightEditing && rightEditRef.current) {
@@ -138,7 +138,7 @@ export default function ArtifactsComparison() {
       }
       rightEditRef.current.innerText = rightDraftRef.current;
     }
-  }, [rightEditing, rightAnn.length, showBig, viewMode]); // include showBig & viewMode
+  }, [rightEditing, rightAnn.length, showBig, viewMode]);
 
   // ===== HELPERS =====
   const numberLines = (text) =>
@@ -202,12 +202,10 @@ export default function ArtifactsComparison() {
       setPaneData(side, { type: "image", url, name });
       return;
     }
-
     if (isPdf) {
       setPaneData(side, { type: "pdf", url, name });
       return;
     }
-
     if (isDoc) {
       setPaneData(side, { type: "doc", url, name });
       return;
@@ -241,8 +239,6 @@ export default function ArtifactsComparison() {
   };
 
   // ===== selection for TEXT panes =====
-  /** Convert selection to [start,end] within ONLY the <code> text and clamp to the line
-   * to avoid picking leading line number characters. */
   const selectionOffsets = (container) => {
     const sel = window.getSelection?.();
     if (!sel || sel.rangeCount === 0) return null;
@@ -271,7 +267,6 @@ export default function ArtifactsComparison() {
     return { start, end };
   };
 
-  /** Render helper: split text by highlights into spans */
   const renderWithHighlights = (text, anns) => {
     if (!anns || anns.length === 0) return [text];
     const ordered = [...anns].sort((a, b) => a.start - b.start);
@@ -295,7 +290,6 @@ export default function ArtifactsComparison() {
     return out;
   };
 
-  /** Toggle edit: enter/exit. Commit draft back to state on exit. */
   const onToggleEdit = (side, val) => {
     if (side === "left") {
       const next = val ?? !leftEditing;
@@ -324,7 +318,6 @@ export default function ArtifactsComparison() {
     }
   };
 
-  // track typing into the draft refs (no React state updates)
   const onEditorInput = (side) => {
     const el = side === "left" ? leftEditRef.current : rightEditRef.current;
     const val = el?.innerText ?? "";
@@ -332,7 +325,6 @@ export default function ArtifactsComparison() {
     else rightDraftRef.current = val;
   };
 
-  // === Add Comment (enabled only when editing) ===
   const onAddComment = (side) => {
     const container = (side === "left" ? leftRef : rightRef).current;
     const pane = side === "left" ? leftData : rightData;
@@ -366,7 +358,6 @@ export default function ArtifactsComparison() {
     window.getSelection()?.removeAllRanges();
   };
 
-  // === Simple Highlight (no comment) — enabled only when editing) ===
   const onSimpleHighlight = (side) => {
     const container = (side === "left" ? leftRef : rightRef).current;
     const pane = side === "left" ? leftData : rightData;
@@ -390,7 +381,7 @@ export default function ArtifactsComparison() {
       id: uid(),
       start: off.start,
       end: off.end,
-      color: "rgba(135, 206, 250, 0.6)", // light blue
+      color: "rgba(135, 206, 250, 0.6)",
       comment: "",
     };
     if (side === "left") setLeftAnn((a) => [...a, ann]);
@@ -398,7 +389,6 @@ export default function ArtifactsComparison() {
     window.getSelection()?.removeAllRanges();
   };
 
-  // ===== Drawing overlay helpers =====
   const setupCanvas = (canvas, targetEl) => {
     if (!canvas || !targetEl) return;
     const dpr = window.devicePixelRatio || 1;
@@ -454,7 +444,6 @@ export default function ArtifactsComparison() {
     rightDrawingState.current.drawing = false;
   };
 
-  // Resize canvas when needed
   useEffect(() => {
     const doSize = () => {
       const lTarget =
@@ -487,7 +476,6 @@ export default function ArtifactsComparison() {
     if (c) c.getContext("2d")?.clearRect(0, 0, c.width, c.height);
   };
 
-  // ===== Zoom helpers =====
   const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
   const changeZoom = (side, step) => {
     if (side === "left") setLeftZoom((z) => clamp((z * 100 + step) / 100, 0.25, 5));
@@ -504,7 +492,6 @@ export default function ArtifactsComparison() {
     else setRightAnn((a) => a.filter((x) => x.id !== id));
   };
 
-  // DISABLE renumber while editing + guard in code
   const onRenumber = (side) => {
     if ((side === "left" && leftEditing) || (side === "right" && rightEditing)) {
       return;
@@ -521,7 +508,6 @@ export default function ArtifactsComparison() {
     }
   };
 
-  // Big View opener — capture drafts first so editor doesn't clear
   const openBigView = () => {
     if (leftEditing) {
       leftDraftRef.current = leftEditRef.current?.innerText ?? leftDraftRef.current;
@@ -543,29 +529,36 @@ export default function ArtifactsComparison() {
     const drawActive = side === "left" ? leftDraw : rightDraw;
     const z = side === "left" ? leftZoom : rightZoom;
 
+    // NEW: consider pane "ready" only after something is uploaded
+    const hasContent =
+      pane.type === "text" ? Boolean(pane.text && pane.text.trim().length > 0) : Boolean(pane.url);
+
+    const disabledCls = "opacity-50 cursor-not-allowed bg-gray-100 text-gray-400";
     const baseBtn =
       "rounded px-2 py-1 text-xs border " +
-      (canAnnotate ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed bg-gray-100 text-gray-400");
+      (canAnnotate ? "hover:bg-gray-100" : disabledCls);
 
     const drawBtnClass =
       "rounded px-2 py-1 text-xs border " +
-      (isVisual ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed bg-gray-100 text-gray-400") +
+      (isVisual ? "hover:bg-gray-100" : disabledCls) +
       (drawActive ? " bg-gray-100" : "");
 
     const visualBtn =
       "rounded px-2 py-1 text-xs border " +
-      (isVisual ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed bg-gray-100 text-gray-400");
+      (isVisual ? "hover:bg-gray-100" : disabledCls);
 
     return (
       <div className="flex items-center justify-between px-3 py-2 border-b bg-white">
         <h3 className="text-sm font-semibold">{title}</h3>
         <div className="flex items-center gap-2">
+          {/* EDIT / HIGHLIGHT / COMMENT / RENUMBER (text only) */}
           {isText && (
             <>
               <button
-                className="rounded px-2 py-1 text-xs border hover:bg-gray-100"
+                className={`rounded px-2 py-1 text-xs border ${hasContent ? "hover:bg-gray-100" : disabledCls}`}
                 title={editing ? "Done" : "Edit"}
-                onClick={() => onToggleEdit(side)}
+                onClick={() => hasContent && onToggleEdit(side)}
+                disabled={!hasContent}
               >
                 {editing ? "Done" : "Edit"}
               </button>
@@ -590,15 +583,13 @@ export default function ArtifactsComparison() {
 
               <button
                 className={`rounded px-2 py-1 text-xs border ${
-                  editing
-                    ? "opacity-50 cursor-not-allowed bg-gray-100 text-gray-400"
-                    : "hover:bg-gray-100"
+                  !editing && hasContent ? "hover:bg-gray-100" : disabledCls
                 }`}
                 title="Renumber lines"
                 onClick={() => {
-                  if (!editing) onRenumber(side);
+                  if (!editing && hasContent) onRenumber(side);
                 }}
-                disabled={editing}
+                disabled={editing || !hasContent}
               >
                 Renumber
               </button>
@@ -635,9 +626,10 @@ export default function ArtifactsComparison() {
           )}
 
           <button
-            className="rounded p-1 hover:bg-gray-100"
+            className={`rounded p-1 ${hasContent ? "hover:bg-gray-100" : disabledCls}`}
             title="Download"
-            onClick={() => handleDownload(side)}
+            onClick={() => hasContent && handleDownload(side)}
+            disabled={!hasContent}
           >
             ⬇
           </button>
@@ -845,41 +837,43 @@ export default function ArtifactsComparison() {
         </button>
       </div>
 
-      {viewMode === "split" ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card>
-            <PaneToolbar title="Artifact A" side="left" />
-            <CardContent className="pt-0">
-              <PaneViewer innerRef={leftRef} pane={leftData} side="left" />
-            </CardContent>
-            <AnnotationsList side="left" />
-          </Card>
+      {!showBig && (
+        viewMode === "split" ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Card>
+              <PaneToolbar title="Artifact A" side="left" />
+              <CardContent className="pt-0">
+                <PaneViewer innerRef={leftRef} pane={leftData} side="left" />
+              </CardContent>
+              <AnnotationsList side="left" />
+            </Card>
 
-          <Card>
-            <PaneToolbar title="Artifact B" side="right" />
-            <CardContent className="pt-0">
-              <PaneViewer innerRef={rightRef} pane={rightData} side="right" />
-            </CardContent>
-            <AnnotationsList side="right" />
-          </Card>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-6">
-          <Card>
-            <PaneToolbar title="Artifact A" side="left" />
-            <CardContent className="pt-0">
-              <PaneViewer innerRef={leftRef} pane={leftData} side="left" />
-            </CardContent>
-            <AnnotationsList side="left" />
-          </Card>
-          <Card>
-            <PaneToolbar title="Artifact B" side="right" />
-            <CardContent className="pt-0">
-              <PaneViewer innerRef={rightRef} pane={rightData} side="right" />
-            </CardContent>
-            <AnnotationsList side="right" />
-          </Card>
-        </div>
+            <Card>
+              <PaneToolbar title="Artifact B" side="right" />
+              <CardContent className="pt-0">
+                <PaneViewer innerRef={rightRef} pane={rightData} side="right" />
+              </CardContent>
+              <AnnotationsList side="right" />
+            </Card>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-6">
+            <Card>
+              <PaneToolbar title="Artifact A" side="left" />
+              <CardContent className="pt-0">
+                <PaneViewer innerRef={leftRef} pane={leftData} side="left" />
+              </CardContent>
+              <AnnotationsList side="left" />
+            </Card>
+            <Card>
+              <PaneToolbar title="Artifact B" side="right" />
+              <CardContent className="pt-0">
+                <PaneViewer innerRef={rightRef} pane={rightData} side="right" />
+              </CardContent>
+              <AnnotationsList side="right" />
+            </Card>
+          </div>
+        )
       )}
 
       <Card>
@@ -903,7 +897,7 @@ export default function ArtifactsComparison() {
                   setRightZoom(1);
                   const lc = leftCanvasRef.current;
                   const rc = rightCanvasRef.current;
-                  if (lc) lc.getContext("2d")?.clearRect(0, 0, lc.width, lc.height);
+                  if (lc) lc.getContext("2d")?.clearRect(0, 0, lc.width, c.height);
                   if (rc) rc.getContext("2d")?.clearRect(0, 0, rc.width, rc.height);
                   leftRef.current?.scrollTo({ top: 0, left: 0 });
                   rightRef.current?.scrollTo({ top: 0, left: 0 });
@@ -911,10 +905,6 @@ export default function ArtifactsComparison() {
               >
                 Reset
               </Button>
-              <Button variant="outline">Save in Browser</Button>
-              <Button variant="outline">Share as URL</Button>
-              <Button variant="outline">Collapse All</Button>
-              <Button variant="outline">Expand All</Button>
             </div>
 
             <div className="flex items-center gap-3">
@@ -1022,7 +1012,6 @@ export default function ArtifactsComparison() {
         </CardFooter>
       </Card>
 
-      {/* ==== BIG VIEW OVERLAY (both panes, larger) ==== */}
       {showBig && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
           <div className="absolute inset-4 sm:inset-10 bg-white rounded-xl shadow-2xl p-4 flex flex-col">
