@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { CompetencyAssessment } = require('../models');
+const { CompetencyAssessment, CompetencyAssignment, User } = require('../models');
 
 const normalizeNumber = (value) => {
   if (value === null || value === undefined || value === '') {
@@ -11,6 +11,7 @@ const normalizeNumber = (value) => {
 };
 
 router.post('/assessments', async (req, res) => {
+  const transaction = await CompetencyAssessment.sequelize.transaction();
   try {
     const {
       title,
@@ -41,10 +42,10 @@ router.post('/assessments', async (req, res) => {
       options: question.type === 'multiple_choice' ? question.options || [] : [],
     }));
 
-    const metadata = {
-      instructions,
-      invitedParticipants: Array.isArray(invitedParticipants) ? invitedParticipants : [],
-    };
+      const metadata = {
+        instructions,
+        invitedParticipants: Array.isArray(invitedParticipants) ? invitedParticipants : [],
+      };
 
     const assessment = await CompetencyAssessment.create({
       researcherId,
@@ -58,12 +59,106 @@ router.post('/assessments', async (req, res) => {
       totalScore: 100,
       status,
       metadata,
-    });
+    }, { transaction });
+
+    const sanitizedParticipantIds = Array.isArray(invitedParticipants)
+      ? invitedParticipants.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+      : [];
+
+    if (sanitizedParticipantIds.length) {
+      await Promise.all(
+        sanitizedParticipantIds.map((participantId) =>
+          CompetencyAssignment.create(
+            {
+              assessmentId: assessment.id,
+              participantId,
+              researcherId,
+              status: status === 'published' ? 'in_progress' : 'pending',
+              decision: 'undecided',
+            },
+            { transaction },
+          ),
+        ),
+      );
+    }
+
+    await transaction.commit();
 
     res.status(201).json(assessment.get({ plain: true }));
   } catch (error) {
+    await transaction.rollback();
     console.error('Create competency assessment error', error);
     res.status(500).json({ message: 'Unable to create competency assessment right now.' });
+  }
+});
+
+router.get('/assignments', async (req, res) => {
+  try {
+    const { participantId } = req.query;
+    if (!participantId) {
+      return res.status(400).json({ message: 'participantId is required.' });
+    }
+
+    const records = await CompetencyAssignment.findAll({
+      where: { participantId },
+      include: [
+        {
+          model: CompetencyAssessment,
+          as: 'assessment',
+          include: [{ model: User, as: 'researcher', attributes: ['id', 'name', 'email'] }],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+    });
+
+    const payload = records.map((record) => {
+      const plain = record.get({ plain: true });
+      const assessment = plain.assessment || {};
+      const criteria = assessment.criteria || {};
+      const metadata = assessment.metadata || {};
+      const instructionList = Array.isArray(metadata.instructions)
+        ? metadata.instructions
+        : metadata.instructions
+          ? [metadata.instructions]
+          : [];
+      const resources = Array.isArray(metadata.resources) ? metadata.resources : [];
+      const researcher = assessment.researcher || {};
+      const status = plain.status || 'pending';
+
+      const statusChip =
+        status === 'submitted'
+          ? 'Submitted'
+          : status === 'in_progress'
+            ? 'In progress'
+            : 'Awaiting submission';
+
+      return {
+        id: String(plain.id),
+        assessmentId: String(assessment.id),
+        title: assessment.title,
+        studyTitle: metadata.studyTitle || 'Study invite',
+        dueAt: metadata.dueAt || 'Due date TBA',
+        reviewer: researcher.name || 'Research team',
+        researcherEmail: researcher.email || '',
+        totalScore: assessment.totalScore,
+        estimatedTime:
+          criteria.durationMinutes && Number(criteria.durationMinutes)
+            ? `${criteria.durationMinutes} minutes`
+            : metadata.estimatedTime || 'Time varies',
+        statusLabel: statusChip,
+        statusChip,
+        notes: metadata.notes || assessment.description || '',
+        instructions: instructionList,
+        resources,
+        assignedAt: plain.createdAt,
+        questions: assessment.questions || [],
+      };
+    });
+
+    return res.json({ assignments: payload });
+  } catch (error) {
+    console.error('Fetch competency assignments error', error);
+    return res.status(500).json({ message: 'Unable to load competency assignments right now.' });
   }
 });
 

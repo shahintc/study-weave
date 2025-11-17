@@ -1,10 +1,12 @@
 // src/pages/ParticipantCompetencyAssessment.jsx
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import axios from "../api/axios";
+import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -39,7 +41,7 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 
-const QUESTION_SECTIONS = [
+const FALLBACK_SECTIONS = [
   {
     id: "background",
     title: "Part 1: Background Questionnaire",
@@ -118,53 +120,157 @@ const buildQuestionSchema = (question) => {
   return z.string().min(minLength, { message });
 };
 
-const questionSchemaShape = {};
-const defaultFormValues = {};
-QUESTION_SECTIONS.forEach((section) => {
-  section.questions.forEach((question) => {
-    questionSchemaShape[question.id] = buildQuestionSchema(question);
-    defaultFormValues[question.id] = "";
-  });
-});
-
-const formSchema = z.object(questionSchemaShape);
-
-const ASSIGNMENT_OVERVIEW = {
-  id: "assignment-baseline-001",
-  title: "Baseline Competency Check",
-  studyTitle: "Comparison Study 1",
-  dueAt: "October 30, 2025 at 23:59 PST",
-  reviewer: "Dr. Ada Researcher",
-  totalScore: 100,
-  estimatedTime: "10–15 minutes",
-  statusLabel: "Awaiting submission",
-  notes: "Submitting this assessment unlocks researcher studies that match your skill level.",
-  instructions: [
-    "Set aside uninterrupted time. There is no autosave yet.",
-    "Use complete sentences for written answers — researchers review clarity.",
-    "Once you submit, answers are locked for this assignment.",
-  ],
-  resources: [
-    { id: "rubric", label: "Download rubric (PDF)", description: "See how responses are scored." },
+const buildSectionsFromAssignment = (assignment) => {
+  const questions = assignment?.questions || [];
+  if (!questions.length) {
+    return FALLBACK_SECTIONS;
+  }
+  return [
     {
-      id: "sample",
-      label: "View sample response",
-      description: "Read a high-quality example from another participant.",
+      id: "assessment",
+      title: assignment.title || "Assessment questions",
+      helper: assignment.notes || "Answer carefully. All questions are required.",
+      questions: questions.map((question, index) => {
+        const type =
+          question.type === "short_answer"
+            ? "text"
+            : question.type === "scale"
+              ? "scale"
+              : "choice";
+        const computedId = question.id != null ? String(question.id) : `question-${index + 1}`;
+        return {
+          id: computedId,
+          label: question.title || `Question ${index + 1}`,
+          helper: question.helper || "",
+          type,
+          typeLabel:
+            type === "text"
+              ? "Short answer"
+              : type === "scale"
+                ? "Rating"
+                : "Multiple choice",
+          options:
+            type === "choice"
+              ? (question.options || []).map((option, optionIndex) => ({
+                  value: String(option.value || option.text || `option-${optionIndex + 1}`),
+                  label: option.label || option.text || `Option ${optionIndex + 1}`,
+                }))
+              : [],
+          scale: question.scale,
+          textareaRows: question.textareaRows,
+          validation: question.validation || {},
+        };
+      }),
     },
-  ],
+  ];
 };
 
+const buildSchemaShapeFromSections = (sections) => {
+  const shape = {};
+  sections.forEach((section) => {
+    section.questions.forEach((question) => {
+      shape[question.id] = buildQuestionSchema(question);
+    });
+  });
+  return shape;
+};
+
+const buildDefaultValuesFromSections = (sections) => {
+  const defaults = {};
+  sections.forEach((section) => {
+    section.questions.forEach((question) => {
+      defaults[question.id] = "";
+    });
+  });
+  return defaults;
+};
+
+
 export default function ParticipantCompetencyAssessment() {
+  const navigate = useNavigate();
+  const [user, setUser] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [assignments, setAssignments] = useState([]);
+  const [activeAssignmentId, setActiveAssignmentId] = useState(null);
+  const [isAssignmentsLoading, setIsAssignmentsLoading] = useState(false);
+  const [assignmentsError, setAssignmentsError] = useState("");
+
+  const selectedAssignment = useMemo(() => {
+    if (!assignments.length) {
+      return null;
+    }
+    return assignments.find((assignment) => assignment.id === activeAssignmentId) || assignments[0];
+  }, [assignments, activeAssignmentId]);
+
+  const questionSections = useMemo(
+    () => buildSectionsFromAssignment(selectedAssignment),
+    [selectedAssignment],
+  );
+
+  const questionSchemaShape = useMemo(
+    () => buildSchemaShapeFromSections(questionSections),
+    [questionSections],
+  );
+  const dynamicSchema = useMemo(() => z.object(questionSchemaShape), [questionSchemaShape]);
+  const defaultAnswers = useMemo(
+    () => buildDefaultValuesFromSections(questionSections),
+    [questionSections],
+  );
 
   const form = useForm({
-    resolver: zodResolver(formSchema),
-    defaultValues: defaultFormValues,
+    resolver: zodResolver(dynamicSchema),
+    defaultValues: defaultAnswers,
   });
 
+  useEffect(() => {
+    form.reset(defaultAnswers);
+  }, [defaultAnswers, form]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem("user");
+    if (!raw) {
+      navigate("/login");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed.role !== "participant") {
+        navigate("/login");
+        return;
+      }
+      setUser(parsed);
+    } catch {
+      navigate("/login");
+    }
+  }, [navigate]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      return;
+    }
+    const fetchAssignments = async () => {
+      setIsAssignmentsLoading(true);
+      setAssignmentsError("");
+      try {
+        const { data } = await axios.get("/api/competency/assignments", {
+          params: { participantId: user.id },
+        });
+        const payload = data.assignments || [];
+        setAssignments(payload);
+        setActiveAssignmentId(payload[0]?.id ?? null);
+      } catch (error) {
+        console.error("Failed to load assignments", error);
+        setAssignmentsError(error.response?.data?.message || "Unable to load assignments right now");
+      } finally {
+        setIsAssignmentsLoading(false);
+      }
+    };
+    fetchAssignments();
+  }, [user?.id]);
+
   const watchedValues = form.watch();
-  const totalQuestions = QUESTION_SECTIONS.reduce(
+  const totalQuestions = questionSections.reduce(
     (sum, section) => sum + section.questions.length,
     0,
   );
@@ -190,8 +296,13 @@ export default function ParticipantCompetencyAssessment() {
   const onSubmit = async (values) => {
     setIsSubmitting(true);
     try {
+      if (!selectedAssignment) {
+        alert("No assignment selected.");
+        setIsSubmitting(false);
+        return;
+      }
       const payload = {
-        assignmentId: ASSIGNMENT_OVERVIEW.id,
+        assignmentId: selectedAssignment?.id,
         responses: values,
       };
       console.log("Submitting values:", payload);
@@ -266,31 +377,104 @@ export default function ParticipantCompetencyAssessment() {
     );
   };
 
+  if (isAssignmentsLoading) {
+    return (
+      <div className="p-6 md:p-10 max-w-5xl mx-auto">
+        <Card>
+          <CardHeader>
+            <CardTitle>Loading competency assignments…</CardTitle>
+            <CardDescription>Please wait while we fetch your open quizzes.</CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!assignments.length) {
+    return (
+      <div className="p-6 md:p-10 max-w-5xl mx-auto">
+        <Card>
+          <CardHeader>
+            <CardTitle>No competency assignments</CardTitle>
+            <CardDescription>Researchers will send competency quizzes here when you join a study.</CardDescription>
+          </CardHeader>
+          {assignmentsError ? (
+            <CardContent>
+              <p className="text-sm text-destructive">{assignmentsError}</p>
+            </CardContent>
+          ) : null}
+        </Card>
+      </div>
+    );
+  }
+
+  const overview = selectedAssignment || assignments[0];
+
   return (
     <div className="p-6 md:p-10 max-w-5xl mx-auto space-y-8">
+      <Card>
+        <CardHeader>
+          <CardTitle>My competency assignments</CardTitle>
+          <CardDescription>Pick a quiz to review its instructions and submit your responses.</CardDescription>
+          {assignmentsError ? (
+            <p className="text-xs text-destructive">{assignmentsError}</p>
+          ) : null}
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {assignments.map((assignment) => {
+            const isActive = assignment.id === overview.id;
+            return (
+              <div
+                key={assignment.id}
+                className={`flex flex-col gap-2 rounded-md border p-4 text-sm md:flex-row md:items-center md:justify-between ${
+                  isActive ? "border-primary bg-primary/5" : ""
+                }`}
+              >
+                <div>
+                  <p className="font-medium text-foreground">{assignment.title}</p>
+                  <p className="text-xs text-muted-foreground">{assignment.studyTitle}</p>
+                </div>
+                <div className="text-xs text-muted-foreground md:text-right">
+                  <p>Researcher: {assignment.reviewer}</p>
+                  <p>Due {assignment.dueAt}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={assignment.statusChip === "Awaiting submission" ? "secondary" : "outline"}>
+                    {assignment.statusChip}
+                  </Badge>
+                  <Button size="sm" variant={isActive ? "default" : "outline"} onClick={() => setActiveAssignmentId(assignment.id)}>
+                    {isActive ? "Viewing" : "Open"}
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-sm text-muted-foreground">{ASSIGNMENT_OVERVIEW.studyTitle}</p>
-              <CardTitle>{ASSIGNMENT_OVERVIEW.title}</CardTitle>
+              <p className="text-sm text-muted-foreground">{overview.studyTitle}</p>
+              <CardTitle>{overview.title}</CardTitle>
             </div>
-            <Badge variant="outline">{ASSIGNMENT_OVERVIEW.statusLabel}</Badge>
+            <Badge variant="outline">{overview.statusLabel}</Badge>
           </div>
-          <p className="text-sm text-muted-foreground">{ASSIGNMENT_OVERVIEW.notes}</p>
+          <p className="text-sm text-muted-foreground">{overview.notes}</p>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-3">
           <div>
             <p className="text-xs text-muted-foreground uppercase">Due</p>
-            <p className="text-base font-medium">{ASSIGNMENT_OVERVIEW.dueAt}</p>
+            <p className="text-base font-medium">{overview.dueAt}</p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground uppercase">Estimated time</p>
-            <p className="text-base font-medium">{ASSIGNMENT_OVERVIEW.estimatedTime}</p>
+            <p className="text-base font-medium">{overview.estimatedTime}</p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground uppercase">Reviewer</p>
-            <p className="text-base font-medium">{ASSIGNMENT_OVERVIEW.reviewer}</p>
+            <p className="text-base font-medium">{overview.reviewer}</p>
           </div>
         </CardContent>
       </Card>
@@ -302,13 +486,13 @@ export default function ParticipantCompetencyAssessment() {
           </CardHeader>
           <CardContent className="space-y-4">
             <ul className="list-disc space-y-2 pl-5 text-sm text-muted-foreground">
-              {ASSIGNMENT_OVERVIEW.instructions.map((instruction) => (
+              {(overview.instructions || []).map((instruction) => (
                 <li key={instruction}>{instruction}</li>
               ))}
             </ul>
             <Separator />
             <div className="flex flex-wrap gap-3">
-              {ASSIGNMENT_OVERVIEW.resources.map((resource) => (
+              {(overview.resources || []).map((resource) => (
                 <Button key={resource.id} type="button" variant="outline" size="sm">
                   {resource.label}
                 </Button>
@@ -335,11 +519,11 @@ export default function ParticipantCompetencyAssessment() {
             <div className="space-y-2 text-sm text-muted-foreground">
               <p>
                 <span className="font-medium text-foreground">Total score:</span>{" "}
-                {ASSIGNMENT_OVERVIEW.totalScore} pts
+                {overview.totalScore ?? 0} pts
               </p>
               <p>
                 <span className="font-medium text-foreground">Reviewer:</span>{" "}
-                {ASSIGNMENT_OVERVIEW.reviewer}
+                {overview.reviewer || "Research team"}
               </p>
               <p>
                 <span className="font-medium text-foreground">Need help?</span> Email
@@ -360,7 +544,7 @@ export default function ParticipantCompetencyAssessment() {
               </p>
             </CardHeader>
             <CardContent className="space-y-8">
-              {QUESTION_SECTIONS.map((section) => (
+              {questionSections.map((section) => (
                 <section key={section.id} className="space-y-4">
                   <div>
                     <h2 className="text-lg font-semibold">{section.title}</h2>
