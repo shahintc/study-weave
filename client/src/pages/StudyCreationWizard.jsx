@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "../api/axios";
 import { Button } from "@/components/ui/button";
@@ -113,6 +113,7 @@ const PARTICIPANT_DIRECTORY = [
 function StudyCreationWizard() {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
+  const [user, setUser] = useState(null);
   const [title, setTitle] = useState("Comparison Study — Q4 drop");
   const [description, setDescription] = useState(
     "Participants compare human and AI generated artifacts and rate readiness.",
@@ -134,6 +135,24 @@ function StudyCreationWizard() {
   const [error, setError] = useState(null);
   const [participantSearch, setParticipantSearch] = useState("");
   const [selectedParticipants, setSelectedParticipants] = useState(["p-1", "p-4"]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem("user");
+    if (!raw) {
+      navigate("/login");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed.role !== "researcher") {
+        navigate("/login");
+        return;
+      }
+      setUser(parsed);
+    } catch {
+      navigate("/login");
+    }
+  }, [navigate]);
 
   const progressPercent = useMemo(() => {
     const progress = ((currentStep + 1) / WIZARD_STEPS.length) * 100;
@@ -175,22 +194,30 @@ function StudyCreationWizard() {
 
   const handleCreateStudy = async () => {
     setError(null);
+    if (!user?.id) {
+      setError("Please sign in as a researcher to create a study.");
+      return;
+    }
     const payload = {
       title,
       description,
       criteria,
+      researcherId: user.id,
       isBlinded,
+      timelineStart: windowStart || null,
+      timelineEnd: windowEnd || null,
       metadata: {
         participantTarget: Number(participantTarget) || 0,
         windowStart,
         windowEnd,
         notes,
         requireAssessment,
-        selectedAssessment,
-        selectedSegment,
+        selectedAssessment: requireAssessment ? selectedAssessment : null,
+        selectedSegment: requireAssessment ? selectedSegment : null,
         autoInvite,
         selectedArtifacts,
         selectedParticipants,
+        isBlinded,
       },
     };
 
