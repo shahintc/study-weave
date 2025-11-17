@@ -57,59 +57,6 @@ const PARTICIPANT_SEGMENTS = [
   { id: "seg-3", label: "Design partners" },
 ];
 
-const PARTICIPANT_DIRECTORY = [
-  {
-    id: "p-1",
-    name: "Ariana Becker",
-    email: "ariana@example.com",
-    persona: "Senior Engineer",
-    lastAssessment: "Baseline Competency Check",
-    lastScore: 86,
-    location: "Berlin",
-    status: "approved",
-  },
-  {
-    id: "p-2",
-    name: "Caleb Martin",
-    email: "caleb@example.com",
-    persona: "Design Partner",
-    lastAssessment: "Mobile UX Diagnostic",
-    lastScore: 72,
-    location: "Toronto",
-    status: "needs-review",
-  },
-  {
-    id: "p-3",
-    name: "Lina Patel",
-    email: "lina@example.com",
-    persona: "Bootcamp Grad",
-    lastAssessment: "Baseline Competency Check",
-    lastScore: 61,
-    location: "Austin",
-    status: "pending",
-  },
-  {
-    id: "p-4",
-    name: "Dev Shah",
-    email: "dev@example.com",
-    persona: "Senior Engineer",
-    lastAssessment: "Baseline Competency Check",
-    lastScore: 90,
-    location: "Singapore",
-    status: "approved",
-  },
-  {
-    id: "p-5",
-    name: "Nora Esposito",
-    email: "nora@example.com",
-    persona: "Design Partner",
-    lastAssessment: "Mobile UX Diagnostic",
-    lastScore: 77,
-    location: "Milan",
-    status: "approved",
-  },
-];
-
 function StudyCreationWizard() {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
@@ -134,7 +81,10 @@ function StudyCreationWizard() {
   const [notes, setNotes] = useState("");
   const [error, setError] = useState(null);
   const [participantSearch, setParticipantSearch] = useState("");
-  const [selectedParticipants, setSelectedParticipants] = useState(["p-1", "p-4"]);
+  const [participants, setParticipants] = useState([]);
+  const [participantsError, setParticipantsError] = useState("");
+  const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
+  const [selectedParticipants, setSelectedParticipants] = useState([]);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -153,6 +103,23 @@ function StudyCreationWizard() {
       navigate("/login");
     }
   }, [navigate]);
+
+  useEffect(() => {
+    const fetchParticipants = async () => {
+      setIsParticipantsLoading(true);
+      setParticipantsError("");
+      try {
+        const { data } = await axios.get("/api/auth/participants");
+        setParticipants(data.users || []);
+      } catch (error) {
+        console.error("Failed to load participants", error);
+        setParticipantsError(error.response?.data?.message || "Unable to load participants");
+      } finally {
+        setIsParticipantsLoading(false);
+      }
+    };
+    fetchParticipants();
+  }, []);
 
   const progressPercent = useMemo(() => {
     const progress = ((currentStep + 1) / WIZARD_STEPS.length) * 100;
@@ -234,17 +201,16 @@ function StudyCreationWizard() {
 
   const filteredParticipants = useMemo(() => {
     if (!participantSearch.trim()) {
-      return PARTICIPANT_DIRECTORY;
+      return participants;
     }
     const term = participantSearch.toLowerCase();
-    return PARTICIPANT_DIRECTORY.filter((participant) => {
+    return participants.filter((participant) => {
       return (
         participant.name.toLowerCase().includes(term) ||
-        participant.email.toLowerCase().includes(term) ||
-        participant.persona.toLowerCase().includes(term)
+        participant.email.toLowerCase().includes(term)
       );
     });
-  }, [participantSearch]);
+  }, [participantSearch, participants]);
 
   const toggleParticipant = (participantId) => {
     setSelectedParticipants((prev) =>
@@ -252,6 +218,11 @@ function StudyCreationWizard() {
         ? prev.filter((id) => id !== participantId)
         : [...prev, participantId],
     );
+  };
+
+  const selectAllParticipants = () => {
+    const everyId = participants.map((participant) => participant.id);
+    setSelectedParticipants(everyId);
   };
 
   const goBack = () => setCurrentStep((prev) => Math.max(0, prev - 1));
@@ -496,57 +467,65 @@ function StudyCreationWizard() {
                         <div>
                           <Label>Select participants</Label>
                           <p className="text-xs text-muted-foreground">
-                            {selectedParticipants.length} selected • these folks will receive the competency quiz.
+                            {isParticipantsLoading
+                              ? "Loading participants…"
+                              : `${selectedParticipants.length} selected • these folks will receive the competency quiz.`}
                           </p>
                         </div>
                         <Button
                           type="button"
                           variant="ghost"
                           size="sm"
-                          onClick={() => setSelectedParticipants(PARTICIPANT_DIRECTORY.map((p) => p.id))}
+                          onClick={selectAllParticipants}
+                          disabled={!participants.length}
                         >
                           Select all
                         </Button>
                       </div>
                       <Input
-                        placeholder="Search by name, email, or persona"
+                        placeholder="Search by name or email"
                         value={participantSearch}
                         onChange={(event) => setParticipantSearch(event.target.value)}
+                        disabled={!participants.length}
                       />
+                      {participantsError ? (
+                        <p className="text-xs text-destructive">{participantsError}</p>
+                      ) : null}
                       <div className="max-h-[280px] space-y-2 overflow-y-auto rounded-md border p-2">
-                        {filteredParticipants.map((participant) => (
-                          <div
-                            key={participant.id}
-                            className={`flex flex-col gap-1 rounded-md border p-3 text-sm md:flex-row md:items-center md:justify-between ${selectedParticipants.includes(participant.id) ? "border-primary bg-primary/5" : "border-muted"}`}
-                          >
-                            <div>
-                              <p className="font-medium text-foreground">
-                                {participant.name}
-                                <span className="text-muted-foreground"> • {participant.email}</span>
-                              </p>
-                              <p className="text-xs text-muted-foreground">
-                                {participant.persona} • {participant.location} • Last: {participant.lastAssessment} ({participant.lastScore}%)
-                              </p>
+                        {isParticipantsLoading ? (
+                          <p className="py-6 text-center text-xs text-muted-foreground">Fetching participants…</p>
+                        ) : filteredParticipants.length ? (
+                          filteredParticipants.map((participant) => (
+                            <div
+                              key={participant.id}
+                              className={`flex flex-col gap-1 rounded-md border p-3 text-sm md:flex-row md:items-center md:justify-between ${
+                                selectedParticipants.includes(participant.id) ? "border-primary bg-primary/5" : "border-muted"
+                              }`}
+                            >
+                              <div>
+                                <p className="font-medium text-foreground">
+                                  {participant.name}
+                                  <span className="text-muted-foreground"> • {participant.email}</span>
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {participant.role || "participant"} • Joined{" "}
+                                  {participant.created_at
+                                    ? new Date(participant.created_at).toLocaleDateString()
+                                    : "—"}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline">Eligible</Badge>
+                                <Checkbox
+                                  checked={selectedParticipants.includes(participant.id)}
+                                  onCheckedChange={() => toggleParticipant(participant.id)}
+                                />
+                              </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <Badge
-                                variant={
-                                  participant.status === "approved"
-                                    ? "secondary"
-                                    : participant.status === "needs-review"
-                                      ? "outline"
-                                      : "default"
-                                }
-                              >
-                                {participant.status.replace("-", " ")}
-                              </Badge>
-                              <Checkbox
-                                checked={selectedParticipants.includes(participant.id)}
-                                onCheckedChange={() => toggleParticipant(participant.id)}
-                              />
-                            </div>
-                          </div>
-                        ))}
+                          ))
+                        ) : (
+                          <p className="py-6 text-center text-xs text-muted-foreground">No participants match this search.</p>
+                        )}
                       </div>
                     </div>
                   </div>

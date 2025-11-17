@@ -1,8 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Trash2, Save, Upload, Zap, Clock, TrendingUp, Eye, Layers, Users, Search } from 'lucide-react';
+import { useNavigate } from "react-router-dom";
+import axios from "../api/axios";
 
 // --- SHADCN/UI COMPONENTS ---
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -166,7 +168,12 @@ function OptionsFieldArray({ questionIndex, control, errors }) {
 export default function AssessmentCreationPage() {
     const [isSaving, setIsSaving] = useState(false);
     const [participantSearch, setParticipantSearch] = useState("");
-    const [selectedParticipants, setSelectedParticipants] = useState([1, 3]);
+    const [participants, setParticipants] = useState([]);
+    const [participantsError, setParticipantsError] = useState("");
+    const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
+    const [selectedParticipants, setSelectedParticipants] = useState([]);
+    const [user, setUser] = useState(null);
+    const navigate = useNavigate();
 
     const form = useForm({
         resolver: zodResolver(assessmentSchema),
@@ -178,7 +185,7 @@ export default function AssessmentCreationPage() {
             instructions: "Set aside quiet time. Record detailed reasoning for each choice so researchers can follow your thought process.",
             status: "draft",
             questions: [defaultQuestion],
-            invitedParticipants: [1, 3],
+            invitedParticipants: [],
         },
         mode: "onChange",
     });
@@ -190,16 +197,67 @@ export default function AssessmentCreationPage() {
     const status = form.watch("status");
     const questionCount = form.watch("questions")?.length || 0;
 
+    useEffect(() => {
+        const raw = localStorage.getItem("user");
+        if (!raw) {
+            navigate("/login");
+            return;
+        }
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed.role !== "researcher") {
+                navigate("/login");
+                return;
+            }
+            setUser(parsed);
+        } catch {
+            navigate("/login");
+        }
+    }, [navigate]);
+
+    useEffect(() => {
+        const fetchParticipants = async () => {
+            setIsParticipantsLoading(true);
+            setParticipantsError("");
+            try {
+                const { data } = await axios.get("/api/auth/participants");
+                setParticipants(data.users || []);
+            } catch (error) {
+                console.error("Failed to load participants", error);
+                setParticipantsError(error.response?.data?.message || "Unable to load participants");
+            } finally {
+                setIsParticipantsLoading(false);
+            }
+        };
+        fetchParticipants();
+    }, []);
+
     const onSubmit = async (values) => {
         setIsSaving(true);
-        console.log("Saving Assessment Template:", values);
-        
         try {
-            // 🛑 Replace with your actual API call
-            // await axios.post('/api/researcher/assessment', values);
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            if (!user?.id) {
+                alert("Please sign in as a researcher before saving.");
+                setIsSaving(false);
+                return;
+            }
+
+            const payload = {
+                researcherId: user.id,
+                title: values.title,
+                description: values.description,
+                questions: values.questions.map((question) => ({
+                    ...question,
+                    options: question.type === "multiple_choice" ? question.options || [] : [],
+                })),
+                status: values.status,
+                instructions: values.instructions,
+                durationMinutes: Number(values.duration) || null,
+                passingThreshold: Number(values.passingThreshold) || null,
+                invitedParticipants: selectedParticipants,
+            };
+
+            await axios.post("/api/competency/assessments", payload);
             alert("✅ Assessment Template Saved Successfully!");
-            // TODO: Navigate or clear form
         } catch (error) {
             console.error("Save failed:", error);
             alert("❌ Failed to save assessment. Check console for details.");
@@ -230,34 +288,29 @@ export default function AssessmentCreationPage() {
 
     const filteredParticipants = useMemo(() => {
         if (!participantSearch.trim()) {
-            return PARTICIPANT_DIRECTORY;
+            return participants;
         }
         const term = participantSearch.toLowerCase();
-        return PARTICIPANT_DIRECTORY.filter((participant) => {
+        return participants.filter((participant) => {
             return (
                 participant.name.toLowerCase().includes(term) ||
-                participant.email.toLowerCase().includes(term) ||
-                participant.persona.toLowerCase().includes(term)
+                participant.email.toLowerCase().includes(term)
             );
         });
-    }, [participantSearch]);
+    }, [participantSearch, participants]);
 
     const toggleParticipant = (participantId) => {
-        setSelectedParticipants((prev) =>
-            prev.includes(participantId)
+        setSelectedParticipants((prev) => {
+            const next = prev.includes(participantId)
                 ? prev.filter((id) => id !== participantId)
-                : [...prev, participantId],
-        );
-        form.setValue(
-            "invitedParticipants",
-            selectedParticipants.includes(participantId)
-                ? selectedParticipants.filter((id) => id !== participantId)
-                : [...selectedParticipants, participantId],
-        );
+                : [...prev, participantId];
+            form.setValue("invitedParticipants", next);
+            return next;
+        });
     };
 
     const selectAllParticipants = () => {
-        const everyId = PARTICIPANT_DIRECTORY.map((participant) => participant.id);
+        const everyId = participants.map((participant) => participant.id);
         setSelectedParticipants(everyId);
         form.setValue("invitedParticipants", everyId);
     };
@@ -549,9 +602,17 @@ export default function AssessmentCreationPage() {
                                     <div className="flex flex-wrap items-center justify-between gap-2">
                                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
                                             <Users className="h-4 w-4" />
-                                            {selectedParticipants.length} selected
+                                            {isParticipantsLoading
+                                                ? "Loading participants…"
+                                                : `${selectedParticipants.length} selected`}
                                         </div>
-                                        <Button type="button" variant="ghost" size="sm" onClick={selectAllParticipants}>
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={selectAllParticipants}
+                                            disabled={!participants.length}
+                                        >
                                             Select all
                                         </Button>
                                     </div>
@@ -560,39 +621,51 @@ export default function AssessmentCreationPage() {
                                         <Input
                                             value={participantSearch}
                                             onChange={(event) => setParticipantSearch(event.target.value)}
-                                            placeholder="Search by name, email, persona"
+                                            placeholder="Search by name or email"
                                             className="border-0 focus-visible:ring-0"
+                                            disabled={!participants.length}
                                         />
                                     </div>
+                                    {participantsError ? (
+                                        <p className="text-xs text-destructive">{participantsError}</p>
+                                    ) : null}
                                     <div className="max-h-[360px] space-y-2 overflow-y-auto rounded-md border p-2">
-                                        {filteredParticipants.map((participant) => (
-                                            <div
-                                                key={participant.id}
-                                                className={`rounded-md border p-3 text-sm ${selectedParticipants.includes(participant.id) ? "border-primary bg-primary/5" : "border-muted"}`}
-                                            >
-                                                <div className="flex flex-col gap-1">
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <div>
-                                                            <p className="font-semibold text-foreground">{participant.name}</p>
-                                                            <p className="text-xs text-muted-foreground">{participant.email} • {participant.persona}</p>
+                                        {isParticipantsLoading ? (
+                                            <p className="py-6 text-center text-xs text-muted-foreground">Fetching participants…</p>
+                                        ) : filteredParticipants.length ? (
+                                            filteredParticipants.map((participant) => (
+                                                <div
+                                                    key={participant.id}
+                                                    className={`rounded-md border p-3 text-sm ${selectedParticipants.includes(participant.id) ? "border-primary bg-primary/5" : "border-muted"}`}
+                                                >
+                                                    <div className="flex flex-col gap-1">
+                                                        <div className="flex items-center justify-between gap-3">
+                                                            <div>
+                                                                <p className="font-semibold text-foreground">{participant.name}</p>
+                                                                <p className="text-xs text-muted-foreground">{participant.email}</p>
+                                                            </div>
+                                                            <Checkbox
+                                                                checked={selectedParticipants.includes(participant.id)}
+                                                                onCheckedChange={() => toggleParticipant(participant.id)}
+                                                            />
                                                         </div>
-                                                        <Checkbox
-                                                            checked={selectedParticipants.includes(participant.id)}
-                                                            onCheckedChange={() => toggleParticipant(participant.id)}
-                                                        />
+                                                        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                                                            <span>{participant.role || "participant"}</span>
+                                                            <span>
+                                                                Joined{" "}
+                                                                {participant.created_at
+                                                                    ? new Date(participant.created_at).toLocaleDateString()
+                                                                    : "—"}
+                                                            </span>
+                                                        </div>
                                                     </div>
-                                                    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                                                        <span>{participant.location}</span>
-                                                        <span>{participant.completedStudies} studies</span>
-                                                        <span>Last score {participant.lastScore}%</span>
-                                                    </div>
-                                                    <p className="text-xs text-muted-foreground">Last study: {participant.lastStudy}</p>
                                                 </div>
-                                            </div>
-                                        ))}
-                                        {!filteredParticipants.length ? (
-                                            <p className="text-center text-xs text-muted-foreground py-6">No participants match this search.</p>
-                                        ) : null}
+                                            ))
+                                        ) : (
+                                            <p className="text-center text-xs text-muted-foreground py-6">
+                                                No participants match this search.
+                                            </p>
+                                        )}
                                     </div>
                                 </CardContent>
                             </Card>
@@ -603,60 +676,3 @@ export default function AssessmentCreationPage() {
         </div>
     );
 }
-const PARTICIPANT_DIRECTORY = [
-  {
-    id: 1,
-    name: "Ava Mayer",
-    email: "ava@example.com",
-    role: "participant",
-    persona: "Senior Engineer",
-    location: "Berlin",
-    lastStudy: "API Quality Bench",
-    lastScore: 82,
-    completedStudies: 5,
-  },
-  {
-    id: 2,
-    name: "Noah Singh",
-    email: "noah@example.com",
-    role: "participant",
-    persona: "Bootcamp Grad",
-    location: "Toronto",
-    lastStudy: "Prototype UX Sprint",
-    lastScore: 68,
-    completedStudies: 2,
-  },
-  {
-    id: 3,
-    name: "Lina Patel",
-    email: "lina@example.com",
-    role: "participant",
-    persona: "Design Partner",
-    location: "Austin",
-    lastStudy: "LLM Feedback Lab",
-    lastScore: 90,
-    completedStudies: 7,
-  },
-  {
-    id: 4,
-    name: "Mia Chen",
-    email: "mia@example.com",
-    role: "participant",
-    persona: "Senior Engineer",
-    location: "Singapore",
-    lastStudy: "Security Review Pilot",
-    lastScore: 75,
-    completedStudies: 4,
-  },
-  {
-    id: 5,
-    name: "Leo Martins",
-    email: "leo@example.com",
-    role: "participant",
-    persona: "Design Partner",
-    location: "Lisbon",
-    lastStudy: "Onboarding Diary",
-    lastScore: 88,
-    completedStudies: 6,
-  },
-];
