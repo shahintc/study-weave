@@ -103,10 +103,15 @@ export default function ResearcherDashboard() {
   const analyticsRef = useRef(null);
 
   const loadStudies = useCallback(async () => {
+    if (!user?.id) {
+      return;
+    }
     setIsStudiesLoading(true);
     setStudiesError("");
     try {
-      const { data } = await api.get("/api/researcher/studies");
+      const { data } = await api.get("/api/researcher/studies", {
+        params: { researcherId: user.id },
+      });
       setStudies(data.studies || []);
     } catch (error) {
       const message = error.response?.data?.message || "Unable to load studies";
@@ -114,7 +119,7 @@ export default function ResearcherDashboard() {
     } finally {
       setIsStudiesLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
