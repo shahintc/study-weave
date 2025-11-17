@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const Study = require('../sequelize-models/study'); // We import your new "recipe" (the Study model)
+const { sequelize, Study, CompetencyAssignment } = require('../models');
 
 // const authMiddleware = require('../middleware/auth'); // We will add security to this later
 
@@ -9,38 +9,115 @@ const Study = require('../sequelize-models/study'); // We import your new "recip
 // This will be the endpoint for your "Next" button
 // ---
 
+const normalizeDate = (value) => {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date;
+};
+
 // We will add 'authMiddleware' here later to protect it
 router.post('/', async (req, res) => {
+  const transaction = await sequelize.transaction();
   try {
-    // 1. Get the data from the frontend's request (the "order")
-    const { title, description, criteria, isBlinded } = req.body;
+    const {
+      title,
+      description,
+      criteria,
+      researcherId,
+      isBlinded = false,
+      timelineStart,
+      timelineEnd,
+      metadata = {},
+      selectedParticipants = [],
+      autoInvite = false,
+    } = req.body;
 
-    // 2. Get the logged-in user's ID
-    // TODO: We need to get the researcher's ID from their login token.
-    // For now, we will HARDCODE it to '1' just to make it work.
-    // We can fix this later.
-    const researcherId = 1; 
+    if (!researcherId) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'A researcherId is required to create a study.' });
+    }
 
-    // 3. Use Sequelize to create the new study in the database
-    // This uses your study.js model!
+    if (!title || !description) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'Title and description are required.' });
+    }
+
+    const preparedMetadata = {
+      ...metadata,
+    };
+
+    if (typeof preparedMetadata.isBlinded === 'undefined') {
+      preparedMetadata.isBlinded = Boolean(isBlinded);
+    }
+
     const newStudy = await Study.create({
-      title: title,
-      description: description,
-      criteria: criteria, // Your model will save this as JSON!
-      status: 'draft',    // We set the default status
-      researcherId: researcherId,
-      // 'isBlinded' is not in your model, so we can't save it yet.
-      // We can store it in the 'metadata' field you created.
-      metadata: { 
-        isBlinded: isBlinded 
+      title,
+      description,
+      criteria: Array.isArray(criteria) ? criteria : [],
+      status: 'draft',
+      researcherId,
+      timelineStart: normalizeDate(timelineStart),
+      timelineEnd: normalizeDate(timelineEnd),
+      metadata: preparedMetadata,
+    }, { transaction });
+
+    const participantSelection = Array.isArray(selectedParticipants) && selectedParticipants.length
+      ? selectedParticipants
+      : Array.isArray(preparedMetadata.selectedParticipants)
+        ? preparedMetadata.selectedParticipants
+        : [];
+
+    const autoInviteFlag = typeof autoInvite === 'boolean'
+      ? autoInvite
+      : Boolean(preparedMetadata.autoInvite);
+
+    const shouldCreateAssignments = Boolean(
+      preparedMetadata.requireAssessment && preparedMetadata.selectedAssessment,
+    );
+
+    let assignments = [];
+    if (shouldCreateAssignments) {
+      const assessmentId = Number(preparedMetadata.selectedAssessment);
+      if (!Number.isNaN(assessmentId)) {
+        const sanitizedParticipants = participantSelection
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value));
+
+        assignments = await Promise.all(
+          sanitizedParticipants.map((participantId) =>
+            CompetencyAssignment.create(
+              {
+                assessmentId,
+                participantId,
+                researcherId,
+                status: autoInviteFlag ? 'in_progress' : 'pending',
+                decision: 'undecided',
+                startedAt: null,
+                submittedAt: null,
+                reviewedAt: null,
+                reviewerNotes: null,
+              },
+              { transaction },
+            ),
+          ),
+        );
       }
+    }
+
+    await transaction.commit();
+
+    res.status(201).json({
+      study: newStudy.get({ plain: true }),
+      competencyAssignments: assignments.map((entry) => entry.get({ plain: true })),
     });
-
-    // 4. Send the new study back to the frontend as a "success" message
-    res.status(201).json(newStudy);
-
   } catch (error) {
     console.error('Error creating study:', error);
+    await transaction.rollback();
     res.status(500).json({ message: 'Server error while creating study' });
   }
 });
