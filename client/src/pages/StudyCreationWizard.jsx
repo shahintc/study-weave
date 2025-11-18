@@ -40,12 +40,6 @@ const DEFAULT_CRITERIA = [
   { label: "Confidence notes", weight: 20 },
 ];
 
-const ARTIFACT_LIBRARY = [
-  { id: "art-1", label: "Artifact A • Human writeup" },
-  { id: "art-2", label: "Artifact B • AI summary" },
-  { id: "art-3", label: "Prototype wireframes" },
-];
-
 const ASSESSMENTS = [
   { id: "asm-1", title: "Baseline Competency Check", completions: 12 },
   { id: "asm-2", title: "Mobile UX Diagnostic", completions: 5 },
@@ -73,7 +67,7 @@ function StudyCreationWizard() {
   const [participantTarget, setParticipantTarget] = useState("20");
   const [windowStart, setWindowStart] = useState("");
   const [windowEnd, setWindowEnd] = useState("");
-  const [selectedArtifacts, setSelectedArtifacts] = useState(["art-1", "art-2"]);
+  const [selectedArtifacts, setSelectedArtifacts] = useState([]);
   const [requireAssessment, setRequireAssessment] = useState(true);
   const [selectedAssessment, setSelectedAssessment] = useState("asm-1");
   const [selectedSegment, setSelectedSegment] = useState("seg-1");
@@ -85,6 +79,9 @@ function StudyCreationWizard() {
   const [participantsError, setParticipantsError] = useState("");
   const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
   const [selectedParticipants, setSelectedParticipants] = useState([]);
+  const [artifacts, setArtifacts] = useState([]);
+  const [artifactsError, setArtifactsError] = useState("");
+  const [isArtifactsLoading, setIsArtifactsLoading] = useState(false);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -104,6 +101,12 @@ function StudyCreationWizard() {
     }
   }, [navigate]);
 
+  const artifactOwnerId = useMemo(() => {
+    if (user?.id) return user.id;
+    if (user?.userId) return user.userId;
+    return 1;
+  }, [user]);
+
   useEffect(() => {
     const fetchParticipants = async () => {
       setIsParticipantsLoading(true);
@@ -118,8 +121,43 @@ function StudyCreationWizard() {
         setIsParticipantsLoading(false);
       }
     };
+    const fetchArtifacts = async () => {
+      setIsArtifactsLoading(true);
+      setArtifactsError("");
+      try {
+        const { data } = await axios.get(`/api/artifacts/user/${artifactOwnerId}`);
+        setArtifacts(data.artifacts || []);
+      } catch (error) {
+        const status = error.response?.status;
+        // Fallback: some earlier artifacts were saved under user 1
+        if (status === 404 && artifactOwnerId !== 1) {
+          try {
+            const fallback = await axios.get(`/api/artifacts/user/1`);
+            setArtifacts(fallback.data.artifacts || []);
+          } catch (fallbackErr) {
+            const fallbackStatus = fallbackErr.response?.status;
+            if (fallbackStatus === 404) {
+              setArtifacts([]);
+            } else {
+              console.error("Failed to load artifacts (fallback)", fallbackErr);
+              const message = fallbackErr.response?.data?.message || "Unable to load artifacts";
+              setArtifactsError(message);
+            }
+          }
+        } else if (status === 404) {
+          setArtifacts([]);
+        } else {
+          console.error("Failed to load artifacts", error);
+          const message = error.response?.data?.message || "Unable to load artifacts";
+          setArtifactsError(message);
+        }
+      } finally {
+        setIsArtifactsLoading(false);
+      }
+    };
     fetchParticipants();
-  }, []);
+    fetchArtifacts();
+  }, [artifactOwnerId]);
 
   const progressPercent = useMemo(() => {
     const progress = ((currentStep + 1) / WIZARD_STEPS.length) * 100;
@@ -225,8 +263,31 @@ function StudyCreationWizard() {
     setSelectedParticipants(everyId);
   };
 
+   const getTotalWeight = () => {
+    return criteria.reduce((sum, c) => sum + Number(c.weight), 0);
+  };
+
+  const validateCriteriaBeforeNext = () => {
+    if (criteria.length === 0) {
+      setError("You must create at least one evaluation criterion before continuing.");
+      return false;
+    }
+    const total = getTotalWeight();
+    if (total !== 100) {
+      setError(`Total weight must be exactly 100%. Current total: ${total}%.`);
+      return false;
+    }
+    return true;
+  };
+
   const goBack = () => setCurrentStep((prev) => Math.max(0, prev - 1));
-  const goNext = () => setCurrentStep((prev) => Math.min(WIZARD_STEPS.length - 1, prev + 1));
+  const goNext = () => {
+    setError(null);
+    if (currentStep === 1) {
+      if (!validateCriteriaBeforeNext()) return;
+    }
+    setCurrentStep((prev) => Math.min(WIZARD_STEPS.length - 1, prev + 1));
+  };
 
   const primaryAction = currentStep === WIZARD_STEPS.length - 1 ? handleCreateStudy : goNext;
   const primaryLabel = currentStep === WIZARD_STEPS.length - 1 ? "Launch study" : "Continue";
@@ -370,27 +431,54 @@ function StudyCreationWizard() {
                 <p className="text-sm text-muted-foreground">
                   Choose the artifacts for this study. You can upload more from the artifacts page.
                 </p>
-                <div className="space-y-3">
-                  {ARTIFACT_LIBRARY.map((artifact) => (
-                    <div
-                      key={artifact.id}
-                      className={`flex items-center justify-between rounded-md border p-3 ${selectedArtifacts.includes(artifact.id) ? "border-primary bg-primary/5" : ""}`}
-                    >
-                      <div>
-                        <p className="text-sm font-medium">{artifact.label}</p>
-                        <p className="text-xs text-muted-foreground">Last updated 2 days ago</p>
+                {artifactsError ? (
+                  <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                    {artifactsError}
+                  </div>
+                ) : null}
+                {isArtifactsLoading ? (
+                  <div className="rounded-md border p-3 text-sm text-muted-foreground">Loading artifacts...</div>
+                ) : artifacts.length === 0 ? (
+                  <div className="rounded-md border p-3 text-sm text-muted-foreground">
+                    No artifacts found. Upload artifacts first from the Artifacts page.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {artifacts.map((artifact) => (
+                      <div
+                        key={artifact.id}
+                        className={`flex items-center justify-between rounded-md border p-3 ${selectedArtifacts.includes(artifact.id) ? "border-primary bg-primary/5" : ""}`}
+                      >
+                        <div>
+                          <p className="text-sm font-medium">{artifact.name || `Artifact ${artifact.id}`}</p>
+                          <p className="text-xs text-muted-foreground capitalize">
+                            {artifact.type || "Unknown type"}
+                          </p>
+                          {artifact.tags && artifact.tags.length > 0 ? (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {artifact.tags.map((tag) => (
+                                <Badge key={tag.id || tag.name} variant="outline" className="text-[10px]">
+                                  {tag.name}
+                                </Badge>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                        <Checkbox
+                          checked={selectedArtifacts.includes(artifact.id)}
+                          onCheckedChange={() => toggleArtifact(artifact.id)}
+                        />
                       </div>
-                      <Checkbox
-                        checked={selectedArtifacts.includes(artifact.id)}
-                        onCheckedChange={() => toggleArtifact(artifact.id)}
-                      />
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label>Evaluation criteria</Label>
+                  <p className="text-xs text-muted-foreground">
+                    e.g., Readability, Correctness, Maintainability, Confidence…
+                  </p>
                   <Button variant="ghost" size="sm" onClick={() => setIsDialogOpen(true)}>
                     Add new +
                   </Button>
@@ -403,6 +491,11 @@ function StudyCreationWizard() {
                     </div>
                   ))}
                 </div>
+
+                {/* ADDED — validation error */}
+                {error ? (
+                  <p className="text-sm text-destructive">{error}</p>
+                ) : null}
               </div>
             </>
           ) : null}
