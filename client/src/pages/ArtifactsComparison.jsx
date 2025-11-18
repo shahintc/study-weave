@@ -1,90 +1,236 @@
 // ArtifactsComparison.jsx — React (.jsx)
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Checkbox } from "@/components/ui/checkbox";
 
-/** Small helper for ids */
+/** Small helper for unique ids */
 const uid = () => Math.random().toString(36).slice(2, 9);
 
+/** Helper: Convert file to Base64 (for storage) */
+const fileToBase64 = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = (error) => reject(error);
+  });
+};
+
+/** Cache for blob URLs so we don't leak memory too much */
+const blobUrlCache = new Map();
+
+/** Helper: Convert Base64 back to Blob URL (for reliable PDF rendering) */
+const base64ToBlobUrl = (base64) => {
+  try {
+    if (!base64) return null;
+    if (blobUrlCache.has(base64)) return blobUrlCache.get(base64);
+
+    const arr = base64.split(",");
+    if (arr.length < 2) return null;
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : "application/pdf"; // fallback
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    const blob = new Blob([u8arr], { type: mime });
+    const url = URL.createObjectURL(blob);
+    blobUrlCache.set(base64, url);
+    return url;
+  } catch (e) {
+    console.error("Failed to convert base64 to blob", e);
+    return null;
+  }
+};
+
+const STORAGE_KEY = "artifacts-comparison-autosave-v6-fixed";
+
 export default function ArtifactsComparison() {
-  const [syncScroll, setSyncScroll] = useState("on");
+  const [syncScroll, setSyncScroll] = useState(true);
   const [artifactChoice, setArtifactChoice] = useState("a");
   const [rating, setRating] = useState(3);
   const [viewMode, setViewMode] = useState("split");
-  const [showBig, setShowBig] = useState(false); // Big View overlay
+  const [showBig, setShowBig] = useState(false);
 
-  // pane data: { type: 'text'|'image'|'pdf'|'doc', text?, url?, name? }
+  const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(true);
+
+  // Pane Data
   const [leftData, setLeftData] = useState({ type: "text", text: "" });
   const [rightData, setRightData] = useState({ type: "text", text: "" });
 
-  // annotations per pane: array of {id,start,end,color,comment}
+  // Annotations
   const [leftAnn, setLeftAnn] = useState([]);
   const [rightAnn, setRightAnn] = useState([]);
 
-  // edit modes per pane
+  // Edit Modes
   const [leftEditing, setLeftEditing] = useState(false);
   const [rightEditing, setRightEditing] = useState(false);
 
-  // draw toggles (for image/pdf)
+  // Draw Toggles
   const [leftDraw, setLeftDraw] = useState(false);
   const [rightDraw, setRightDraw] = useState(false);
 
-  // zoom factors (for image/pdf) — 1 = 100%
+  // Zoom
   const [leftZoom, setLeftZoom] = useState(1);
   const [rightZoom, setRightZoom] = useState(1);
 
+  // Summaries
+  const [leftSummary, setLeftSummary] = useState("");
+  const [rightSummary, setRightSummary] = useState("");
+  const [leftSummaryStatus, setLeftSummaryStatus] = useState("idle");
+  const [rightSummaryStatus, setRightSummaryStatus] = useState("idle");
+
+  // Pending Comment State
+  const [pendingAnnotation, setPendingAnnotation] = useState(null);
+  const [pendingComment, setPendingComment] = useState("");
+
+  const autosaveTimerRef = useRef(null);
+
+  // Refs
   const leftRef = useRef(null);
   const rightRef = useRef(null);
+  const leftBigRef = useRef(null);
+  const rightBigRef = useRef(null);
   const isSyncing = useRef(false);
 
-  // refs to the actual editable DIVs (uncontrolled while typing)
   const leftEditRef = useRef(null);
   const rightEditRef = useRef(null);
 
-  // live draft text while editing (kept in refs → no caret jump)
   const leftDraftRef = useRef("");
   const rightDraftRef = useRef("");
 
-  // hidden file inputs
   const leftFileRef = useRef(null);
   const rightFileRef = useRef(null);
 
-  // canvas refs and state for drawing
   const leftCanvasRef = useRef(null);
   const rightCanvasRef = useRef(null);
+  const leftBigCanvasRef = useRef(null);
+  const rightBigCanvasRef = useRef(null);
+
   const leftDrawingState = useRef({ drawing: false, x: 0, y: 0 });
   const rightDrawingState = useRef({ drawing: false, x: 0, y: 0 });
 
-  // accept images, pdf, text, word
   const ACCEPT = ".png,.jpg,.jpeg,.pdf,.txt,.doc,.docx";
-
   const radioClass =
-    "relative h-4 w-4 rounded-full border border-gray-400 " +
-    "data-[state=checked]:border-black data-[state=checked]:ring-2 data-[state=checked]:ring-black " +
-    "before:content-[''] before:absolute before:inset-1 before:rounded-full before:bg-black " +
-    "before:opacity-0 data-[state=checked]:before:opacity-100";
+    "relative h-4 w-4 rounded-full border border-gray-400 data-[state=checked]:border-black data-[state=checked]:ring-2 data-[state=checked]:ring-black before:content-[''] before:absolute before:inset-1 before:rounded-full before:bg-black before:opacity-0 data-[state=checked]:before:opacity-100";
+
+  // 🔹 Initial Load
+  useEffect(() => {
+    const timer = setTimeout(() => setIsLoadingArtifacts(false), 600);
+    if (typeof window !== "undefined") {
+      try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw);
+          if (saved.left) setLeftData((prev) => ({ ...prev, ...saved.left }));
+          if (saved.right) setRightData((prev) => ({ ...prev, ...saved.right }));
+          if (Array.isArray(saved.leftAnn)) setLeftAnn(saved.leftAnn);
+          if (Array.isArray(saved.rightAnn)) setRightAnn(saved.rightAnn);
+          if (typeof saved.rating === "number") setRating(saved.rating);
+          if (saved.artifactChoice) setArtifactChoice(saved.artifactChoice);
+          if (typeof saved.syncScroll === "boolean") setSyncScroll(saved.syncScroll);
+          if (saved.leftSummary) setLeftSummary(saved.leftSummary);
+          if (saved.rightSummary) setRightSummary(saved.rightSummary);
+        }
+      } catch (err) {
+        console.error("Failed to load state", err);
+      }
+    }
+    return () => {
+      clearTimeout(timer);
+      // cleanup blob URLs
+      blobUrlCache.forEach((url) => URL.revokeObjectURL(url));
+      blobUrlCache.clear();
+    };
+  }, []);
+
+  // 🔹 Autosave
+  const doSaveToLocalStorage = () => {
+    if (typeof window === "undefined") return;
+    try {
+      const state = {
+        left: leftData,
+        right: rightData,
+        leftAnn,
+        rightAnn,
+        rating,
+        artifactChoice,
+        syncScroll,
+        leftSummary,
+        rightSummary,
+      };
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (err) {
+      // Ignore quota exceeded errors for large files
+    }
+  };
+
+  const scheduleAutosave = () => {
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(doSaveToLocalStorage, 1000);
+  };
+
+  useEffect(() => {
+    scheduleAutosave();
+  }, [
+    leftData,
+    rightData,
+    leftAnn,
+    rightAnn,
+    rating,
+    artifactChoice,
+    syncScroll,
+    leftSummary,
+    rightSummary,
+  ]);
+
+  // ===== RESET =====
+  const handleReset = () => {
+    if (!confirm("Are you sure you want to reset everything?")) return;
+    setLeftData({ type: "text", text: "" });
+    setRightData({ type: "text", text: "" });
+    setLeftAnn([]);
+    setRightAnn([]);
+    setRating(3);
+    setArtifactChoice("a");
+    setLeftSummary("");
+    setRightSummary("");
+    setLeftZoom(1);
+    setRightZoom(1);
+
+    [leftCanvasRef, rightCanvasRef, leftBigCanvasRef, rightBigCanvasRef].forEach(
+      (ref) => {
+        if (ref.current)
+          ref.current
+            .getContext("2d")
+            ?.clearRect(0, 0, ref.current.width, ref.current.height);
+      }
+    );
+
+    window.localStorage.removeItem(STORAGE_KEY);
+  };
 
   // ===== SYNC SCROLL =====
   useEffect(() => {
-    const left = leftRef.current;
-    const right = rightRef.current;
-    if (!left || !right) return;
+    const lRef = showBig ? leftBigRef.current : leftRef.current;
+    const rRef = showBig ? rightBigRef.current : rightRef.current;
+    if (!lRef || !rRef) return;
 
     const sync = (source, target) => {
       if (isSyncing.current) return;
       isSyncing.current = true;
-
       const vertMaxSrc = source.scrollHeight - source.clientHeight;
       const vertMaxTgt = target.scrollHeight - target.clientHeight;
       const ratioY = vertMaxSrc > 0 ? source.scrollTop / vertMaxSrc : 0;
@@ -100,289 +246,137 @@ export default function ArtifactsComparison() {
       });
     };
 
-    const onLeftScroll = () => sync(left, right);
-    const onRightScroll = () => sync(right, left);
+    const onLeftScroll = () => sync(lRef, rRef);
+    const onRightScroll = () => sync(rRef, lRef);
 
-    if (syncScroll === "on") {
-      left.addEventListener("scroll", onLeftScroll, { passive: true });
-      right.addEventListener("scroll", onRightScroll, { passive: true });
+    if (syncScroll) {
+      lRef.addEventListener("scroll", onLeftScroll, { passive: true });
+      rRef.addEventListener("scroll", onRightScroll, { passive: true });
     }
     return () => {
-      left.removeEventListener("scroll", onLeftScroll);
-      right.removeEventListener("scroll", onRightScroll);
+      lRef.removeEventListener("scroll", onLeftScroll);
+      rRef.removeEventListener("scroll", onRightScroll);
     };
-  }, [syncScroll]);
+  }, [syncScroll, showBig]);
 
-  // clean up object URLs when they change / unmount
-  useEffect(() => {
-    return () => {
-      if (leftData.url) URL.revokeObjectURL(leftData.url);
-      if (rightData.url) URL.revokeObjectURL(rightData.url);
-    };
-  }, [leftData.url, rightData.url]);
-
-  // ===== SEED/RESTORE EDITOR TEXT WHILE EDITING =====
-  useLayoutEffect(() => {
-    if (leftEditing && leftEditRef.current) {
-      if (leftDraftRef.current === "" && (leftData.text || "") !== "") {
-        leftDraftRef.current = leftData.text || "";
-      }
-      leftEditRef.current.innerText = leftDraftRef.current;
-    }
-  }, [leftEditing, leftAnn.length, showBig, viewMode]); // include showBig & viewMode
-
-  useLayoutEffect(() => {
-    if (rightEditing && rightEditRef.current) {
-      if (rightDraftRef.current === "" && (rightData.text || "") !== "") {
-        rightDraftRef.current = rightData.text || "";
-      }
-      rightEditRef.current.innerText = rightDraftRef.current;
-    }
-  }, [rightEditing, rightAnn.length, showBig, viewMode]); // include showBig & viewMode
-
-  // ===== HELPERS =====
-  const numberLines = (text) =>
-    text
+  // ===== TEXT HELPERS =====
+  const stripLineNumbers = (text) =>
+    text ? text.replace(/^\s*\d+\.\s*/gm, "") : "";
+  const numberLines = (text) => {
+    if (!text) return "";
+    return stripLineNumbers(text)
       .split(/\r?\n/)
       .map((line, idx) => `${idx + 1}. ${line}`)
       .join("\n");
-
-  const handleUploadClick = (side) => {
-    (side === "left" ? leftFileRef : rightFileRef).current?.click();
   };
 
-  const setPaneData = (side, data) => {
-    if (side === "left" && leftData.url && leftData.url !== data.url) {
-      URL.revokeObjectURL(leftData.url);
-    }
-    if (side === "right" && rightData.url && rightData.url !== data.url) {
-      URL.revokeObjectURL(rightData.url);
-    }
-    if (side === "left") {
-      setLeftData(data);
-      if (data.type !== "text") setLeftAnn([]);
-      const c = leftCanvasRef.current;
-      if (c) c.getContext("2d")?.clearRect(0, 0, c.width, c.height);
-      setLeftZoom(1);
+  const toggleEdit = (side) => {
+    const isLeft = side === "left";
+    const isEditing = isLeft ? leftEditing : rightEditing;
+    const data = isLeft ? leftData : rightData;
+    const setData = isLeft ? setLeftData : setRightData;
+    const draftRef = isLeft ? leftDraftRef : rightDraftRef;
+    const editRef = isLeft ? leftEditRef : rightEditRef;
+
+    if (!isEditing) {
+      draftRef.current = stripLineNumbers(data.text);
+      if (isLeft) setLeftEditing(true);
+      else setRightEditing(true);
     } else {
-      setRightData(data);
-      if (data.type !== "text") setRightAnn([]);
-      const c = rightCanvasRef.current;
-      if (c) c.getContext("2d")?.clearRect(0, 0, c.width, c.height);
-      setRightZoom(1);
+      const rawText = editRef.current?.innerText || draftRef.current;
+      setData({ ...data, text: numberLines(rawText) });
+      if (isLeft) setLeftEditing(false);
+      else setRightEditing(false);
     }
   };
 
+  // ===== FILE HANDLING =====
   const handleFileChange = async (e, side) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
 
     const name = file.name;
-    const lower = name.toLowerCase();
-    const isTxt = lower.endsWith(".txt");
-    const isImg = lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg");
-    const isPdf = lower.endsWith(".pdf");
-    const isDoc = lower.endsWith(".doc") || lower.endsWith(".docx");
+    const isTxt = name.toLowerCase().endsWith(".txt");
+    const isImg = /\.(png|jpg|jpeg)$/i.test(name);
+    const isPdf = name.toLowerCase().endsWith(".pdf");
 
-    if (!(isTxt || isImg || isPdf || isDoc)) {
-      alert("Unsupported file type. Allowed: .png, .jpg, .jpeg, .pdf, .txt, .doc, .docx");
+    if (!(isTxt || isImg || isPdf)) {
+      alert("Unsupported file type.");
       return;
+    }
+
+    const setData = side === "left" ? setLeftData : setRightData;
+    if (side === "left") {
+      setLeftAnn([]);
+      setLeftZoom(1);
+    } else {
+      setRightAnn([]);
+      setRightZoom(1);
     }
 
     if (isTxt) {
       const text = await file.text();
-      setPaneData(side, { type: "text", text: numberLines(text), name });
-      return;
-    }
-
-    const url = URL.createObjectURL(file);
-
-    if (isImg) {
-      setPaneData(side, { type: "image", url, name });
-      return;
-    }
-
-    if (isPdf) {
-      setPaneData(side, { type: "pdf", url, name });
-      return;
-    }
-
-    if (isDoc) {
-      setPaneData(side, { type: "doc", url, name });
-      return;
+      setData({ type: "text", text: numberLines(text), name });
+    } else {
+      try {
+        const base64Url = await fileToBase64(file); // data:...base64
+        setData({ type: isImg ? "image" : "pdf", url: base64Url, name });
+      } catch (err) {
+        alert("Error reading file.");
+      }
     }
   };
 
   const handleDownload = (side) => {
     const pane = side === "left" ? leftData : rightData;
-
     if (pane.type === "text") {
-      const blob = new Blob([pane.text ?? ""], { type: "text/plain;charset=utf-8" });
+      const blob = new Blob([pane.text || ""], { type: "text/plain" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = (side === "left" ? "artifactA" : "artifactB") + ".txt";
+      a.download = (pane.name || `artifact-${side}`) + ".txt";
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
-      return;
-    }
-
-    if (pane.url) {
-      const a = document.createElement("a");
-      a.href = pane.url;
-      a.download = pane.name || (side === "left" ? "artifactA" : "artifactB");
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+    } else if (pane.url) {
+      const link = document.createElement("a");
+      link.href = pane.url; // base64 data URL (browser will still download)
+      link.download = pane.name || `artifact-${side}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
   };
 
-  // ===== selection for TEXT panes =====
-  /** Convert selection to [start,end] within ONLY the <code> text and clamp to the line
-   * to avoid picking leading line number characters. */
+  // ===== SELECTION =====
   const selectionOffsets = (container) => {
-    const sel = window.getSelection?.();
+    const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return null;
-
     const range = sel.getRangeAt(0);
-    const codeEl = container.querySelector?.("code") || container;
-    if (!codeEl.contains(range.commonAncestorContainer)) return null;
-
+    if (!container.contains(range.commonAncestorContainer)) return null;
     const pre = range.cloneRange();
-    pre.setStart(codeEl, 0);
-    let start = pre.toString().length;
-    let end = start + range.toString().length;
-
-    const full = codeEl.textContent ?? "";
-
-    const lineStart = full.lastIndexOf("\n", Math.max(0, start - 1)) + 1;
-    const nextNL = full.indexOf("\n", start);
-    const lineEnd = nextNL === -1 ? full.length : nextNL;
-    if (start < lineStart) start = lineStart;
-    if (end > lineEnd) end = lineEnd;
-
-    while (start < end && /\s/.test(full[start])) start++;
-    while (end > start && /\s/.test(full[end - 1])) end--;
-
-    if (start >= end) return null;
-    return { start, end };
-  };
-
-  /** Render helper: split text by highlights into spans */
-  const renderWithHighlights = (text, anns) => {
-    if (!anns || anns.length === 0) return [text];
-    const ordered = [...anns].sort((a, b) => a.start - b.start);
-    const out = [];
-    let cursor = 0;
-    for (const a of ordered) {
-      if (a.start > cursor) out.push(text.slice(cursor, a.start));
-      out.push(
-        <mark
-          key={a.id}
-          className="px-0.5 rounded"
-          style={{ backgroundColor: a.color || "rgba(255, 235, 59, 0.7)" }}
-          title={a.comment || ""}
-        >
-          {text.slice(a.start, a.end)}
-        </mark>
-      );
-      cursor = a.end;
-    }
-    if (cursor < text.length) out.push(text.slice(cursor));
-    return out;
-  };
-
-  /** Toggle edit: enter/exit. Commit draft back to state on exit. */
-  const onToggleEdit = (side, val) => {
-    if (side === "left") {
-      const next = val ?? !leftEditing;
-      if (next) {
-        leftDraftRef.current = leftData.text || "";
-      } else {
-        const curr = leftEditRef.current?.innerText ?? leftDraftRef.current;
-        const changed = curr !== (leftData.text || "");
-        if (changed && leftAnn.length) setLeftAnn([]);
-        setLeftData({ ...leftData, text: curr });
-        leftDraftRef.current = curr;
-      }
-      setLeftEditing(next);
-    } else {
-      const next = val ?? !rightEditing;
-      if (next) {
-        rightDraftRef.current = rightData.text || "";
-      } else {
-        const curr = rightEditRef.current?.innerText ?? rightDraftRef.current;
-        const changed = curr !== (rightData.text || "");
-        if (changed && rightAnn.length) setRightAnn([]);
-        setRightData({ ...rightData, text: curr });
-        rightDraftRef.current = curr;
-      }
-      setRightEditing(next);
-    }
-  };
-
-  // track typing into the draft refs (no React state updates)
-  const onEditorInput = (side) => {
-    const el = side === "left" ? leftEditRef.current : rightEditRef.current;
-    const val = el?.innerText ?? "";
-    if (side === "left") leftDraftRef.current = val;
-    else rightDraftRef.current = val;
-  };
-
-  // === Add Comment (enabled only when editing) ===
-  const onAddComment = (side) => {
-    const container = (side === "left" ? leftRef : rightRef).current;
-    const pane = side === "left" ? leftData : rightData;
-    const editing = side === "left" ? leftEditing : rightEditing;
-    if (!editing || !container || pane.type !== "text") return;
-
-    if (side === "left" && leftEditing) {
-      leftDraftRef.current = leftEditRef.current?.innerText ?? leftDraftRef.current;
-    }
-    if (side === "right" && rightEditing) {
-      rightDraftRef.current = rightEditRef.current?.innerText ?? rightDraftRef.current;
-    }
-
-    const off = selectionOffsets(container);
-    if (!off) {
-      alert("Please select a text range first (with your mouse).");
-      return;
-    }
-    const comment = prompt("Şərhinizi yazın:");
-    if (comment == null) return;
-
-    const ann = {
-      id: uid(),
-      start: off.start,
-      end: off.end,
-      color: "rgba(255, 235, 59, 0.75)",
-      comment,
+    pre.selectNodeContents(container);
+    pre.setEnd(range.startContainer, range.startOffset);
+    return {
+      start: pre.toString().length,
+      end: pre.toString().length + range.toString().length,
     };
-    if (side === "left") setLeftAnn((a) => [...a, ann]);
-    else setRightAnn((a) => [...a, ann]);
-    window.getSelection()?.removeAllRanges();
   };
 
-  // === Simple Highlight (no comment) — enabled only when editing) ===
   const onSimpleHighlight = (side) => {
-    const container = (side === "left" ? leftRef : rightRef).current;
-    const pane = side === "left" ? leftData : rightData;
-    const editing = side === "left" ? leftEditing : rightEditing;
-    if (!editing || !container || pane.type !== "text") return;
-
-    if (side === "left" && leftEditing) {
-      leftDraftRef.current = leftEditRef.current?.innerText ?? leftDraftRef.current;
-    }
-    if (side === "right" && rightEditing) {
-      rightDraftRef.current = rightEditRef.current?.innerText ?? rightDraftRef.current;
-    }
-
+    const ref = showBig
+      ? side === "left"
+        ? leftBigRef
+        : rightBigRef
+      : side === "left"
+      ? leftRef
+      : rightRef;
+    const container = ref.current?.querySelector('[data-content-area="true"]');
+    if (!container) return;
     const off = selectionOffsets(container);
-    if (!off) {
-      alert("Please select a text range first (with your mouse).");
+    if (!off || off.start >= off.end) {
+      alert("Please select text first.");
       return;
     }
 
@@ -390,671 +384,735 @@ export default function ArtifactsComparison() {
       id: uid(),
       start: off.start,
       end: off.end,
-      color: "rgba(135, 206, 250, 0.6)", // light blue
+      color: "rgba(255, 235, 59, 0.5)",
       comment: "",
     };
-    if (side === "left") setLeftAnn((a) => [...a, ann]);
-    else setRightAnn((a) => [...a, ann]);
-    window.getSelection()?.removeAllRanges();
+    if (side === "left") setLeftAnn((p) => [...p, ann]);
+    else setRightAnn((p) => [...p, ann]);
+    window.getSelection().removeAllRanges();
   };
 
-  // ===== Drawing overlay helpers =====
-  const setupCanvas = (canvas, targetEl) => {
-    if (!canvas || !targetEl) return;
-    const dpr = window.devicePixelRatio || 1;
-    const w = targetEl.clientWidth;
-    const h = targetEl.clientHeight;
-    canvas.width = Math.max(1, Math.floor(w * dpr));
-    canvas.height = Math.max(1, Math.floor(h * dpr));
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = "rgba(255, 0, 0, 0.9)";
+  const onAddComment = (side) => {
+    const ref = showBig
+      ? side === "left"
+        ? leftBigRef
+        : rightBigRef
+      : side === "left"
+      ? leftRef
+      : rightRef;
+    const container = ref.current?.querySelector('[data-content-area="true"]');
+    if (!container) return;
+
+    const off = selectionOffsets(container);
+    if (!off || off.start >= off.end) {
+      alert("Please select text first.");
+      return;
+    }
+
+    const text = (side === "left" ? leftData.text : rightData.text) || "";
+    const snippet =
+      text.slice(off.start, Math.min(off.end, off.start + 50)).trim() + "...";
+    setPendingAnnotation({ side, start: off.start, end: off.end, snippet });
+    window.getSelection().removeAllRanges();
   };
 
-  const getDrawBits = (side) => {
-    const isLeft = side === "left";
-    return {
-      canvas: (isLeft ? leftCanvasRef : rightCanvasRef).current,
-      state: isLeft ? leftDrawingState.current : rightDrawingState.current,
-      zoom: isLeft ? leftZoom : rightZoom,
+  const savePendingComment = () => {
+    if (!pendingAnnotation) return;
+    const ann = {
+      id: uid(),
+      start: pendingAnnotation.start,
+      end: pendingAnnotation.end,
+      color: "rgba(135, 206, 250, 0.5)",
+      comment: pendingComment,
+      snippet: pendingAnnotation.snippet,
+    };
+    if (pendingAnnotation.side === "left") setLeftAnn((p) => [...p, ann]);
+    else setRightAnn((p) => [...p, ann]);
+    setPendingAnnotation(null);
+    setPendingComment("");
+  };
+
+  const onDeleteAnn = (side, id) => {
+    if (side === "left") setLeftAnn((p) => p.filter((x) => x.id !== id));
+    else setRightAnn((p) => p.filter((x) => x.id !== id));
+  };
+
+  const renderWithHighlights = (text, anns) => {
+    if (!anns || !anns.length) return [text];
+    const sorted = [...anns].sort((a, b) => a.start - b.start);
+    const res = [];
+    let last = 0;
+    sorted.forEach((ann) => {
+      if (ann.start > last) res.push(text.slice(last, ann.start));
+      res.push(
+        <mark
+          key={ann.id}
+          style={{ backgroundColor: ann.color }}
+          title={ann.comment || "Highlight"}
+          className="rounded px-0.5 cursor-pointer hover:opacity-80"
+        >
+          {text.slice(ann.start, ann.end)}
+        </mark>
+      );
+      last = ann.end;
+    });
+    if (last < text.length) res.push(text.slice(last));
+    return res;
+  };
+
+  // ===== DRAWING =====
+  const refreshCanvas = (side, isBig = false) => {
+    const canvasRef = isBig
+      ? side === "left"
+        ? leftBigCanvasRef
+        : rightBigCanvasRef
+      : side === "left"
+      ? leftCanvasRef
+      : rightCanvasRef;
+    const wrapperRef = isBig
+      ? side === "left"
+        ? leftBigRef
+        : rightBigRef
+      : side === "left"
+      ? leftRef
+      : rightRef;
+    const img = wrapperRef.current?.querySelector("img");
+    const cvs = canvasRef.current;
+    if (cvs && img) {
+      const dpr = window.devicePixelRatio || 1;
+      cvs.width = img.width * dpr;
+      cvs.height = img.height * dpr;
+      cvs.style.width = `${img.width}px`;
+      cvs.style.height = `${img.height}px`;
+      const ctx = cvs.getContext("2d");
+      ctx.scale(dpr, dpr);
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "red";
+    }
+  };
+
+  const startDraw = (side, e, isBig) => {
+    const ref = isBig
+      ? side === "left"
+        ? leftBigCanvasRef
+        : rightBigCanvasRef
+      : side === "left"
+      ? leftCanvasRef
+      : rightCanvasRef;
+    const state = side === "left" ? leftDrawingState : rightDrawingState;
+    if (!ref.current) return;
+    const rect = ref.current.getBoundingClientRect();
+    state.current = {
+      drawing: true,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
     };
   };
 
-  const startDraw = (side, e) => {
-    const { canvas, state, zoom } = getDrawBits(side);
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    state.drawing = true;
-    state.x = (e.clientX - rect.left) / Math.max(zoom, 0.001);
-    state.y = (e.clientY - rect.top) / Math.max(zoom, 0.001);
-  };
-
-  const moveDraw = (side, e) => {
-    const { canvas, state, zoom } = getDrawBits(side);
-    if (!canvas || !state.drawing) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / Math.max(zoom, 0.001);
-    const y = (e.clientY - rect.top) / Math.max(zoom, 0.001);
-    const ctx = canvas.getContext("2d");
+  const moveDraw = (side, e, isBig) => {
+    const ref = isBig
+      ? side === "left"
+        ? leftBigCanvasRef
+        : rightBigCanvasRef
+      : side === "left"
+      ? leftCanvasRef
+      : rightCanvasRef;
+    const state = side === "left" ? leftDrawingState : rightDrawingState;
+    if (!state.current?.drawing || !ref.current) return;
+    const ctx = ref.current.getContext("2d");
+    const rect = ref.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
     ctx.beginPath();
-    ctx.moveTo(state.x, state.y);
+    ctx.moveTo(state.current.x, state.current.y);
     ctx.lineTo(x, y);
     ctx.stroke();
-    state.x = x;
-    state.y = y;
+    state.current = { ...state.current, x, y };
   };
 
-  const endDraw = () => {
-    leftDrawingState.current.drawing = false;
-    rightDrawingState.current.drawing = false;
-  };
-
-  // Resize canvas when needed
-  useEffect(() => {
-    const doSize = () => {
-      const lTarget =
-        leftRef.current?.querySelector(".draw-target") ||
-        leftRef.current?.querySelector("iframe") ||
-        leftRef.current?.querySelector("img");
-      if (leftDraw && leftCanvasRef.current && lTarget) {
-        setupCanvas(leftCanvasRef.current, lTarget);
-      }
-      const rTarget =
-        rightRef.current?.querySelector(".draw-target") ||
-        rightRef.current?.querySelector("iframe") ||
-        rightRef.current?.querySelector("img");
-      if (rightDraw && rightCanvasRef.current && rTarget) {
-        setupCanvas(rightCanvasRef.current, rTarget);
-      }
-    };
-    doSize();
-    window.addEventListener("resize", doSize);
-    return () => window.removeEventListener("resize", doSize);
-  }, [leftDraw, rightDraw, leftData, rightData, viewMode, leftZoom, rightZoom, showBig]);
-
-  const toggleDraw = (side) => {
-    if (side === "left") setLeftDraw((v) => !v);
-    else setRightDraw((v) => !v);
+  const endDraw = (side) => {
+    const state = side === "left" ? leftDrawingState : rightDrawingState;
+    if (!state.current) return;
+    state.current.drawing = false;
   };
 
   const clearCanvas = (side) => {
-    const c = side === "left" ? leftCanvasRef.current : rightCanvasRef.current;
-    if (c) c.getContext("2d")?.clearRect(0, 0, c.width, c.height);
+    [
+      side === "left" ? leftCanvasRef : rightCanvasRef,
+      side === "left" ? leftBigCanvasRef : rightBigCanvasRef,
+    ].forEach((ref) => {
+      if (ref.current)
+        ref.current
+          .getContext("2d")
+          ?.clearRect(0, 0, ref.current.width, ref.current.height);
+    });
   };
 
-  // ===== Zoom helpers =====
-  const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
-  const changeZoom = (side, step) => {
-    if (side === "left") setLeftZoom((z) => clamp((z * 100 + step) / 100, 0.25, 5));
-    else setRightZoom((z) => clamp((z * 100 + step) / 100, 0.25, 5));
-  };
-  const setZoom = (side, value) => {
-    if (side === "left") setLeftZoom(clamp(value, 0.25, 5));
-    else setRightZoom(clamp(value, 0.25, 5));
-  };
-  const zoomPct = (z) => Math.round(z * 100);
-
-  const onDeleteAnn = (side, id) => {
-    if (side === "left") setLeftAnn((a) => a.filter((x) => x.id !== id));
-    else setRightAnn((a) => a.filter((x) => x.id !== id));
-  };
-
-  // DISABLE renumber while editing + guard in code
-  const onRenumber = (side) => {
-    if ((side === "left" && leftEditing) || (side === "right" && rightEditing)) {
-      return;
-    }
-    const pane = side === "left" ? leftData : rightData;
-    if (pane.type !== "text") return;
-    const ren = numberLines((pane.text || "").replace(/^\s*\d+\.\s/gm, ""));
-    if (side === "left") {
-      if (leftAnn.length) setLeftAnn([]);
-      setLeftData({ ...leftData, text: ren });
-    } else {
-      if (rightAnn.length) setRightAnn([]);
-      setRightData({ ...rightData, text: ren });
-    }
-  };
-
-  // Big View opener — capture drafts first so editor doesn't clear
-  const openBigView = () => {
-    if (leftEditing) {
-      leftDraftRef.current = leftEditRef.current?.innerText ?? leftDraftRef.current;
-    }
-    if (rightEditing) {
-      rightDraftRef.current = rightEditRef.current?.innerText ?? rightDraftRef.current;
-    }
-    setShowBig(true);
-  };
-
-  // ===== UI SUB-COMPONENTS =====
-  const PaneToolbar = ({ title, side }) => {
-    const pane = side === "left" ? leftData : rightData;
-    const editing = side === "left" ? leftEditing : rightEditing;
-    const isText = pane.type === "text";
-    const canAnnotate = isText && editing;
-
-    const isVisual = pane.type === "image" || pane.type === "pdf";
-    const drawActive = side === "left" ? leftDraw : rightDraw;
-    const z = side === "left" ? leftZoom : rightZoom;
-
-    const baseBtn =
-      "rounded px-2 py-1 text-xs border " +
-      (canAnnotate ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed bg-gray-100 text-gray-400");
-
-    const drawBtnClass =
-      "rounded px-2 py-1 text-xs border " +
-      (isVisual ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed bg-gray-100 text-gray-400") +
-      (drawActive ? " bg-gray-100" : "");
-
-    const visualBtn =
-      "rounded px-2 py-1 text-xs border " +
-      (isVisual ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed bg-gray-100 text-gray-400");
-
-    return (
-      <div className="flex items-center justify-between px-3 py-2 border-b bg-white">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        <div className="flex items-center gap-2">
-          {isText && (
-            <>
-              <button
-                className="rounded px-2 py-1 text-xs border hover:bg-gray-100"
-                title={editing ? "Done" : "Edit"}
-                onClick={() => onToggleEdit(side)}
-              >
-                {editing ? "Done" : "Edit"}
-              </button>
-
-              <button
-                className={baseBtn}
-                title="Highlight selection"
-                onClick={() => onSimpleHighlight(side)}
-                disabled={!canAnnotate}
-              >
-                Highlight
-              </button>
-
-              <button
-                className={baseBtn}
-                title="Add Comment (highlight)"
-                onClick={() => onAddComment(side)}
-                disabled={!canAnnotate}
-              >
-                Add Comment
-              </button>
-
-              <button
-                className={`rounded px-2 py-1 text-xs border ${
-                  editing
-                    ? "opacity-50 cursor-not-allowed bg-gray-100 text-gray-400"
-                    : "hover:bg-gray-100"
-                }`}
-                title="Renumber lines"
-                onClick={() => {
-                  if (!editing) onRenumber(side);
-                }}
-                disabled={editing}
-              >
-                Renumber
-              </button>
-            </>
-          )}
-
-          {/* Draw + Zoom tools for image / pdf */}
-          {isVisual && (
-            <>
-              <div className="hidden sm:flex items-center gap-1">
-                <button className={visualBtn} onClick={() => changeZoom(side, -10)} title="Zoom out">−</button>
-                <span className="text-xs w-12 text-center tabular-nums">{zoomPct(z)}%</span>
-                <button className={visualBtn} onClick={() => changeZoom(side, +10)} title="Zoom in">+</button>
-                <button className={visualBtn} onClick={() => setZoom(side, 1)} title="Reset zoom to 100%">100%</button>
-              </div>
-
-              <button
-                className={drawBtnClass}
-                title="Toggle Draw Mode (freehand)"
-                onClick={() => toggleDraw(side)}
-                disabled={!isVisual}
-              >
-                {drawActive ? "Drawing: On" : "Draw"}
-              </button>
-              <button
-                className={visualBtn}
-                title="Clear drawings"
-                onClick={() => clearCanvas(side)}
-                disabled={!isVisual}
-              >
-                Clear Draw
-              </button>
-            </>
-          )}
-
-          <button
-            className="rounded p-1 hover:bg-gray-100"
-            title="Download"
-            onClick={() => handleDownload(side)}
-          >
-            ⬇
-          </button>
-          <button
-            className="rounded p-1 hover:bg-gray-100"
-            title="Upload"
-            onClick={() => handleUploadClick(side)}
-          >
-            ⬆
-          </button>
-        </div>
-      </div>
-    );
-  };
-
-  const PaneViewer = ({ innerRef, pane, side, tall = false }) => {
-    const editing = side === "left" ? leftEditing : rightEditing;
-    const anns = side === "left" ? leftAnn : rightAnn;
-    const drawActive = side === "left" ? leftDraw : rightDraw;
-    const zoom = side === "left" ? leftZoom : rightZoom;
-
-    const box =
-      (tall ? "h-[78vh] " : "h-80 ") + "overflow-auto rounded-md border bg-white text-sm";
-
-    // IMAGE
-    if (pane.type === "image" && pane.url) {
-      return (
-        <div ref={innerRef} className={box}>
-          <div className="relative inline-block">
-            <div className="relative" style={{ transform: `scale(${zoom})`, transformOrigin: "top left" }}>
-              <img
-                src={pane.url}
-                alt={pane.name || "uploaded image"}
-                className={`draw-target ${tall ? "max-h-[78vh]" : "max-h-80"} object-contain`}
-                onLoad={(e) => {
-                  const imgEl = e.currentTarget;
-                  const canvas = (side === "left" ? leftCanvasRef : rightCanvasRef).current;
-                  if (canvas) setupCanvas(canvas, imgEl);
-                }}
-              />
-              <canvas
-                ref={side === "left" ? leftCanvasRef : rightCanvasRef}
-                className="absolute inset-0"
-                style={{ pointerEvents: drawActive ? "auto" : "none", touchAction: "none" }}
-                onMouseDown={(e) => drawActive && startDraw(side, e)}
-                onMouseMove={(e) => drawActive && moveDraw(side, e)}
-                onMouseUp={() => drawActive && endDraw()}
-                onMouseLeave={() => drawActive && endDraw()}
-              />
-            </div>
-          </div>
-        </div>
+  const summarizeSide = async (side) => {
+    const setter = side === "left" ? setLeftSummary : setRightSummary;
+    const statusSetter =
+      side === "left" ? setLeftSummaryStatus : setRightSummaryStatus;
+    const filename =
+      (side === "left" ? leftData.name : rightData.name) || "Artifact";
+    statusSetter("loading");
+    setTimeout(() => {
+      setter(
+        `AI Summary: This artifact is of type ${
+          side === "left" ? leftData.type : rightData.type
+        } and contains ${filename}.`
       );
-    }
+      statusSetter("idle");
+    }, 1500);
+  };
 
-    // PDF
-    if (pane.type === "pdf" && pane.url) {
-      return (
-        <div ref={innerRef} className={box}>
-          <div className="relative inline-block">
+  // ===== SUB-COMPONENTS =====
+  const AnnotationList = ({ side }) => {
+    const anns = side === "left" ? leftAnn : rightAnn;
+    if (anns.length === 0) return null;
+    return (
+      <div className="border-t bg-gray-50/50 p-3 max-h-48 overflow-y-auto">
+        <h4 className="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider">
+          Comments & Highlights ({anns.length})
+        </h4>
+        <div className="space-y-2">
+          {anns.map((ann) => (
             <div
-              className="relative draw-target"
-              style={{
-                width: tall ? "70rem" : "40rem",
-                height: tall ? "36rem" : "20rem",
-                transform: `scale(${zoom})`,
-                transformOrigin: "top left",
-              }}
+              key={ann.id}
+              className="text-xs bg-white p-2 rounded border flex justify-between gap-2 items-start group"
             >
-              <iframe
-                title={pane.name || "PDF preview"}
-                src={pane.url}
-                className="w-full h-full"
-                onLoad={(e) => {
-                  const target = e.currentTarget;
-                  const canvas = (side === "left" ? leftCanvasRef : rightCanvasRef).current;
-                  if (canvas) setupCanvas(canvas, target);
-                }}
-              />
-              <canvas
-                ref={side === "left" ? leftCanvasRef : rightCanvasRef}
-                className="absolute inset-0"
-                style={{ pointerEvents: drawActive ? "auto" : "none", touchAction: "none" }}
-                onMouseDown={(e) => drawActive && startDraw(side, e)}
-                onMouseMove={(e) => drawActive && moveDraw(side, e)}
-                onMouseUp={() => drawActive && endDraw()}
-                onMouseLeave={() => drawActive && endDraw()}
-              />
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // DOC
-    if (pane.type === "doc" && pane.url) {
-      return (
-        <div ref={innerRef} className={box + " p-4"}>
-          <div className="text-gray-700">
-            <div className="font-medium mb-2">{pane.name || "Word document"}</div>
-            <p className="mb-3">Preview of Word files isn’t supported by the browser without a converter.</p>
-            <div className="flex gap-2">
-              <a href={pane.url} download={pane.name || "document"} className="rounded border px-3 py-1 hover:bg-gray-50">Download</a>
-              <a href={pane.url} target="_blank" rel="noreferrer" className="rounded border px-3 py-1 hover:bg-gray-50">Open in Word</a>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    // TEXT
-    const content = pane.text || "";
-    if (editing) {
-      return (
-        <div ref={innerRef} className={box + " font-mono"}>
-          <div
-            ref={side === "left" ? leftEditRef : rightEditRef}
-            className="whitespace-pre p-4 min-w-max outline-none"
-            contentEditable
-            suppressContentEditableWarning
-            spellCheck={false}
-            onInput={() => onEditorInput(side)}
-          />
-          {((side === "left" ? leftAnn : rightAnn).length > 0) && (
-            <div className="px-4 py-2 text-xs text-amber-700">
-              * Note: Highlights are hidden while editing. If you change the text, highlight ranges may become invalid and will be cleared.
-            </div>
-          )}
-        </div>
-      );
-    }
-    return (
-      <div ref={innerRef} className={box + " font-mono"}>
-        <pre className="whitespace-pre p-4 min-w-max">
-          <code>{renderWithHighlights(content, anns)}</code>
-        </pre>
-      </div>
-    );
-  };
-
-  const AnnotationsList = ({ side }) => {
-    const pane = side === "left" ? leftData : rightData;
-    const anns = side === "left" ? leftAnn : rightAnn;
-    if (pane.type !== "text" || anns.length === 0) return null;
-
-    const content = pane.text || "";
-    return (
-      <div className="border-t px-4 py-3 text-sm bg-gray-50">
-        <div className="font-medium mb-2">Comments</div>
-        <ul className="space-y-2">
-          {anns
-            .sort((a, b) => a.start - b.start)
-            .map((a) => (
-              <li key={a.id} className="flex items-start justify-between gap-3">
-                <div className="flex-1">
-                  <div className="text-gray-700">{a.comment || "Highlight"}</div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    “{content.slice(a.start, Math.min(a.end, a.start + 80)).replace(/\n/g, " ↵ ")}”
-                  </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <div
+                    className="w-3 h-3 rounded-full shrink-0"
+                    style={{ backgroundColor: ann.color }}
+                  ></div>
+                  {ann.snippet && (
+                    <span className="font-mono text-gray-600 truncate max-w-[150px]">
+                      {ann.comment ? "Comment on:" : "Highlight:"} "
+                      {ann.snippet.replace(/\n/g, " ")}"
+                    </span>
+                  )}
                 </div>
-                <button
-                  className="text-red-600 text-sm hover:underline"
-                  onClick={() => onDeleteAnn(side, a.id)}
-                  title="Delete comment"
+                <p className="text-gray-800 pl-5 leading-relaxed">
+                  {ann.comment || (
+                    <i className="text-gray-400">No specific comment added.</i>
+                  )}
+                </p>
+              </div>
+              <button
+                onClick={() => onDeleteAnn(side, ann.id)}
+                className="text-gray-400 hover:text-red-500 transition-colors self-start p-1"
+                title="Delete Annotation"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
                 >
-                  🗑
-                </button>
-              </li>
-            ))}
-        </ul>
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     );
   };
 
-  // ===== RENDER =====
-  return (
-    <div className="p-8 max-w-6xl mx-auto flex flex-col gap-6">
-      {/* hidden file inputs */}
-      <input
-        ref={leftFileRef}
-        type="file"
-        accept={ACCEPT}
-        className="hidden"
-        onChange={(e) => handleFileChange(e, "left")}
-      />
-      <input
-        ref={rightFileRef}
-        type="file"
-        accept={ACCEPT}
-        className="hidden"
-        onChange={(e) => handleFileChange(e, "right")}
-      />
+  const PaneToolbar = ({ side, title }) => {
+    const isLeft = side === "left";
+    const data = isLeft ? leftData : rightData;
+    const editing = isLeft ? leftEditing : rightEditing;
+    const isDraw = isLeft ? leftDraw : rightDraw;
 
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">
-          Study: AI vs. Human Code Readability (Task 3 of 3)
-        </h2>
-        {/* Open both panes in a larger overlay */}
-        <button
-          className="rounded p-2 border hover:bg-gray-50"
-          onClick={openBigView}
-          title="Open Big View"
-        >
-          ⛶
-        </button>
-      </div>
-
-      {viewMode === "split" ? (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card>
-            <PaneToolbar title="Artifact A" side="left" />
-            <CardContent className="pt-0">
-              <PaneViewer innerRef={leftRef} pane={leftData} side="left" />
-            </CardContent>
-            <AnnotationsList side="left" />
-          </Card>
-
-          <Card>
-            <PaneToolbar title="Artifact B" side="right" />
-            <CardContent className="pt-0">
-              <PaneViewer innerRef={rightRef} pane={rightData} side="right" />
-            </CardContent>
-            <AnnotationsList side="right" />
-          </Card>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-6">
-          <Card>
-            <PaneToolbar title="Artifact A" side="left" />
-            <CardContent className="pt-0">
-              <PaneViewer innerRef={leftRef} pane={leftData} side="left" />
-            </CardContent>
-            <AnnotationsList side="left" />
-          </Card>
-          <Card>
-            <PaneToolbar title="Artifact B" side="right" />
-            <CardContent className="pt-0">
-              <PaneViewer innerRef={rightRef} pane={rightData} side="right" />
-            </CardContent>
-            <AnnotationsList side="right" />
-          </Card>
-        </div>
-      )}
-
-      <Card>
-        <CardContent className="py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+    return (
+      <div className="flex items-center justify-between px-3 py-2 border-b bg-white min-h-[46px]">
+        <span className="font-semibold text-sm mr-2 truncate">{title}</span>
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+          {data.type === "text" ? (
+            <>
               <Button
                 variant="outline"
-                onClick={() => {
-                  if (leftData.url) URL.revokeObjectURL(leftData.url);
-                  if (rightData.url) URL.revokeObjectURL(rightData.url);
-                  setLeftData({ type: "text", text: "" });
-                  setRightData({ type: "text", text: "" });
-                  setLeftAnn([]);
-                  setRightAnn([]);
-                  setLeftEditing(false);
-                  setRightEditing(false);
-                  setLeftDraw(false);
-                  setRightDraw(false);
-                  setLeftZoom(1);
-                  setRightZoom(1);
-                  const lc = leftCanvasRef.current;
-                  const rc = rightCanvasRef.current;
-                  if (lc) lc.getContext("2d")?.clearRect(0, 0, lc.width, lc.height);
-                  if (rc) rc.getContext("2d")?.clearRect(0, 0, rc.width, rc.height);
-                  leftRef.current?.scrollTo({ top: 0, left: 0 });
-                  rightRef.current?.scrollTo({ top: 0, left: 0 });
-                }}
+                size="sm"
+                className="h-7 text-xs px-2"
+                onClick={() => toggleEdit(side)}
               >
-                Reset
+                {editing ? "Done" : "Edit"}
               </Button>
-              <Button variant="outline">Save in Browser</Button>
-              <Button variant="outline">Share as URL</Button>
-              <Button variant="outline">Collapse All</Button>
-              <Button variant="outline">Expand All</Button>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="inline-flex rounded-md border">
-                <button
-                  className={`px-3 py-1 text-sm ${
-                    viewMode === "split" ? "bg-gray-100 font-medium" : "bg-white"
-                  }`}
-                  onClick={() => setViewMode("split")}
-                >
-                  Split
-                </button>
-                <button
-                  className={`px-3 py-1 text-sm border-l ${
-                    viewMode === "unified" ? "bg-gray-100 font-medium" : "bg-white"
-                  }`}
-                  onClick={() => setViewMode("unified")}
-                >
-                  Unified
-                </button>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex items-center space-x-4">
-            <Label className="font-semibold">Sync Scrolling:</Label>
-            <RadioGroup
-              value={syncScroll}
-              onValueChange={setSyncScroll}
-              className="flex space-x-6"
-            >
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem className={radioClass} value="on" id="sync-on" />
-                <Label htmlFor="sync-on">On</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem className={radioClass} value="off" id="sync-off" />
-                <Label htmlFor="sync-off">Off</Label>
-              </div>
-            </RadioGroup>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Your Evaluation</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="space-y-2">
-            <Label className="font-semibold">Rate "Readability" (1–5 Stars):</Label>
-            <RadioGroup
-              value={String(rating)}
-              onValueChange={(v) => setRating(Number(v))}
-              className="flex space-x-3"
-            >
-              {[1, 2, 3, 4, 5].map((n) => (
-                <div key={n} className="flex items-center space-x-1">
-                  <RadioGroupItem
-                    className={radioClass}
-                    value={String(n)}
-                    id={`star-${n}`}
-                  />
-                  <Label htmlFor={`star-${n}`}>⭐{n}</Label>
-                </div>
-              ))}
-            </RadioGroup>
-          </div>
-
-          <div className="space-y-2">
-            <Label className="font-semibold">Which artifact was more readable?</Label>
-            <RadioGroup
-              value={artifactChoice}
-              onValueChange={setArtifactChoice}
-              className="flex space-x-4"
-            >
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem className={radioClass} value="a" id="artifact-a" />
-                <Label htmlFor="artifact-a">A</Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem className={radioClass} value="b" id="artifact-b" />
-                <Label htmlFor="artifact-b">B</Label>
-              </div>
-            </RadioGroup>
-          </div>
-
-          <div className="space-y-2">
-            <Label className="font-semibold">Annotations / Comments:</Label>
-            <Textarea placeholder="Click text to highlight and add a comment." />
-          </div>
-        </CardContent>
-
-        <CardFooter className="flex-wrap justify-between gap-4">
-          <Button variant="outline">Save Draft</Button>
-          <div className="flex items-center space-x-2">
-            <Checkbox id="submit-final" />
-            <Label htmlFor="submit-final">Submit Final Evaluation</Label>
-            <Button>Submit</Button>
-          </div>
-        </CardFooter>
-      </Card>
-
-      {/* ==== BIG VIEW OVERLAY (both panes, larger) ==== */}
-      {showBig && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm">
-          <div className="absolute inset-4 sm:inset-10 bg-white rounded-xl shadow-2xl p-4 flex flex-col">
-            <div className="flex items-center justify-between mb-3">
-              <div className="font-semibold">Big View</div>
-              <button
-                className="rounded px-3 py-1 text-sm border hover:bg-gray-100"
-                onClick={() => setShowBig(false)}
-                title="Close"
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs px-2 bg-gray-100 hover:bg-gray-200 text-gray-700"
+                disabled={editing}
+                onClick={() => onSimpleHighlight(side)}
               >
-                ×
-              </button>
+                Highlight
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs px-2 bg-gray-100 hover:bg-gray-200 text-gray-700"
+                disabled={editing}
+                onClick={() => onAddComment(side)}
+              >
+                Comment
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() =>
+                  isLeft
+                    ? setLeftZoom((z) => Math.max(0.1, z - 0.1))
+                    : setRightZoom((z) => Math.max(0.1, z - 0.1))
+                }
+              >
+                -
+              </Button>
+              <span className="text-xs w-8 text-center">
+                {((isLeft ? leftZoom : rightZoom) * 100).toFixed(0)}%
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() =>
+                  isLeft
+                    ? setLeftZoom((z) => Math.min(3, z + 0.1))
+                    : setRightZoom((z) => Math.min(3, z + 0.1))
+                }
+              >
+                +
+              </Button>
+              <div className="w-px h-4 bg-gray-300 mx-1"></div>
+              <Button
+                variant={isDraw ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() =>
+                  isLeft ? setLeftDraw(!leftDraw) : setRightDraw(!rightDraw)
+                }
+              >
+                Draw
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => clearCanvas(side)}
+              >
+                Clear
+              </Button>
+            </>
+          )}
+          <div className="w-px h-4 bg-gray-300 mx-1"></div>
+          <input
+            type="file"
+            className="hidden"
+            ref={isLeft ? leftFileRef : rightFileRef}
+            accept={ACCEPT}
+            onChange={(e) => handleFileChange(e, side)}
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            onClick={() =>
+              (isLeft ? leftFileRef : rightFileRef).current.click()
+            }
+            title="Upload"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" x2="12" y1="3" y2="15" />
+            </svg>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            onClick={() => handleDownload(side)}
+            title="Download"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" x2="12" y1="15" y2="3" />
+            </svg>
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderContent = (side, isBig = false) => {
+    const isLeft = side === "left";
+    const data = isLeft ? leftData : rightData;
+    const zoom = isLeft ? leftZoom : rightZoom;
+    const editing = isLeft ? leftEditing : rightEditing;
+    const ref = isBig
+      ? isLeft
+        ? leftBigRef
+        : rightBigRef
+      : isLeft
+      ? leftRef
+      : rightRef;
+    const editRef = isLeft ? leftEditRef : rightEditRef;
+    const canvasRef = isBig
+      ? isLeft
+        ? leftBigCanvasRef
+        : rightBigCanvasRef
+      : isLeft
+      ? leftCanvasRef
+      : rightCanvasRef;
+    const isDraw = isLeft ? leftDraw : rightDraw;
+    const anns = isLeft ? leftAnn : rightAnn;
+
+    // Use blob URL for PDFs (from base64)
+    let displayUrl = data.url;
+    if (data.type === "pdf" && data.url && data.url.startsWith("data:")) {
+      displayUrl = base64ToBlobUrl(data.url);
+    }
+
+    if (isLoadingArtifacts)
+      return (
+        <div className="h-full flex items-center justify-center bg-gray-50 text-gray-400 animate-pulse">
+          Loading...
+        </div>
+      );
+
+    if (data.type === "text") {
+      return (
+        <div
+          ref={ref}
+          className="h-full w-full overflow-auto bg-white relative p-4 font-mono text-sm whitespace-pre-wrap leading-relaxed"
+        >
+          {editing ? (
+            <div
+              contentEditable
+              ref={editRef}
+              className="outline-none h-full"
+              suppressContentEditableWarning
+            >
+              {(isLeft ? leftDraftRef.current : rightDraftRef.current) ||
+                data.text}
             </div>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1">
-              <Card className="h-full">
-                <PaneToolbar title="Artifact A" side="left" />
-                <CardContent className="pt-0 h-full">
-                  <PaneViewer innerRef={leftRef} pane={leftData} side="left" tall />
-                </CardContent>
-                <AnnotationsList side="left" />
-              </Card>
-              <Card className="h-full">
-                <PaneToolbar title="Artifact B" side="right" />
-                <CardContent className="pt-0 h-full">
-                  <PaneViewer innerRef={rightRef} pane={rightData} side="right" tall />
-                </CardContent>
-                <AnnotationsList side="right" />
-              </Card>
+          ) : (
+            <div data-content-area="true" className="h-full">
+              {renderWithHighlights(data.text || "", anns)}
             </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div
+        ref={ref}
+        className="h-full w-full overflow-auto bg-gray-100 flex items-start justify-center p-8 relative"
+      >
+        <div
+          className="relative shadow-lg bg-white transition-transform origin-top"
+          style={{ transform: `scale(${zoom})` }}
+        >
+          {data.type === "image" && (
+            <img
+              src={data.url}
+              className="block max-w-none select-none"
+              alt="Artifact"
+              onLoad={() => refreshCanvas(side, isBig)}
+            />
+          )}
+
+          {data.type === "pdf" && displayUrl && (
+            <object
+              data={displayUrl}
+              type="application/pdf"
+              className="block w-[800px] h-[1100px] border-none"
+              style={{ pointerEvents: isDraw ? "none" : "auto" }}
+            >
+              <div className="p-4 text-center text-gray-500">
+                Unable to display PDF.{" "}
+                <a href={displayUrl} download className="underline">
+                  Download
+                </a>{" "}
+                to view.
+              </div>
+            </object>
+          )}
+
+          <canvas
+            ref={canvasRef}
+            className={`absolute inset-0 z-10 ${
+              isDraw ? "cursor-crosshair pointer-events-auto" : "pointer-events-none"
+            }`}
+            onMouseDown={(e) => isDraw && startDraw(side, e, isBig)}
+            onMouseMove={(e) => isDraw && moveDraw(side, e, isBig)}
+            onMouseUp={() => isDraw && endDraw(side)}
+            onMouseLeave={() => isDraw && endDraw(side)}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  const AISummary = ({ side }) => {
+    const summary = side === "left" ? leftSummary : rightSummary;
+    const status = side === "left" ? leftSummaryStatus : rightSummaryStatus;
+    return (
+      <div className="border-t p-3 bg-gray-50/50">
+        <div className="flex justify-between items-center mb-1">
+          <span className="text-xs font-semibold text-gray-600">AI Summary</span>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 text-[10px] px-2"
+            onClick={() => summarizeSide(side)}
+            disabled={status === "loading"}
+          >
+            {status === "loading" ? "..." : "Generate"}
+          </Button>
+        </div>
+        <p className="text-xs text-gray-500 leading-relaxed">
+          {summary || "No summary generated yet."}
+        </p>
+      </div>
+    );
+  };
+
+  // ===== MAIN RENDER =====
+  return (
+    <div className="min-h-screen bg-white p-6 text-gray-900 font-sans">
+      <div className="max-w-[1400px] mx-auto space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-bold">
+            Study: AI vs. Human Code Readability
+          </h1>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-md border">
+              <Checkbox
+                id="sync-mode"
+                checked={syncScroll}
+                onCheckedChange={(checked) => setSyncScroll(!!checked)}
+              />
+              <label
+                htmlFor="sync-mode"
+                className="text-sm font-medium cursor-pointer select-none"
+              >
+                Sync Scroll
+              </label>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const tD = leftData;
+                setLeftData(rightData);
+                setRightData(tD);
+                const tA = leftAnn;
+                setLeftAnn(rightAnn);
+                setRightAnn(tA);
+                const tS = leftSummary;
+                setLeftSummary(rightSummary);
+                setRightSummary(tS);
+              }}
+            >
+              Swap Sides
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setShowBig(true)}
+              title="Full Screen"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <polyline points="15 3 21 3 21 9" />
+                <polyline points="9 21 3 21 3 15" />
+                <line x1="21" y1="3" x2="14" y2="10" />
+                <line x1="3" y1="21" x2="10" y2="14" />
+              </svg>
+            </Button>
           </div>
         </div>
-      )}
+
+        <div className="flex border rounded-lg h-[650px] shadow-sm overflow-hidden">
+          <div className="flex-1 w-1/2 flex flex-col min-w-0 border-r relative">
+            <PaneToolbar side="left" title="Artifact A" />
+            <div className="flex-1 relative overflow-hidden">
+              {renderContent("left", false)}
+            </div>
+            <AnnotationList side="left" />
+            <AISummary side="left" />
+          </div>
+          <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
+            <PaneToolbar side="right" title="Artifact B" />
+            <div className="flex-1 relative overflow-hidden">
+              {renderContent("right", false)}
+            </div>
+            <AnnotationList side="right" />
+            <AISummary side="right" />
+          </div>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Assessment</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="space-y-3">
+              <Label>Which artifact is better?</Label>
+              <RadioGroup
+                value={artifactChoice}
+                onValueChange={setArtifactChoice}
+                className="flex gap-4"
+              >
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem
+                    value="a"
+                    id="r-a"
+                    className={radioClass}
+                  />
+                  <Label htmlFor="r-a">Artifact A</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem
+                    value="b"
+                    id="r-b"
+                    className={radioClass}
+                  />
+                  <Label htmlFor="r-b">Artifact B</Label>
+                </div>
+              </RadioGroup>
+            </div>
+            <div className="space-y-3">
+              <Label>Rate Readability (1-5)</Label>
+              <div className="flex gap-2">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setRating(n)}
+                    className={`w-10 h-10 rounded border flex items-center justify-center transition-colors ${
+                      rating >= n
+                        ? "bg-yellow-400 border-yellow-500 text-white"
+                        : "bg-white hover:bg-gray-50"
+                    }`}
+                  >
+                    ★
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="pt-4 flex justify-between">
+              <Button
+                variant="outline"
+                className="text-red-600 border-red-200 hover:bg-red-50"
+                onClick={handleReset}
+              >
+                Reset Task
+              </Button>
+              <Button
+                size="lg"
+                className="bg-black text-white hover:bg-gray-800"
+              >
+                Save Assessment
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {pendingAnnotation && (
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/20 backdrop-blur-sm"
+            onClick={() => setPendingAnnotation(null)}
+          >
+            <div
+              className="bg-white p-6 rounded-lg shadow-xl w-[400px]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="font-bold mb-2">Add Comment</h3>
+              <div className="text-xs text-gray-500 italic border-l-2 pl-2 mb-4 bg-gray-50 p-2 rounded">
+                "{pendingAnnotation.snippet}"
+              </div>
+              <Textarea
+                value={pendingComment}
+                onChange={(e) => setPendingComment(e.target.value)}
+                placeholder="Enter your comment here..."
+                className="mb-4"
+                autoFocus
+              />
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => setPendingAnnotation(null)}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={savePendingComment}>Save</Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showBig && (
+          <div className="fixed inset-0 z-50 bg-white flex flex-col animate-in fade-in duration-200">
+            <div className="border-b p-4 flex justify-between items-center bg-gray-50">
+              <h2 className="font-bold text-lg">Full Screen View</h2>
+              <Button variant="outline" onClick={() => setShowBig(false)}>
+                Close
+              </Button>
+            </div>
+            <div className="flex-1 flex overflow-hidden">
+              <div className="flex-1 w-1/2 flex flex-col min-w-0 border-r relative">
+                <PaneToolbar side="left" title="Artifact A" />
+                <div className="flex-1 relative overflow-hidden">
+                  {renderContent("left", true)}
+                </div>
+                <AnnotationList side="left" />
+                <AISummary side="left" />
+              </div>
+              <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
+                <PaneToolbar side="right" title="Artifact B" />
+                <div className="flex-1 relative overflow-hidden">
+                  {renderContent("right", true)}
+                </div>
+                <AnnotationList side="right" />
+                <AISummary side="right" />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
