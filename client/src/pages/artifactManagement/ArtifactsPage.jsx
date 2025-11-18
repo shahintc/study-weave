@@ -12,7 +12,7 @@ import {
   DropdownMenuCheckboxItem
 } from "@/components/ui/dropdown-menu";
 import { IconPlus } from "@tabler/icons-react";
-import { FileUploadModal } from '@/pages/artifactManagement/UploadModal'; // Import the FileUploadModal (for replacements)
+// import { FileUploadModal } from '@/pages/artifactManagement/UploadModal'; // Import the FileUploadModal (for replacements) - No longer needed
 import { DetailedUploadModal } from '@/pages/artifactManagement/DetailedUploadModal'; // Import the DetailedUploadModal (for new artifacts)
 import { ManageModal } from '@/pages/artifactManagement/ManageModal'; // Import the ManageModal
 
@@ -20,7 +20,7 @@ export default function ResearcherDashboard() {
   // Placeholder for current user ID. In a real app, this would come from auth context/state.
   const currentUserId = 1; // Assuming user with ID 1 exists for demonstration
 
-  const [selectedTypes, setSelectedTypes] = useState([]);
+  const [selectedType, setSelectedType] = useState(null); // Changed to single selection
   const [selectedTags, setSelectedTags] = useState([]);
   const [isNewArtifactModalOpen, setIsNewArtifactModalOpen] = useState(false);
   const [isReplaceUploadModalOpen, setIsReplaceUploadModalOpen] = useState(false);
@@ -86,9 +86,7 @@ export default function ResearcherDashboard() {
   }, [currentUserId]); // Re-fetch if currentUserId changes
 
   const handleTypeChange = (type) => {
-    setSelectedTypes((prev) =>
-      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
-    );
+    setSelectedType((prev) => (prev === type ? null : type)); // Toggle selected type
   };
 
   const handleTagChange = (tag) => {
@@ -109,8 +107,10 @@ export default function ResearcherDashboard() {
 
   // Filtered artifacts based on selected types and tags
   const filteredArtifacts = artifactsData.filter(artifact => {
-    const matchesType = selectedTypes.length === 0 || selectedTypes.includes(artifact.type);
-    const matchesTags = selectedTags.length === 0 || selectedTags.every(tag => artifact.tags.includes(tag));
+    const matchesType = selectedType === null || artifact.type === selectedType; // Check against single selectedType
+    const matchesTags = selectedTags.length === 0 || selectedTags.every(selectedTag =>
+      artifact.tags.some(artifactTag => artifactTag.name === selectedTag)
+    );
     return matchesType && matchesTags;
   });
 
@@ -138,13 +138,15 @@ export default function ResearcherDashboard() {
             onUploadSuccess={handleUploadSuccess}
           />
 
-          {/* FileUploadModal for file replacements */}
+          {/* FileUploadModal for file replacements - This modal is no longer used directly, but the import remains for now */}
+          {/*
           <FileUploadModal
             isOpen={isReplaceUploadModalOpen}
             setIsOpen={setIsReplaceUploadModalOpen}
             artifactToReplaceId={artifactToReplaceId} // Pass artifact ID for replacement
             onUploadSuccess={handleUploadSuccess}
           />
+          */}
         </div>
 
         <div className="flex justify-end mb-4">
@@ -152,9 +154,9 @@ export default function ResearcherDashboard() {
             <DropdownMenuTrigger asChild>
               <Button variant="outline">
                 Filter
-                {(selectedTypes.length > 0 || selectedTags.length > 0) && (
+                {(selectedType !== null || selectedTags.length > 0) && (
                   <span className="ml-2 px-2 py-0.5 text-xs font-medium rounded-full bg-primary text-primary-foreground">
-                    {selectedTypes.length + selectedTags.length}
+                    {(selectedType !== null ? 1 : 0) + selectedTags.length}
                   </span>
                 )}
               </Button>
@@ -167,15 +169,15 @@ export default function ResearcherDashboard() {
               {availableTypes.map((type) => (
                 <DropdownMenuCheckboxItem
                   key={type}
-                  checked={selectedTypes.includes(type)}
+                  checked={selectedType === type}
                   onCheckedChange={() => handleTypeChange(type)}
                 >
                   {type === "human" ? "Human generated" : "AI generated"}
                 </DropdownMenuCheckboxItem>
               ))}
               <DropdownMenuCheckboxItem
-                checked={selectedTypes.length === 0}
-                onCheckedChange={() => setSelectedTypes([])}
+                checked={selectedType === null}
+                onCheckedChange={() => setSelectedType(null)} // Set to null for "All Types"
               >
                 All Types
               </DropdownMenuCheckboxItem>
@@ -204,7 +206,7 @@ export default function ResearcherDashboard() {
 
 
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {artifactsData.map((artifact) => (
+          {filteredArtifacts.map((artifact) => (
             <Card key={artifact.id}>
               <CardHeader>
                 <CardTitle>{artifact.name}</CardTitle>
@@ -248,23 +250,15 @@ export default function ResearcherDashboard() {
         artifact={artifactToManage}
         onSave={(updatedArtifact) => {
           console.log("Updated artifact:", updatedArtifact);
-          // In a real application, you would send updatedArtifact to your backend
-          // and then update the local 'artifactsData' state or refetch data.
           setIsManageModalOpen(false);
           setArtifactToManage(null); // Clear artifact after saving
+          fetchArtifacts(); // Refresh the artifact list
         }}
         onDelete={(artifactId) => {
           console.log("Deleted artifact with ID:", artifactId);
-          // In a real application, send delete request to your backend
-          // and then update the local 'artifactsData' state or refetch data.
           setIsManageModalOpen(false);
           setArtifactToManage(null); // Clear artifact after deleting
-        }}
-        onFileReplace={(artifactId) => {
-          // This function is called from ManageModal when "Replace File" is clicked
-          setIsManageModalOpen(false); // Close the Manage Modal first
-          setArtifactToReplaceId(artifactId); // Set the ID of the artifact whose file is being replaced
-          setIsReplaceUploadModalOpen(true); // Open the FileUploadModal
+          fetchArtifacts(); // Refresh the artifact list
         }}
       />
 

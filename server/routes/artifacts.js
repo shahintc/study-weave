@@ -145,4 +145,26 @@ router.put('/:id', upload.single('artifactFile'), async (req, res) => {
   }
 });
 
+// DELETE /api/artifacts/:id - Delete an artifact
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id || isNaN(parseInt(id))) {
+      return res.status(400).json({ message: 'A valid artifact ID is required.' });
+    }
+
+    const deletedArtifact = await Artifact.delete(parseInt(id));
+
+    if (!deletedArtifact) {
+      return res.status(404).json({ message: 'Artifact not found.' });
+    }
+
+    res.status(200).json({ message: 'Artifact deleted successfully', id: deletedArtifact.id });
+  } catch (error) {
+    console.error('Error deleting artifact:', error);
+    res.status(500).json({ message: error.message || 'Failed to delete artifact.' });
+  }
+});
+
 module.exports = router;
