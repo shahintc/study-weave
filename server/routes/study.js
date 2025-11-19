@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { sequelize, Study, CompetencyAssignment } = require('../models');
+const { sequelize, Study, CompetencyAssignment, StudyArtifact } = require('../models');
 
 // const authMiddleware = require('../middleware/auth'); // We will add security to this later
 
@@ -72,6 +72,12 @@ router.post('/', async (req, res) => {
         ? preparedMetadata.selectedParticipants
         : [];
 
+    const artifactSelection = Array.isArray(req.body.selectedArtifacts) && req.body.selectedArtifacts.length
+      ? req.body.selectedArtifacts
+      : Array.isArray(preparedMetadata.selectedArtifacts)
+        ? preparedMetadata.selectedArtifacts
+        : [];
+
     const autoInviteFlag = typeof autoInvite === 'boolean'
       ? autoInvite
       : Boolean(preparedMetadata.autoInvite);
@@ -80,14 +86,18 @@ router.post('/', async (req, res) => {
       preparedMetadata.requireAssessment && preparedMetadata.selectedAssessment,
     );
 
+    const sanitizedParticipants = participantSelection
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+
+    const sanitizedArtifacts = artifactSelection
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+
     let assignments = [];
     if (shouldCreateAssignments) {
       const assessmentId = Number(preparedMetadata.selectedAssessment);
       if (!Number.isNaN(assessmentId)) {
-        const sanitizedParticipants = participantSelection
-          .map((value) => Number(value))
-          .filter((value) => Number.isFinite(value));
-
         assignments = await Promise.all(
           sanitizedParticipants.map((participantId) =>
             CompetencyAssignment.create(
@@ -109,11 +119,28 @@ router.post('/', async (req, res) => {
       }
     }
 
+    let studyArtifacts = [];
+    if (sanitizedArtifacts.length) {
+      studyArtifacts = await Promise.all(
+        sanitizedArtifacts.map((artifactId, idx) =>
+          StudyArtifact.create(
+            {
+              studyId: newStudy.id,
+              artifactId,
+              orderIndex: idx,
+            },
+            { transaction },
+          ),
+        ),
+      );
+    }
+
     await transaction.commit();
 
     res.status(201).json({
       study: newStudy.get({ plain: true }),
       competencyAssignments: assignments.map((entry) => entry.get({ plain: true })),
+      studyArtifacts: studyArtifacts.map((entry) => entry.get({ plain: true })),
     });
   } catch (error) {
     console.error('Error creating study:', error);
