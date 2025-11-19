@@ -306,7 +306,7 @@ export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess }) {
                             </DropdownMenuItem>
                           ))}
                           {fetchedAvailableTags.filter((tag) => !selectedTags.includes(tag)).length === 0 && (
-                            <DropdownMenuDescription className="p-2">All available tags are selected.</DropdownMenuDescription>
+                            <div className="p-2">All available tags are selected.</div>
                           )}
                       </div>
                     </>
