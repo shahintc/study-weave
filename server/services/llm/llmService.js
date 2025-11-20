@@ -4,7 +4,7 @@ import { getInstruction } from '../../config/llmSystemInstructions.js';
 const ai = new GoogleGenAI({});
 const model = "gemini-2.5-flash";
 
-export async function generateContent(prompt, systemInstruction='') {
+export async function generateContent(prompt, systemInstruction='', uploadedFile=null) {
     const config = {
         systemInstruction: systemInstruction,
     };
@@ -12,7 +12,7 @@ export async function generateContent(prompt, systemInstruction='') {
     try {
         const response = await ai.models.generateContent({
             model: model,
-            contents: prompt,
+            contents: uploadedFile ? [{ fileData: { mimeType: uploadedFile.mimeType, fileUri: uploadedFile.uri } }, { text: prompt }] : { text : prompt },
             config: config,
         });
 
@@ -24,7 +24,7 @@ export async function generateContent(prompt, systemInstruction='') {
 }
 
 export async function generateContentRouteHandler(req, res){
-    const { prompt, key } = req.body;
+    const { prompt, key, id } = req.body;
 
     if (!prompt) {
         return res.status(400).json({ error: 'No prompt supplied' });
@@ -33,22 +33,43 @@ export async function generateContentRouteHandler(req, res){
     const llmConfig = getInstruction(key);
     let systemInstruction = '';
     let parser = null;
+    let contentProvider = null;
+    let uploaded = null;
 
     if (llmConfig) {
         systemInstruction = llmConfig.systemInstruction || '';
         if (llmConfig.parser) {
-            parser = await import(`./${llmConfig.parser}.js`);
+            parser = await import(`./parsers/${llmConfig.parser}.js`);
+        }
+
+        if (llmConfig.contentProvider) {
+            contentProvider = await import(`./contentProviders/${llmConfig.contentProvider}.js`);
         }
     }
 
 
     try {
-        let llmResponse = await generateContent(prompt, systemInstruction);
+        if (contentProvider && contentProvider.getContent) {
+            console.log(`${key}: Calling content provider`);
+            const { filepath, mimeType } = await contentProvider.getContent(id);
+            console.log(`File ${filepath} fetched`)
+
+            try {
+                uploaded = await ai.files.upload({
+                    file: filepath,
+                    config: { mimeType: mimeType }
+                });
+            } catch (error){
+                console.log(`File upload error: ${error}`);
+            }
+        }
+
+        let llmResponse = await generateContent(prompt, systemInstruction, uploaded);
 
         console.log(llmResponse)
 
         if (parser && parser.parse) {
-            console.log("QUIZ_CREATION: Calling parser")
+            console.log(`${key}: Calling parser`);
             llmResponse = parser.parse(llmResponse);
         }
 
