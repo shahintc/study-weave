@@ -162,4 +162,79 @@ router.get('/assignments', async (req, res) => {
   }
 });
 
+router.get('/assignments/submitted', async (req, res) => {
+  try {
+    const { researcherId } = req.query;
+    if (!researcherId) {
+      return res.status(400).json({ message: 'researcherId is required.' });
+    }
+
+    const records = await CompetencyAssignment.findAll({
+      where: { researcherId, status: 'submitted' },
+      include: [
+        {
+          model: CompetencyAssessment,
+          as: 'assessment',
+        },
+        {
+          model: User,
+          as: 'participant',
+          attributes: ['id', 'name', 'email'],
+        },
+      ],
+      order: [['submittedAt', 'DESC']],
+    });
+
+    const payload = records.map((record) => {
+      const plain = record.get({ plain: true });
+      const assessment = plain.assessment || {};
+      const participant = plain.participant || {};
+
+      return {
+        id: String(plain.id),
+        assessmentId: String(assessment.id),
+        title: assessment.title,
+        participantName: participant.name,
+        participantEmail: participant.email,
+        submittedAt: plain.submittedAt,
+        responses: plain.responses,
+        questions: assessment.questions || [],
+      };
+    });
+
+    return res.json({ assignments: payload });
+  } catch (error) {
+    console.error('Fetch submitted assignments error', error);
+    return res.status(500).json({ message: 'Unable to load submitted assignments right now.' });
+  }
+});
+
+router.post('/assignments/:id/submit', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { responses } = req.body;
+
+    const assignment = await CompetencyAssignment.findByPk(id);
+
+    if (!assignment) {
+      return res.status(404).json({ message: 'Assignment not found.' });
+    }
+
+    if (assignment.status === 'submitted') {
+      return res.status(400).json({ message: 'This assessment has already been submitted.' });
+    }
+
+    assignment.status = 'submitted';
+    assignment.submittedAt = new Date();
+    assignment.responses = responses;
+
+    await assignment.save();
+
+    res.status(200).json({ message: 'Assessment submitted successfully.' });
+  } catch (error) {
+    console.error('Submit competency assessment error', error);
+    res.status(500).json({ message: 'Unable to submit competency assessment right now.' });
+  }
+});
+
 module.exports = router;
