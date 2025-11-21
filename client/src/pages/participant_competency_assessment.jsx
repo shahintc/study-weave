@@ -417,6 +417,9 @@ export default function ParticipantCompetencyAssessment() {
   }
 
   const overview = selectedAssignment || assignments[0];
+  const isAssessmentLocked = Boolean(
+    overview && (overview.isLocked || ['submitted', 'reviewed'].includes((overview.status || '').toLowerCase()))
+  );
 
   return (
     <div className="p-6 md:p-10 max-w-5xl mx-auto space-y-8">
@@ -603,9 +606,9 @@ export default function ParticipantCompetencyAssessment() {
                 <Button
                   type="button"
                   onClick={handleValidateAndConfirm}
-                  disabled={isSubmitting || overview.statusChip === 'Submitted'}
+                  disabled={isSubmitting || isAssessmentLocked}
                 >
-                  {overview.statusChip === 'Submitted' ? 'Already Submitted' : 'Submit assessment'}
+                  {isAssessmentLocked ? 'Already Submitted' : 'Submit assessment'}
                 </Button>
               </div>
             </CardFooter>
