@@ -125,8 +125,9 @@ router.get('/assignments', async (req, res) => {
       const researcher = assessment.researcher || {};
       const status = plain.status || 'pending';
 
+      const isLocked = status === 'submitted' || status === 'reviewed';
       const statusChip =
-        status === 'submitted'
+        isLocked
           ? 'Submitted'
           : status === 'in_progress'
             ? 'In progress'
@@ -147,6 +148,8 @@ router.get('/assignments', async (req, res) => {
             : metadata.estimatedTime || 'Time varies',
         statusLabel: statusChip,
         statusChip,
+        status,
+        isLocked,
         notes: metadata.notes || assessment.description || '',
         instructions: instructionList,
         resources,
@@ -278,7 +281,7 @@ router.post('/assignments/:id/submit', async (req, res) => {
       return res.status(404).json({ message: 'Assignment not found.' });
     }
 
-    if (assignment.status === 'submitted') {
+    if (assignment.status === 'submitted' || assignment.status === 'reviewed') {
       return res.status(400).json({ message: 'This assessment has already been submitted.' });
     }
 
