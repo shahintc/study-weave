@@ -295,4 +295,39 @@ router.post('/assignments/:id/submit', async (req, res) => {
   }
 });
 
+router.patch('/assignments/:id/decision', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { decision, reviewerNotes = '' } = req.body;
+
+    if (!decision || !['approved', 'rejected'].includes(decision)) {
+      return res.status(400).json({ message: 'decision must be either "approved" or "rejected".' });
+    }
+
+    const assignment = await CompetencyAssignment.findByPk(id);
+
+    if (!assignment) {
+      return res.status(404).json({ message: 'Assignment not found.' });
+    }
+
+    if (assignment.status !== 'submitted' && assignment.status !== 'reviewed') {
+      return res
+        .status(400)
+        .json({ message: 'Only submitted assignments can be reviewed right now.' });
+    }
+
+    assignment.decision = decision;
+    assignment.reviewerNotes = reviewerNotes;
+    assignment.reviewedAt = new Date();
+    assignment.status = 'reviewed';
+
+    await assignment.save();
+
+    return res.json({ message: 'Decision recorded successfully.', assignment: assignment.get({ plain: true }) });
+  } catch (error) {
+    console.error('Record competency decision error', error);
+    return res.status(500).json({ message: 'Unable to record decision right now.' });
+  }
+});
+
 module.exports = router;

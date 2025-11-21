@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import axios from "../api/axios";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,42 +36,43 @@ export default function CompetencyEvaluationReview() {
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const researcherId = user.id;
 
-  // Fetch submitted competency evaluations
-  useEffect(() => {
-    const fetchAssignments = async () => {
-      try {
-        setLoading(true);
-        const [submittedRes, statusRes] = await Promise.all([
-          axios.get("/api/competency/assignments/submitted", {
-            params: { researcherId },
-          }),
-          axios.get("/api/competency/assignments/researcher", {
-            params: { researcherId },
-          }),
-        ]);
+  const loadAssignments = useCallback(async () => {
+    if (!researcherId) {
+      return;
+    }
+    try {
+      setLoading(true);
+      const [submittedRes, statusRes] = await Promise.all([
+        axios.get("/api/competency/assignments/submitted", {
+          params: { researcherId },
+        }),
+        axios.get("/api/competency/assignments/researcher", {
+          params: { researcherId },
+        }),
+      ]);
 
-        const submittedAssignments = submittedRes.data.assignments || [];
-        const grouped = groupByAssessment(submittedAssignments);
-        setAssessments(grouped);
+      const submittedAssignments = submittedRes.data.assignments || [];
+      const grouped = groupByAssessment(submittedAssignments);
+      setAssessments(grouped);
 
-        const statusAssignments = statusRes.data.assignments || [];
-        setAssignmentStatuses(statusAssignments);
+      const statusAssignments = statusRes.data.assignments || [];
+      setAssignmentStatuses(statusAssignments);
 
-        setError(null);
-      } catch (err) {
-        console.error("Error loading competency assignments:", err);
-        setError("Failed to load competency assignments. Please try again.");
-        setAssessments([]);
-        setAssignmentStatuses([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (researcherId) {
-      fetchAssignments();
+      setError(null);
+    } catch (err) {
+      console.error("Error loading competency assignments:", err);
+      setError("Failed to load competency assignments. Please try again.");
+      setAssessments([]);
+      setAssignmentStatuses([]);
+    } finally {
+      setLoading(false);
     }
   }, [researcherId]);
+
+  // Fetch submitted competency evaluations
+  useEffect(() => {
+    loadAssignments();
+  }, [loadAssignments]);
 
   const groupByAssessment = (assignments) => {
     const fullySubmitted = assignments.filter((assignment) => {
@@ -100,59 +101,47 @@ export default function CompetencyEvaluationReview() {
     setIsDialogOpen(true);
   };
 
-  const handleApproveEvaluation = async () => {
-    if (!selectedAssignment) return;
+  const recordDecision = async (decision) => {
+    if (!selectedAssignment) {
+      return;
+    }
+    const assignmentId = selectedAssignment.id;
 
     try {
       setLoadingStates((prev) => ({
         ...prev,
-        [selectedAssignment.id]: "approving",
+        [assignmentId]: decision,
       }));
 
-      // TODO: Add endpoint to approve evaluation
-      // await axios.post(`/api/competency/assignments/${selectedAssignment.id}/approve`, {
-      //   reviewerNotes,
-      // });
+      await axios.patch(`/api/competency/assignments/${assignmentId}/decision`, {
+        decision,
+        reviewerNotes,
+      });
 
-      alert("Participant approved for study assignment. (Mock - backend pending)");
+      await loadAssignments();
       setIsDialogOpen(false);
+      setReviewerNotes("");
+      alert(
+        decision === "approved"
+          ? "Participant approved. Decision stored."
+          : "Participant rejected. Decision stored."
+      );
     } catch (err) {
-      console.error("Error approving evaluation:", err);
-      alert("Failed to approve evaluation");
+      console.error("Error recording decision:", err);
+      const fallbackMessage =
+        err.response?.data?.message || "Failed to record decision. Please try again.";
+      alert(fallbackMessage);
     } finally {
       setLoadingStates((prev) => ({
         ...prev,
-        [selectedAssignment.id]: undefined,
+        [assignmentId]: undefined,
       }));
     }
   };
 
-  const handleRejectEvaluation = async () => {
-    if (!selectedAssignment) return;
+  const handleApproveEvaluation = () => recordDecision("approved");
 
-    try {
-      setLoadingStates((prev) => ({
-        ...prev,
-        [selectedAssignment.id]: "rejecting",
-      }));
-
-      // TODO: Add endpoint to reject evaluation
-      // await axios.post(`/api/competency/assignments/${selectedAssignment.id}/reject`, {
-      //   reviewerNotes,
-      // });
-
-      alert("Participant rejected from study assignment. (Mock - backend pending)");
-      setIsDialogOpen(false);
-    } catch (err) {
-      console.error("Error rejecting evaluation:", err);
-      alert("Failed to reject evaluation");
-    } finally {
-      setLoadingStates((prev) => ({
-        ...prev,
-        [selectedAssignment.id]: undefined,
-      }));
-    }
-  };
+  const handleRejectEvaluation = () => recordDecision("rejected");
 
   const getStatusBadge = (submission) => {
     if (submission.decision === "approved") {
