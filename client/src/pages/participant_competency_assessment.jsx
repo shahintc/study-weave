@@ -328,22 +328,26 @@ export default function ParticipantCompetencyAssessment() {
 
   const renderQuestionInput = (question, field) => {
     if (question.type === "choice") {
+      const radioValue = typeof field.value === "string" ? field.value : "";
       return (
         <RadioGroup
           className="space-y-2"
-          value={field.value}
+          value={radioValue}
           onValueChange={field.onChange}
         >
           {question.options.map((option) => (
-            <div
+            <label
               key={option.value}
-              className="flex items-center gap-2 rounded-md border p-3 hover:bg-muted/50"
+              htmlFor={`${question.id}-${option.value}`}
+              className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors ${
+                radioValue === option.value
+                  ? "border-primary bg-primary/5"
+                  : "border-input bg-background hover:bg-muted/50"
+              }`}
             >
               <RadioGroupItem value={option.value} id={`${question.id}-${option.value}`} />
-              <Label htmlFor={`${question.id}-${option.value}`} className="cursor-pointer">
-                {option.label}
-              </Label>
-            </div>
+              <span className="text-sm font-medium text-foreground">{option.label}</span>
+            </label>
           ))}
         </RadioGroup>
       );
@@ -413,6 +417,9 @@ export default function ParticipantCompetencyAssessment() {
   }
 
   const overview = selectedAssignment || assignments[0];
+  const isAssessmentLocked = Boolean(
+    overview && (overview.isLocked || ['submitted', 'reviewed'].includes((overview.status || '').toLowerCase()))
+  );
 
   return (
     <div className="p-6 md:p-10 max-w-5xl mx-auto space-y-8">
@@ -599,9 +606,9 @@ export default function ParticipantCompetencyAssessment() {
                 <Button
                   type="button"
                   onClick={handleValidateAndConfirm}
-                  disabled={isSubmitting || overview.statusChip === 'Submitted'}
+                  disabled={isSubmitting || isAssessmentLocked}
                 >
-                  {overview.statusChip === 'Submitted' ? 'Already Submitted' : 'Submit assessment'}
+                  {isAssessmentLocked ? 'Already Submitted' : 'Submit assessment'}
                 </Button>
               </div>
             </CardFooter>

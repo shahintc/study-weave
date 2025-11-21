@@ -125,8 +125,9 @@ router.get('/assignments', async (req, res) => {
       const researcher = assessment.researcher || {};
       const status = plain.status || 'pending';
 
+      const isLocked = status === 'submitted' || status === 'reviewed';
       const statusChip =
-        status === 'submitted'
+        isLocked
           ? 'Submitted'
           : status === 'in_progress'
             ? 'In progress'
@@ -147,6 +148,8 @@ router.get('/assignments', async (req, res) => {
             : metadata.estimatedTime || 'Time varies',
         statusLabel: statusChip,
         statusChip,
+        status,
+        isLocked,
         notes: metadata.notes || assessment.description || '',
         instructions: instructionList,
         resources,
@@ -185,6 +188,61 @@ router.get('/assignments/submitted', async (req, res) => {
       order: [['submittedAt', 'DESC']],
     });
 
+    // Filter to ensure only fully submitted evaluations with actual responses are returned
+    const fullySubmitted = records.filter((record) => {
+      const plain = record.get({ plain: true });
+      return plain.responses && Object.keys(plain.responses).length > 0;
+    });
+
+    const payload = fullySubmitted.map((record) => {
+      const plain = record.get({ plain: true });
+      const assessment = plain.assessment || {};
+      const participant = plain.participant || {};
+
+      return {
+        id: String(plain.id),
+        assessmentId: String(assessment.id),
+        title: assessment.title,
+        participantName: participant.name,
+        participantEmail: participant.email,
+        status: plain.status,
+        decision: plain.decision,
+        submittedAt: plain.submittedAt,
+        responses: plain.responses,
+        questions: assessment.questions || [],
+      };
+    });
+
+    return res.json({ assignments: payload });
+  } catch (error) {
+    console.error('Fetch submitted assignments error', error);
+    return res.status(500).json({ message: 'Unable to load submitted assignments right now.' });
+  }
+});
+
+router.get('/assignments/researcher', async (req, res) => {
+  try {
+    const { researcherId } = req.query;
+    if (!researcherId) {
+      return res.status(400).json({ message: 'researcherId is required.' });
+    }
+
+    const records = await CompetencyAssignment.findAll({
+      where: { researcherId },
+      include: [
+        {
+          model: CompetencyAssessment,
+          as: 'assessment',
+        },
+        {
+          model: User,
+          as: 'participant',
+          attributes: ['id', 'name', 'email'],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+    });
+
     const payload = records.map((record) => {
       const plain = record.get({ plain: true });
       const assessment = plain.assessment || {};
@@ -196,16 +254,19 @@ router.get('/assignments/submitted', async (req, res) => {
         title: assessment.title,
         participantName: participant.name,
         participantEmail: participant.email,
+        status: plain.status,
+        decision: plain.decision,
         submittedAt: plain.submittedAt,
-        responses: plain.responses,
-        questions: assessment.questions || [],
+        startedAt: plain.startedAt,
+        createdAt: plain.createdAt,
+        updatedAt: plain.updatedAt,
       };
     });
 
     return res.json({ assignments: payload });
   } catch (error) {
-    console.error('Fetch submitted assignments error', error);
-    return res.status(500).json({ message: 'Unable to load submitted assignments right now.' });
+    console.error('Fetch researcher assignments error', error);
+    return res.status(500).json({ message: 'Unable to load researcher assignments right now.' });
   }
 });
 
@@ -220,7 +281,7 @@ router.post('/assignments/:id/submit', async (req, res) => {
       return res.status(404).json({ message: 'Assignment not found.' });
     }
 
-    if (assignment.status === 'submitted') {
+    if (assignment.status === 'submitted' || assignment.status === 'reviewed') {
       return res.status(400).json({ message: 'This assessment has already been submitted.' });
     }
 
@@ -234,6 +295,41 @@ router.post('/assignments/:id/submit', async (req, res) => {
   } catch (error) {
     console.error('Submit competency assessment error', error);
     res.status(500).json({ message: 'Unable to submit competency assessment right now.' });
+  }
+});
+
+router.patch('/assignments/:id/decision', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { decision, reviewerNotes = '' } = req.body;
+
+    if (!decision || !['approved', 'rejected'].includes(decision)) {
+      return res.status(400).json({ message: 'decision must be either "approved" or "rejected".' });
+    }
+
+    const assignment = await CompetencyAssignment.findByPk(id);
+
+    if (!assignment) {
+      return res.status(404).json({ message: 'Assignment not found.' });
+    }
+
+    if (assignment.status !== 'submitted' && assignment.status !== 'reviewed') {
+      return res
+        .status(400)
+        .json({ message: 'Only submitted assignments can be reviewed right now.' });
+    }
+
+    assignment.decision = decision;
+    assignment.reviewerNotes = reviewerNotes;
+    assignment.reviewedAt = new Date();
+    assignment.status = 'reviewed';
+
+    await assignment.save();
+
+    return res.json({ message: 'Decision recorded successfully.', assignment: assignment.get({ plain: true }) });
+  } catch (error) {
+    console.error('Record competency decision error', error);
+    return res.status(500).json({ message: 'Unable to record decision right now.' });
   }
 });
 
