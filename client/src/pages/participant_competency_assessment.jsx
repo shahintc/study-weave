@@ -328,22 +328,26 @@ export default function ParticipantCompetencyAssessment() {
 
   const renderQuestionInput = (question, field) => {
     if (question.type === "choice") {
+      const radioValue = typeof field.value === "string" ? field.value : "";
       return (
         <RadioGroup
           className="space-y-2"
-          value={field.value}
+          value={radioValue}
           onValueChange={field.onChange}
         >
           {question.options.map((option) => (
-            <div
+            <label
               key={option.value}
-              className="flex items-center gap-2 rounded-md border p-3 hover:bg-muted/50"
+              htmlFor={`${question.id}-${option.value}`}
+              className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors ${
+                radioValue === option.value
+                  ? "border-primary bg-primary/5"
+                  : "border-input bg-background hover:bg-muted/50"
+              }`}
             >
               <RadioGroupItem value={option.value} id={`${question.id}-${option.value}`} />
-              <Label htmlFor={`${question.id}-${option.value}`} className="cursor-pointer">
-                {option.label}
-              </Label>
-            </div>
+              <span className="text-sm font-medium text-foreground">{option.label}</span>
+            </label>
           ))}
         </RadioGroup>
       );
