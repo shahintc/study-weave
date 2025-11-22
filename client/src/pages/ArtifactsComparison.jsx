@@ -14,14 +14,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 
-/** Bug categories (from bug_categories.md idea) */
+/** Bug categories (Defects4J/GHRB taxonomy) */
 const BUG_CATEGORIES = [
-  "Functional",
-  "Configuration",
-  "Security",
-  "Performance",
-  "GUI",
-  "Documentation",
+  "Configuration Issue",
+  "Network Issue",
+  "Database-Related Issue",
+  "GUI-Related Issue",
+  "Performance Issue",
+  "Permission/Deprecation Issue",
+  "Security Issue",
+  "Functional Issue",
+  "Test Code-Related Issue",
   "Other",
 ];
 
@@ -52,6 +55,16 @@ const SNAPSHOT_OUTCOMES = [
   { id: "failure", label: "Actual failure" },
   { id: "intended", label: "Intended UI change" },
   { id: "unclear", label: "Unclear / not sure" },
+];
+
+const SNAPSHOT_CHANGE_TYPES = [
+  { id: "color", label: "Color / theme change" },
+  { id: "layout", label: "Layout or spacing shift" },
+  { id: "text", label: "Copy / text update" },
+  { id: "icon", label: "Iconography or asset swap" },
+  { id: "content", label: "Missing or extra content" },
+  { id: "animation", label: "Animation / interaction regression" },
+  { id: "other", label: "Other (describe)" },
 ];
 
 /** Small helper for unique ids (used only for annotations etc.) */
@@ -96,6 +109,55 @@ const base64ToBlobUrl = (base64) => {
   }
 };
 
+const parseDefectsMetadata = (parsed) => {
+  const collection = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed.bugs)
+    ? parsed.bugs
+    : Array.isArray(parsed.defects)
+    ? parsed.defects
+    : Array.isArray(parsed.items)
+    ? parsed.items
+    : null;
+
+  if (!collection) return [];
+
+  return collection
+    .map((bug, idx) => {
+      const url = bug?.report_url || bug?.url || bug?.link;
+      if (!url) return null;
+
+      const id =
+        bug?.bug_id ||
+        bug?.bugId ||
+        bug?.issue_id ||
+        bug?.issueId ||
+        bug?.key ||
+        bug?.id ||
+        `bug-${idx + 1}`;
+      const title = bug?.title || bug?.summary || bug?.name || `Bug ${idx + 1}`;
+      const project = bug?.project || bug?.repo || bug?.component || "";
+
+      return { id, title, project, url };
+    })
+    .filter(Boolean);
+};
+
+const normalizeSolidRecords = (parsed) => {
+  const arr = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed.records)
+    ? parsed.records
+    : [];
+
+  return arr
+    .filter((item) => typeof item?.input === "string")
+    .map((item, idx) => ({
+      ...item,
+      __id: item.id || item.slug || item.name || `record-${idx + 1}`,
+    }));
+};
+
 // Ensure we have patch-like text for a side when in patch mode.
 // If the text is already a diff -> return it unchanged.
 // Otherwise, create a unified diff against the OTHER pane.
@@ -138,6 +200,63 @@ const numberLines = (text) => {
     .split(/\r?\n/)
     .map((line, idx) => `${idx + 1}. ${line}`)
     .join("\n");
+};
+
+const formatBugReportText = (report) => {
+  if (typeof report === "string") return report;
+  if (!report || typeof report !== "object") {
+    try {
+      return JSON.stringify(report, null, 2);
+    } catch (err) {
+      return String(report);
+    }
+  }
+
+  const lines = [];
+  const pushField = (label, value) => {
+    if (!value) return;
+    lines.push(`${label}: ${value}`);
+  };
+
+  pushField("Project", report.project || report.repo || report.component);
+  pushField("Bug ID", report.bug_id || report.id || report.issue_id);
+  pushField("Title", report.title || report.summary || report.name);
+  pushField("Reporter", report.reporter || report.author);
+  pushField("Severity", report.severity || report.priority);
+
+  const description = report.description || report.body || report.details;
+  if (description) {
+    lines.push("", description.trim());
+  }
+
+  const steps = report.steps || report.steps_to_reproduce;
+  if (steps) {
+    lines.push("", "Steps to reproduce:");
+    if (Array.isArray(steps)) {
+      steps.forEach((step, idx) => {
+        lines.push(`${idx + 1}. ${step}`);
+      });
+    } else {
+      lines.push(steps);
+    }
+  }
+
+  const expected = report.expected || report.expected_result;
+  const actual = report.actual || report.actual_result;
+  if (expected || actual) {
+    lines.push("", "Expected vs Actual:");
+    pushField("Expected", expected);
+    pushField("Actual", actual);
+  }
+
+  lines.push("", "---- RAW ARTIFACT ----");
+  try {
+    lines.push(JSON.stringify(report, null, 2));
+  } catch (err) {
+    lines.push(String(report));
+  }
+
+  return lines.join("\n");
 };
 
 /**
@@ -203,47 +322,6 @@ const buildDiffLines = (text, otherSet) => {
   });
 };
 
-/**
- * Helper: Try to interpret a JSON file as defects4j_metadata and
- * download a bug report from URL if available.
- * Returns true if it successfully handled as metadata, false otherwise.
- */
-async function loadDefectFromMetadata(parsed, setData) {
-  try {
-    // Try to find an array of bug objects
-    const bugsArray = Array.isArray(parsed)
-      ? parsed
-      : Array.isArray(parsed.bugs)
-      ? parsed.bugs
-      : Array.isArray(parsed.defects)
-      ? parsed.defects
-      : null;
-
-    if (!bugsArray || bugsArray.length === 0) {
-      return false;
-    }
-
-    const bug = bugsArray[0];
-    const url = bug.report_url || bug.url;
-    if (!url) return false;
-
-    const resp = await fetch(url);
-    if (!resp.ok) return false;
-
-    const text = await resp.text();
-    setData({
-      type: "text",
-      text: numberLines(text),
-      name: url,
-    });
-
-    return true;
-  } catch (err) {
-    console.error("Failed to load from metadata:", err);
-    return false;
-  }
-}
-
 const STORAGE_KEY = "artifacts-comparison-autosave-v9-bug-solid-patch";
 
 export default function ArtifactsComparison() {
@@ -292,22 +370,41 @@ export default function ArtifactsComparison() {
   const [matchCorrectness, setMatchCorrectness] = useState(""); // "correct" | "incorrect" | ""
   const [finalCategory, setFinalCategory] = useState(""); // final choice in stage2
   const [finalOtherCategory, setFinalOtherCategory] = useState(""); // if reviewer chooses "other"
+  const [bugCategoryOptions, setBugCategoryOptions] = useState(BUG_CATEGORIES);
 
   // SOLID mode classification
   const [solidViolation, setSolidViolation] = useState(""); // "srp" | "ocp" | ...
   const [solidComplexity, setSolidComplexity] = useState(""); // "EASY" | "MEDIUM" | "HARD"
   const [solidFixedCode, setSolidFixedCode] = useState(""); // optional refactored version
+  const [solidRecords, setSolidRecords] = useState([]);
+  const [solidRecordIndex, setSolidRecordIndex] = useState(0);
+  const [solidDatasetName, setSolidDatasetName] = useState("");
+  const [showSolidGroundTruth, setShowSolidGroundTruth] = useState(false);
 
   // Patch mode classification
   const [patchAreClones, setPatchAreClones] = useState(""); // "yes" | "no"
   const [patchCloneType, setPatchCloneType] = useState(""); // "type1".."type4"
   const [patchCloneComment, setPatchCloneComment] = useState(""); // reasoning
+  const [patchPairLabel, setPatchPairLabel] = useState("");
 
   // Snapshot mode outcome
   const [snapshotOutcome, setSnapshotOutcome] = useState(""); // "failure" | "intended" | "unclear"
+  const [snapshotChangeType, setSnapshotChangeType] = useState("");
+  const [snapshotChangeTypeOther, setSnapshotChangeTypeOther] = useState("");
+  const [snapshotAssets, setSnapshotAssets] = useState({
+    reference: null,
+    failure: null,
+  });
+  const [snapshotDiffData, setSnapshotDiffData] = useState(null);
 
   // Generic comment / notes
   const [assessmentComment, setAssessmentComment] = useState("");
+
+  // Metadata-driven bug ingestion
+  const [metadataEntries, setMetadataEntries] = useState([]);
+  const [selectedMetadataId, setSelectedMetadataId] = useState("");
+  const [metadataLoadingId, setMetadataLoadingId] = useState("");
+  const [metadataPane, setMetadataPane] = useState("left");
 
   // Pending Comment State (for annotations)
   const [pendingAnnotation, setPendingAnnotation] = useState(null);
@@ -330,6 +427,8 @@ export default function ArtifactsComparison() {
 
   const leftFileRef = useRef(null);
   const rightFileRef = useRef(null);
+  const snapshotDiffInputRef = useRef(null);
+  const patchPairInputRef = useRef(null);
 
   const leftCanvasRef = useRef(null);
   const rightCanvasRef = useRef(null);
@@ -373,6 +472,11 @@ export default function ArtifactsComparison() {
             setFinalCategory(saved.finalCategory);
           if (typeof saved.finalOtherCategory === "string")
             setFinalOtherCategory(saved.finalOtherCategory);
+          if (
+            Array.isArray(saved.bugCategoryOptions) &&
+            saved.bugCategoryOptions.length
+          )
+            setBugCategoryOptions(saved.bugCategoryOptions);
 
           if (typeof saved.solidViolation === "string")
             setSolidViolation(saved.solidViolation);
@@ -390,6 +494,10 @@ export default function ArtifactsComparison() {
 
           if (typeof saved.snapshotOutcome === "string")
             setSnapshotOutcome(saved.snapshotOutcome);
+          if (typeof saved.snapshotChangeType === "string")
+            setSnapshotChangeType(saved.snapshotChangeType);
+          if (typeof saved.snapshotChangeTypeOther === "string")
+            setSnapshotChangeTypeOther(saved.snapshotChangeTypeOther);
 
           if (typeof saved.assessmentComment === "string")
             setAssessmentComment(saved.assessmentComment);
@@ -424,6 +532,7 @@ export default function ArtifactsComparison() {
         matchCorrectness,
         finalCategory,
         finalOtherCategory,
+        bugCategoryOptions,
         solidViolation,
         solidComplexity,
         solidFixedCode,
@@ -431,6 +540,8 @@ export default function ArtifactsComparison() {
         patchCloneType,
         patchCloneComment,
         snapshotOutcome,
+        snapshotChangeType,
+        snapshotChangeTypeOther,
         assessmentComment,
       };
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -460,6 +571,7 @@ export default function ArtifactsComparison() {
     matchCorrectness,
     finalCategory,
     finalOtherCategory,
+    bugCategoryOptions,
     solidViolation,
     solidComplexity,
     solidFixedCode,
@@ -467,6 +579,8 @@ export default function ArtifactsComparison() {
     patchCloneType,
     patchCloneComment,
     snapshotOutcome,
+    snapshotChangeType,
+    snapshotChangeTypeOther,
     assessmentComment,
   ]);
 
@@ -493,7 +607,21 @@ export default function ArtifactsComparison() {
     setPatchCloneType("");
     setPatchCloneComment("");
     setSnapshotOutcome("");
+    setSnapshotChangeType("");
+    setSnapshotChangeTypeOther("");
+    setSnapshotAssets({ reference: null, failure: null });
+    setSnapshotDiffData(null);
     setAssessmentComment("");
+    setBugCategoryOptions(BUG_CATEGORIES);
+    setSolidRecords([]);
+    setSolidRecordIndex(0);
+    setSolidDatasetName("");
+    setShowSolidGroundTruth(false);
+    setMetadataEntries([]);
+    setSelectedMetadataId("");
+    setMetadataLoadingId("");
+    setMetadataPane("left");
+    setPatchPairLabel("");
 
     [
       leftCanvasRef,
@@ -572,6 +700,29 @@ export default function ArtifactsComparison() {
   };
 
   // ===== FILE HANDLING =====
+  const resetBugLabelingState = () => {
+    setLeftCategory("");
+    setRightCategory("");
+    setMatchCorrectness("");
+    setFinalCategory("");
+    setFinalOtherCategory("");
+    setAssessmentComment("");
+  };
+
+  const resetSolidInputs = () => {
+    setSolidViolation("");
+    setSolidComplexity("");
+    setSolidFixedCode("");
+    setAssessmentComment("");
+  };
+
+  const resetSnapshotDecisions = () => {
+    setSnapshotOutcome("");
+    setSnapshotChangeType("");
+    setSnapshotChangeTypeOther("");
+    setAssessmentComment("");
+  };
+
   const handleFileChange = async (e, side) => {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -624,44 +775,94 @@ export default function ArtifactsComparison() {
       setRightZoom(1);
     }
 
-    // JSON: either a direct bug report, metadata file, or SOLID-violations dataset
+    const assignPane = (payload) => {
+      setData(payload);
+      if (mode === "snapshot") {
+        const role = side === "left" ? "reference" : "failure";
+        setSnapshotAssets((prev) => ({ ...prev, [role]: payload }));
+      }
+    };
+
+    const resetModeState = () => {
+      if (mode === "stage1" || mode === "stage2") {
+        resetBugLabelingState();
+      } else if (mode === "solid") {
+        resetSolidInputs();
+      } else if (mode === "snapshot") {
+        resetSnapshotDecisions();
+      }
+    };
+
     if (isJson) {
       try {
         const raw = await file.text();
         const parsed = JSON.parse(raw);
 
-        // Try to treat as defects4j_metadata
-        const handled = await loadDefectFromMetadata(parsed, setData);
-        if (!handled) {
-          // Try to treat as SOLID violations dataset:
-          // either top-level array or { records: [...] } where each item has "input"
-          const solidArray = Array.isArray(parsed)
-            ? parsed
-            : Array.isArray(parsed.records)
-            ? parsed.records
-            : null;
-
-          if (
-            solidArray &&
-            solidArray.length > 0 &&
-            typeof solidArray[0].input === "string"
-          ) {
-            const first = solidArray[0];
-            // Show only the violating code (input) to the participant
-            setData({
+        const metadataList = parseDefectsMetadata(parsed);
+        if (metadataList.length) {
+          setMetadataEntries(metadataList);
+          setSelectedMetadataId(metadataList[0].id);
+          setMetadataPane(side);
+          setMetadataLoadingId(metadataList[0].id);
+          try {
+            const resp = await fetch(metadataList[0].url);
+            if (!resp.ok) throw new Error("Unable to fetch bug report.");
+            const text = await resp.text();
+            assignPane({
               type: "text",
-              text: numberLines(first.input),
-              name,
+              text: numberLines(text),
+              name: metadataList[0].title || metadataList[0].id,
             });
-            // We intentionally do NOT pre-fill solidViolation / solidComplexity,
-            // to avoid leaking ground truth answers.
-            return;
+            resetBugLabelingState();
+          } catch (err) {
+            console.error("Failed to load metadata bug", err);
+            alert(
+              "Failed to download bug report from metadata file. Please check the console for more details."
+            );
+          } finally {
+            setMetadataLoadingId("");
           }
-
-          // Fallback: just show JSON content as numbered text
-          const pretty = JSON.stringify(parsed, null, 2);
-          setData({ type: "text", text: numberLines(pretty), name });
+          return;
         }
+
+        setMetadataEntries([]);
+        setSelectedMetadataId("");
+        setMetadataLoadingId("");
+
+        const solidList = normalizeSolidRecords(parsed);
+        if (solidList.length) {
+          setSolidRecords(solidList);
+          setSolidDatasetName(name);
+          setSolidRecordIndex(0);
+          setShowSolidGroundTruth(false);
+          const first = solidList[0];
+          assignPane({
+            type: "text",
+            text: numberLines(first.input || ""),
+            name: first.__id,
+          });
+          resetSolidInputs();
+          return;
+        }
+
+        if (solidRecords.length) {
+          setSolidRecords([]);
+          setSolidDatasetName("");
+          setSolidRecordIndex(0);
+          setShowSolidGroundTruth(false);
+        }
+
+        if (
+          Array.isArray(parsed.categories) &&
+          parsed.categories.every((c) => typeof c === "string")
+        ) {
+          setBugCategoryOptions(parsed.categories);
+        }
+
+        const pretty = formatBugReportText(parsed);
+        assignPane({ type: "text", text: numberLines(pretty), name });
+        resetModeState();
+        return;
       } catch (err) {
         console.error(err);
         alert("Invalid JSON file.");
@@ -669,20 +870,115 @@ export default function ArtifactsComparison() {
       return;
     }
 
-    // Plain text / diff / patch file
     if (isTxt) {
       const text = await file.text();
-      setData({ type: "text", text: numberLines(text), name });
+      assignPane({ type: "text", text: numberLines(text), name });
+      resetModeState();
       return;
     }
 
-    // Image or PDF
     try {
-      const base64Url = await fileToBase64(file); // data:...base64
-      setData({ type: isImg ? "image" : "pdf", url: base64Url, name });
+      const base64Url = await fileToBase64(file);
+      assignPane({ type: isImg ? "image" : "pdf", url: base64Url, name });
+      resetModeState();
     } catch (err) {
       console.error(err);
       alert("Error reading file.");
+    }
+  };
+
+  const handleMetadataSelection = async (bugId, paneOverride) => {
+    setSelectedMetadataId(bugId);
+    const entry = metadataEntries.find((bug) => bug.id === bugId);
+    if (!entry) return;
+
+    setMetadataLoadingId(bugId);
+    try {
+      const resp = await fetch(entry.url);
+      if (!resp.ok) throw new Error("Unable to fetch bug report.");
+      const text = await resp.text();
+      const payload = {
+        type: "text",
+        text: numberLines(text),
+        name: `${entry.project ? `${entry.project} • ` : ""}${entry.title}`,
+      };
+      const pane = paneOverride || metadataPane;
+      const setter = pane === "right" ? setRightData : setLeftData;
+      setter(payload);
+      resetBugLabelingState();
+    } catch (err) {
+      console.error("Metadata fetch failed", err);
+      alert("Unable to download the selected bug report. See console for details.");
+    } finally {
+      setMetadataLoadingId("");
+    }
+  };
+
+  const handleSolidRecordChange = (index) => {
+    if (!solidRecords[index]) return;
+    setSolidRecordIndex(index);
+    setLeftData({
+      type: "text",
+      text: numberLines(solidRecords[index].input || ""),
+      name: `${solidDatasetName || "SOLID"} • ${solidRecords[index].__id}`,
+    });
+    resetSolidInputs();
+  };
+
+  const nudgeSolidRecord = (direction) => {
+    if (!solidRecords.length) return;
+    const next = (solidRecordIndex + direction + solidRecords.length) %
+      solidRecords.length;
+    handleSolidRecordChange(next);
+  };
+
+  const handleSnapshotDiffUpload = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    const isImg = /\.(png|jpg|jpeg)$/i.test(file.name);
+    const isPdf = /\.pdf$/i.test(file.name);
+    if (!(isImg || isPdf)) {
+      alert("Please upload the diff artifact in PNG, JPG, or PDF format.");
+      return;
+    }
+
+    try {
+      const base64Url = await fileToBase64(file);
+      setSnapshotDiffData({
+        type: isImg ? "image" : "pdf",
+        url: base64Url,
+        name: file.name,
+      });
+      resetSnapshotDecisions();
+    } catch (err) {
+      console.error("Snapshot diff upload failed", err);
+      alert("Unable to read the diff artifact.");
+    }
+  };
+
+  const handlePatchPairUpload = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = "";
+    if (files.length < 2) {
+      alert("Select two .patch or .diff files to populate Patch A and Patch B.");
+      return;
+    }
+
+    try {
+      const [first, second] = files;
+      const [textA, textB] = await Promise.all([first.text(), second.text()]);
+      setLeftData({ type: "text", text: numberLines(textA), name: first.name });
+      setRightData({ type: "text", text: numberLines(textB), name: second.name });
+      setLeftAnn([]);
+      setRightAnn([]);
+      setLeftZoom(1);
+      setRightZoom(1);
+      setPatchPairLabel(`${first.name} ↔ ${second.name}`);
+    } catch (err) {
+      console.error("Failed to load patch pair", err);
+      alert("Unable to read one of the selected patch files.");
     }
   };
 
@@ -1373,6 +1669,13 @@ export default function ArtifactsComparison() {
   const labelsMatch =
     leftCategory && rightCategory && leftCategory === rightCategory;
 
+  const currentSolidRecord =
+    solidRecords.length > 0
+      ? solidRecords[
+          Math.min(solidRecordIndex, solidRecords.length - 1)
+        ]
+      : null;
+
   // ===== PATCH SIMILARITY (heatmap bar) =====
   let leftNormSet = null;
   let rightNormSet = null;
@@ -1399,6 +1702,56 @@ export default function ArtifactsComparison() {
     const ratio = unionSize ? Math.round((intersection / unionSize) * 100) : 0;
     patchSimilarity = ratio;
   }
+
+  const validateBeforeSave = () => {
+    if (mode === "stage1") {
+      if (!leftCategory) {
+        return "Please choose a category for the bug report before saving.";
+      }
+    } else if (mode === "stage2") {
+      if (!leftCategory || !rightCategory) {
+        return "Please record both participant labels first.";
+      }
+      if (labelsMatch) {
+        if (!matchCorrectness) {
+          return "Confirm whether the matching labels are correct.";
+        }
+        if (matchCorrectness === "incorrect" && !finalCategory) {
+          return "Select the corrected bug category.";
+        }
+      } else if (!finalCategory) {
+        return "Resolve the mismatch by selecting the final category.";
+      } else if (finalCategory === "other" && !finalOtherCategory) {
+        return "Choose which category should replace both labels.";
+      }
+    } else if (mode === "solid") {
+      if (!solidViolation || !solidComplexity) {
+        return "Select both a SOLID violation and a difficulty level.";
+      }
+    } else if (mode === "patch") {
+      if (!patchAreClones) {
+        return "Please decide whether the patches are clones.";
+      }
+      if (patchAreClones === "yes" && !patchCloneType) {
+        return "Select a clone type before saving.";
+      }
+    } else if (mode === "snapshot") {
+      if (!snapshotAssets.reference || !snapshotAssets.failure || !snapshotDiffData) {
+        return "Upload the reference, failure, and diff artifacts before saving.";
+      }
+      if (!snapshotOutcome) {
+        return "Choose whether this is an actual failure or an intended change.";
+      }
+      const classifiedChange =
+        snapshotChangeType === "other"
+          ? snapshotChangeTypeOther.trim()
+          : snapshotChangeType;
+      if (!classifiedChange) {
+        return "Classify the type of UI change before saving.";
+      }
+    }
+    return null;
+  };
 
   // ===== MAIN RENDER =====
   return (
@@ -1522,6 +1875,103 @@ export default function ArtifactsComparison() {
           </div>
         )}
 
+        {metadataEntries.length > 0 && (
+          <div className="border rounded-md px-4 py-3 bg-blue-50 flex flex-wrap gap-3 items-center text-xs text-blue-900">
+            <div>
+              <p className="font-semibold">
+                Defects4J metadata loaded ({metadataEntries.length} bugs)
+              </p>
+              <p className="text-[11px] text-blue-800">
+                Switch between bug reports without re-uploading the file.
+              </p>
+            </div>
+            <select
+              value={selectedMetadataId}
+              onChange={(e) => handleMetadataSelection(e.target.value)}
+              className="border rounded px-2 py-1 bg-white text-gray-700"
+            >
+              {!selectedMetadataId && (
+                <option value="" disabled>
+                  Select bug…
+                </option>
+              )}
+              {metadataEntries.map((bug) => (
+                <option key={bug.id} value={bug.id}>
+                  {bug.title} ({bug.project || "Unknown project"})
+                </option>
+              ))}
+            </select>
+            <div className="flex items-center gap-1 text-[11px]">
+              <span>Target pane:</span>
+              <select
+                value={metadataPane}
+                onChange={(e) => {
+                  const nextPane = e.target.value;
+                  setMetadataPane(nextPane);
+                  if (selectedMetadataId) {
+                    handleMetadataSelection(selectedMetadataId, nextPane);
+                  }
+                }}
+                className="border rounded px-2 py-1 bg-white text-gray-700"
+              >
+                <option value="left">Artifact A (left)</option>
+                <option value="right">Artifact B (right)</option>
+              </select>
+            </div>
+            {metadataLoadingId && (
+              <span className="text-[11px] text-blue-700">
+                Loading bug {metadataLoadingId}...
+              </span>
+            )}
+          </div>
+        )}
+
+        {mode === "solid" && solidRecords.length > 0 && (
+          <div className="border rounded-md px-4 py-3 bg-amber-50 flex flex-wrap items-center gap-3 text-xs text-amber-900">
+            <span className="font-semibold">
+              {solidDatasetName || "SOLID dataset"} – Record {" "}
+              {solidRecordIndex + 1} / {solidRecords.length}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={() => nudgeSolidRecord(-1)}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={() => nudgeSolidRecord(1)}
+              >
+                Next
+              </Button>
+            </div>
+            <select
+              className="border rounded px-2 py-1 bg-white text-gray-700"
+              value={solidRecordIndex}
+              onChange={(e) => handleSolidRecordChange(Number(e.target.value))}
+            >
+              {solidRecords.map((record, idx) => (
+                <option key={record.__id} value={idx}>
+                  #{idx + 1} – {record.__id}
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="link"
+              size="sm"
+              className="text-amber-900"
+              onClick={() => setShowSolidGroundTruth((prev) => !prev)}
+            >
+              {showSolidGroundTruth ? "Hide" : "Show"} ground truth
+            </Button>
+          </div>
+        )}
+
         {/* MAIN VIEWER */}
         <div className="flex border rounded-lg h-[650px] shadow-sm overflow-hidden">
           {/* LEFT always visible */}
@@ -1581,6 +2031,65 @@ export default function ArtifactsComparison() {
           )}
         </div>
 
+        {mode === "snapshot" && (
+          <div className="border rounded-lg p-4 bg-gray-50 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800">
+                  Diff artifact
+                </h3>
+                <p className="text-[11px] text-gray-500">
+                  Upload the diff.png image (or PDF) that highlights pixel
+                  differences between the reference and failure snapshots.
+                </p>
+              </div>
+              <div>
+                <input
+                  ref={snapshotDiffInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".png,.jpg,.jpeg,.pdf"
+                  onChange={handleSnapshotDiffUpload}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => snapshotDiffInputRef.current?.click()}
+                >
+                  {snapshotDiffData ? "Replace diff" : "Upload diff"}
+                </Button>
+              </div>
+            </div>
+            {snapshotDiffData ? (
+              snapshotDiffData.type === "image" ? (
+                <img
+                  src={snapshotDiffData.url}
+                  alt="Diff artifact"
+                  className="border rounded-md max-h-[420px] object-contain mx-auto"
+                />
+              ) : (
+                <object
+                  data={
+                    snapshotDiffData.url.startsWith("data:")
+                      ? base64ToBlobUrl(snapshotDiffData.url)
+                      : snapshotDiffData.url
+                  }
+                  type="application/pdf"
+                  className="w-full h-[420px]"
+                >
+                  <div className="text-xs text-gray-500 text-center">
+                    Unable to display PDF diff. Download to view.
+                  </div>
+                </object>
+              )
+            ) : (
+              <div className="text-xs text-gray-500 border border-dashed rounded-md p-6 text-center">
+                No diff artifact uploaded yet.
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ASSESSMENT CARD */}
         <Card>
           <CardHeader>
@@ -1599,6 +2108,30 @@ export default function ArtifactsComparison() {
           <CardContent className="space-y-6">
             {mode === "patch" ? (
               <>
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    ref={patchPairInputRef}
+                    type="file"
+                    multiple
+                    accept=".patch,.diff,.txt"
+                    className="hidden"
+                    onChange={handlePatchPairUpload}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => patchPairInputRef.current?.click()}
+                  >
+                    Load patch pair (.diff/.patch)
+                  </Button>
+                  {patchPairLabel && (
+                    <span className="text-[11px] text-gray-500">
+                      Loaded: {patchPairLabel}
+                    </span>
+                  )}
+                </div>
+
                 <div className="space-y-2">
                   <Label>Are these two patches code clones?</Label>
                   <RadioGroup
@@ -1679,7 +2212,7 @@ export default function ArtifactsComparison() {
                     className="border rounded px-2 py-1 text-sm w-full bg-white"
                   >
                     <option value="">Choose category...</option>
-                    {BUG_CATEGORIES.map((c) => (
+                    {bugCategoryOptions.map((c) => (
                       <option key={c} value={c}>
                         {c}
                       </option>
@@ -1780,6 +2313,30 @@ export default function ArtifactsComparison() {
                     placeholder="E.g., 'Class handles both persistence and business logic, so SRP is violated; refactoring requires splitting responsibilities, so I marked it MEDIUM.'"
                   />
                 </div>
+
+                {showSolidGroundTruth && currentSolidRecord && (
+                  <div className="border rounded-md bg-amber-100/60 p-3 text-xs text-amber-900 space-y-2">
+                    <p className="font-semibold text-amber-900">
+                      Ground truth (for reviewers only)
+                    </p>
+                    <p>
+                      <span className="font-semibold">Violation:</span>{" "}
+                      {currentSolidRecord.violation || "n/a"}
+                    </p>
+                    <p>
+                      <span className="font-semibold">Difficulty:</span>{" "}
+                      {currentSolidRecord.level || "n/a"}
+                    </p>
+                    {currentSolidRecord.output && (
+                      <div>
+                        <p className="font-semibold mb-1">LLM suggestion:</p>
+                        <pre className="bg-white border rounded-md p-2 text-[11px] text-gray-800 whitespace-pre-wrap">
+                          {currentSolidRecord.output}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             ) : mode === "snapshot" ? (
               <>
@@ -1815,6 +2372,37 @@ export default function ArtifactsComparison() {
                 </div>
 
                 <div className="space-y-2">
+                  <Label>
+                    Which UI change best explains the highlighted diff?
+                  </Label>
+                  <select
+                    value={snapshotChangeType}
+                    onChange={(e) => setSnapshotChangeType(e.target.value)}
+                    className="border rounded px-2 py-1 text-sm w-full bg-white"
+                  >
+                    <option value="">Choose change type...</option>
+                    {SNAPSHOT_CHANGE_TYPES.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                  {snapshotChangeType === "other" && (
+                    <input
+                      value={snapshotChangeTypeOther}
+                      onChange={(e) => setSnapshotChangeTypeOther(e.target.value)}
+                      className="border rounded px-2 py-1 text-sm w-full"
+                      placeholder="Describe the UI change"
+                    />
+                  )}
+                  <p className="text-[11px] text-gray-400">
+                    These tags help reviewers see whether participants agreed
+                    on the type of visual change (color shift, layout, missing
+                    content, etc.).
+                  </p>
+                </div>
+
+                <div className="space-y-2">
                   <Label htmlFor="snapshot-comment">
                     Notes (brief explanation of your choice)
                   </Label>
@@ -1839,7 +2427,7 @@ export default function ArtifactsComparison() {
                       className="border rounded px-2 py-1 text-sm w-full bg-white"
                     >
                       <option value="">Select...</option>
-                      {BUG_CATEGORIES.map((c) => (
+                      {bugCategoryOptions.map((c) => (
                         <option key={c} value={c}>
                           {c}
                         </option>
@@ -1854,7 +2442,7 @@ export default function ArtifactsComparison() {
                       className="border rounded px-2 py-1 text-sm w-full bg-white"
                     >
                       <option value="">Select...</option>
-                      {BUG_CATEGORIES.map((c) => (
+                      {bugCategoryOptions.map((c) => (
                         <option key={c} value={c}>
                           {c}
                         </option>
@@ -1919,7 +2507,7 @@ export default function ArtifactsComparison() {
                               className="border rounded px-2 py-1 text-sm w-full bg-white"
                             >
                               <option value="">Choose category...</option>
-                              {BUG_CATEGORIES.map((c) => (
+                              {bugCategoryOptions.map((c) => (
                                 <option key={c} value={c}>
                                   {c}
                                 </option>
@@ -1968,7 +2556,7 @@ export default function ArtifactsComparison() {
                               className="border rounded px-2 py-1 text-sm w-full bg-white"
                             >
                               <option value="">Select...</option>
-                              {BUG_CATEGORIES.map((c) => (
+                              {bugCategoryOptions.map((c) => (
                                 <option key={c} value={c}>
                                   {c}
                                 </option>
@@ -2008,6 +2596,11 @@ export default function ArtifactsComparison() {
                 size="lg"
                 className="bg-black text-white hover:bg-gray-800"
                 onClick={() => {
+                  const validationMessage = validateBeforeSave();
+                  if (validationMessage) {
+                    alert(validationMessage);
+                    return;
+                  }
                   const finalPatchCloneType =
                     patchCloneType ||
                     (patchAreClones === "yes" ? "unspecified" : "");
@@ -2015,6 +2608,10 @@ export default function ArtifactsComparison() {
                     finalCategory === "other" && finalOtherCategory
                       ? finalOtherCategory
                       : finalCategory || (labelsMatch ? leftCategory : "");
+                  const resolvedSnapshotChangeType =
+                    snapshotChangeType === "other"
+                      ? snapshotChangeTypeOther.trim()
+                      : snapshotChangeType;
 
                   console.log("Saved assessment:", {
                     mode,
@@ -2035,6 +2632,12 @@ export default function ArtifactsComparison() {
                     patchCloneComment,
                     // Snapshot mode
                     snapshotOutcome,
+                    snapshotChangeType: resolvedSnapshotChangeType,
+                    snapshotArtifacts: {
+                      reference: snapshotAssets.reference?.name,
+                      failure: snapshotAssets.failure?.name,
+                      diff: snapshotDiffData?.name,
+                    },
                     // Generic notes
                     assessmentComment,
                     patchSimilarity,
