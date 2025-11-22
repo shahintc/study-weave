@@ -1,8 +1,8 @@
 import { GoogleGenAI } from '@google/genai';
-import { getInstruction } from '../../config/llmSystemInstructions.js';
+import { getInstruction } from '../../config/llmSystemInstructions.mjs';
 
 const ai = new GoogleGenAI({});
-const model = "gemini-2.5-flash";
+const model = "gemini-2.5-pro";
 
 export async function generateContent(prompt, systemInstruction='', uploadedFiles=[]) {
     const config = {
@@ -70,14 +70,14 @@ export async function generateContentRouteHandler(req, res){
         }
 
         let llmResponse = await generateContent(prompt, systemInstruction, uploadedFiles);
- 
+
          console.log(llmResponse)
- 
+
          if (parser && parser.parse) {
              console.log(`${key}: Calling parser`);
              llmResponse = parser.parse(llmResponse);
          }
- 
+
          res.json({ response: llmResponse });
      } catch (error) {
          console.error(error.message);

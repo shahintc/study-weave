@@ -4,7 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Plus, Trash2, Save, Upload, Zap, Clock, TrendingUp, Eye, Layers, Users, Search } from 'lucide-react';
 import { useNavigate } from "react-router-dom";
-import axios from "../api/axios";
+import api from "../api/axios";
 
 // --- SHADCN/UI COMPONENTS ---
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuizGenerationModal } from "./QuizGenerationModal";
 
 
 // --- ZOD SCHEMA (Assessment Builder) ---
@@ -94,7 +95,7 @@ function OptionsFieldArray({ questionIndex, control, errors }) {
             removeOption(optionIndex);
         } else {
             // Cannot remove if only two options remain (Zod minimum requirement)
-            alert("A question must have at least two options."); 
+            alert("A question must have at least two options.");
         }
     };
 
@@ -117,7 +118,7 @@ function OptionsFieldArray({ questionIndex, control, errors }) {
                             </FormItem>
                         )}
                     />
-                    
+
                     {/* Input for Option Text */}
                     <FormField
                         control={control}
@@ -131,11 +132,11 @@ function OptionsFieldArray({ questionIndex, control, errors }) {
                             </FormItem>
                         )}
                     />
-                    
-                    <Button 
-                        type="button" 
-                        variant="ghost" 
-                        size="sm" 
+
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
                         onClick={() => removeOptionHandler(oIndex)}
                         disabled={optionFields.length <= 2}
                     >
@@ -143,17 +144,17 @@ function OptionsFieldArray({ questionIndex, control, errors }) {
                     </Button>
                 </div>
             ))}
-            
-            <Button 
-                type="button" 
-                variant="outline" 
-                size="sm" 
+
+            <Button
+                type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => appendOption({ text: `Option ${optionFields.length + 1}`, isCorrect: false })}
                 className="mt-2"
             >
                 <Plus className="w-4 h-4 mr-2" /> Add Option
             </Button>
-            
+
             {/* Display validation error for the options array (e.g., must have a correct answer) */}
             {optionError && (
                 <p className="text-sm font-medium text-red-600 mt-2">
@@ -167,6 +168,8 @@ function OptionsFieldArray({ questionIndex, control, errors }) {
 // --- MAIN COMPONENT ---
 export default function AssessmentCreationPage() {
     const [isSaving, setIsSaving] = useState(false);
+    const [isQuizModalOpen, setIsQuizModalOpen] = useState(false);
+    const [isGenerating, setIsGenerating] = useState(false);
     const [participantSearch, setParticipantSearch] = useState("");
     const [participants, setParticipants] = useState([]);
     const [participantsError, setParticipantsError] = useState("");
@@ -220,7 +223,7 @@ export default function AssessmentCreationPage() {
             setIsParticipantsLoading(true);
             setParticipantsError("");
             try {
-                const { data } = await axios.get("/api/auth/participants");
+                const { data } = await api.get("/api/auth/participants");
                 setParticipants(data.users || []);
             } catch (error) {
                 console.error("Failed to load participants", error);
@@ -256,7 +259,7 @@ export default function AssessmentCreationPage() {
                 invitedParticipants: selectedParticipants,
             };
 
-            await axios.post("/api/competency/assessments", payload);
+            await api.post("/api/competency/assessments", payload);
             alert("✅ Assessment Template Saved Successfully!");
         } catch (error) {
             console.error("Save failed:", error);
@@ -265,10 +268,66 @@ export default function AssessmentCreationPage() {
             setIsSaving(false);
         }
     };
-    
+
     // Placeholder handlers
     const handleGenerateAI = () => {
-        alert("AI Generation Feature: Opens a dialog to input topic/prompt.");
+        setIsQuizModalOpen(true);
+    };
+
+    const handleGenerateQuiz = async (options) => {
+        setIsGenerating(true);
+        console.log("Generate quiz with options:", options);
+        const { questionType, topic, numQuestions, numTrueFalse } = options;
+
+        let prompt = "";
+        let key = "";
+
+        if (questionType === "multiple-choice") {
+            prompt = `Generate ${numQuestions} multiple choice questions, each with ${numTrueFalse} true or false choices about: ${topic}`;
+            key = "MULTIPLE_CHOICE_QUIZ_CREATION";
+        } else if (questionType === "open-ended") {
+            prompt = `Generate ${numQuestions} open-ended questions about: ${topic}`;
+            key = "OPEN_ENDED_QUIZ_CREATION";
+        }
+
+        try {
+            const response = await api.post("/api/llm", {
+                prompt,
+                key,
+            });
+            console.log("Backend response for AI generation:", response.data);
+            const newQuestionsData = response.data.response;
+
+            if (questionType === "multiple-choice") {
+                newQuestionsData.forEach((q) => {
+                    const newOptions = q.answers.map((ans) => ({
+                        text: ans.answer,
+                        isCorrect: ans.state,
+                    }));
+                    appendQuestion({
+                        ...defaultQuestion,
+                        title: q.question,
+                        type: "multiple_choice",
+                        options: newOptions,
+                    });
+                });
+            } else if (questionType === "open-ended") {
+                newQuestionsData.forEach((qTitle) => {
+                    appendQuestion({
+                        ...defaultQuestion,
+                        title: qTitle,
+                        type: "short_answer",
+                        options: [], // Open-ended questions do not have options
+                    });
+                });
+            }
+        } catch (error) {
+            console.error("Error generating quiz with AI:", error);
+            alert("❌ Failed to generate questions with AI. Check console for details.");
+        } finally {
+            setIsGenerating(false);
+            setIsQuizModalOpen(false);
+        }
     };
     const handleImportQuestions = () => {
         alert("Import Questions Feature: Opens file upload or paste dialog.");
@@ -326,9 +385,7 @@ export default function AssessmentCreationPage() {
                     </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                    <Button type="button" variant="outline" onClick={handleGenerateAI}>
-                        <Zap className="w-4 h-4 mr-2" /> Suggest questions
-                    </Button>
+
                     <Button type="button" variant="secondary" onClick={handleImportQuestions}>
                         <Upload className="w-4 h-4 mr-2" /> Import bank
                     </Button>
@@ -339,7 +396,7 @@ export default function AssessmentCreationPage() {
                 <form onSubmit={form.handleSubmit(onSubmit)}>
                     <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
                         <div className="space-y-6">
-                    
+
                             {/* --- ASSESSMENT METADATA (Title, Duration, Threshold) --- */}
                             <Card>
                                 <CardHeader>
@@ -347,7 +404,7 @@ export default function AssessmentCreationPage() {
                                     <CardDescription>Title, description, and scoring rules participants will see.</CardDescription>
                                 </CardHeader>
                                 <CardContent className="space-y-4">
-                            
+
                                     <FormField
                                         control={form.control}
                                         name="title"
@@ -444,22 +501,22 @@ export default function AssessmentCreationPage() {
                             <Card>
                                 <CardHeader><CardTitle>Questions editor</CardTitle></CardHeader>
                                 <CardContent className="space-y-6">
-                            
+
                             {/* Dynamic Question List */}
                             {questionFields.map((qField, qIndex) => (
                                 <div key={qField.id} className="border p-4 rounded-lg space-y-4 bg-gray-50/50">
                                     <div className="flex justify-between items-center">
                                         <h3 className="text-lg font-semibold text-gray-700">Question {qIndex + 1}</h3>
-                                        <Button 
-                                            type="button" 
-                                            variant="destructive" 
-                                            size="sm" 
+                                        <Button
+                                            type="button"
+                                            variant="destructive"
+                                            size="sm"
                                             onClick={() => removeQuestion(qIndex)}
                                         >
-                                            <Trash2 className="w-4 h-4 mr-2" /> Delete Q
+                                            <Trash2 className="w-4 h-4 mr-2" /> Delete Question
                                         </Button>
                                     </div>
-                                    
+
                                     {/* Question Title */}
                                     <FormField
                                         control={form.control}
@@ -530,7 +587,7 @@ export default function AssessmentCreationPage() {
                                     <Zap className="w-4 h-4 mr-2" /> Generate with AI
                                 </Button>
                             </div>
-                            
+
                         </CardContent>
                     </Card>
 
@@ -673,6 +730,13 @@ export default function AssessmentCreationPage() {
                     </div>
                 </form>
             </Form>
+            {/* Quiz Generation Modal */}
+            <QuizGenerationModal
+                isOpen={isQuizModalOpen}
+                onClose={() => setIsQuizModalOpen(false)}
+                onGenerate={handleGenerateQuiz}
+                isGenerating={isGenerating}
+            />
         </div>
     );
 }
