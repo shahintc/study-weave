@@ -33,12 +33,7 @@ const WIZARD_STEPS = [
   { id: 3, label: "Launch", helper: "Review + send invites" },
 ];
 
-const DEFAULT_CRITERIA = [
-  { label: "Readability", weight: 30 },
-  { label: "Correctness", weight: 30 },
-  { label: "Maintainability", weight: 20 },
-  { label: "Confidence notes", weight: 20 },
-];
+const DEFAULT_CRITERIA = [];
 
 const ASSESSMENTS = [
   { id: "asm-1", title: "Baseline Competency Check", completions: 12 },
@@ -79,6 +74,7 @@ function StudyCreationWizard() {
   const [participantsError, setParticipantsError] = useState("");
   const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
   const [selectedParticipants, setSelectedParticipants] = useState([]);
+  const [expandedParticipants, setExpandedParticipants] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
   const [artifactsError, setArtifactsError] = useState("");
   const [isArtifactsLoading, setIsArtifactsLoading] = useState(false);
@@ -105,22 +101,9 @@ function StudyCreationWizard() {
     if (user?.id) return user.id;
     if (user?.userId) return user.userId;
     return 1;
-  }, [user]);
+  }, [user?.id]);
 
   useEffect(() => {
-    const fetchParticipants = async () => {
-      setIsParticipantsLoading(true);
-      setParticipantsError("");
-      try {
-        const { data } = await axios.get("/api/auth/participants");
-        setParticipants(data.users || []);
-      } catch (error) {
-        console.error("Failed to load participants", error);
-        setParticipantsError(error.response?.data?.message || "Unable to load participants");
-      } finally {
-        setIsParticipantsLoading(false);
-      }
-    };
     const fetchArtifacts = async () => {
       setIsArtifactsLoading(true);
       setArtifactsError("");
@@ -155,9 +138,32 @@ function StudyCreationWizard() {
         setIsArtifactsLoading(false);
       }
     };
-    fetchParticipants();
     fetchArtifacts();
   }, [artifactOwnerId]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      return;
+    }
+
+    const fetchParticipants = async () => {
+      setIsParticipantsLoading(true);
+      setParticipantsError("");
+      try {
+        const { data } = await axios.get("/api/competency/participants/overview", {
+          params: { researcherId: user.id },
+        });
+        setParticipants(data.participants || []);
+      } catch (error) {
+        console.error("Failed to load competency participants", error);
+        setParticipantsError(error.response?.data?.message || "Unable to load competency participants");
+      } finally {
+        setIsParticipantsLoading(false);
+      }
+    };
+
+    fetchParticipants();
+  }, [user]);
 
   const progressPercent = useMemo(() => {
     const progress = ((currentStep + 1) / WIZARD_STEPS.length) * 100;
@@ -238,15 +244,19 @@ function StudyCreationWizard() {
   };
 
   const filteredParticipants = useMemo(() => {
+    const list = Array.isArray(participants) ? participants : [];
     if (!participantSearch.trim()) {
-      return participants;
+      return list;
     }
     const term = participantSearch.toLowerCase();
-    return participants.filter((participant) => {
-      return (
-        participant.name.toLowerCase().includes(term) ||
-        participant.email.toLowerCase().includes(term)
+    return list.filter((participant) => {
+      const name = participant.name?.toLowerCase() || "";
+      const email = participant.email?.toLowerCase() || "";
+      const assignments = Array.isArray(participant.assignments) ? participant.assignments : [];
+      const matchesAssignment = assignments.some((assignment) =>
+        (assignment.assessmentTitle || "").toLowerCase().includes(term),
       );
+      return name.includes(term) || email.includes(term) || matchesAssignment;
     });
   }, [participantSearch, participants]);
 
@@ -261,6 +271,55 @@ function StudyCreationWizard() {
   const selectAllParticipants = () => {
     const everyId = participants.map((participant) => participant.id);
     setSelectedParticipants(everyId);
+  };
+
+  const toggleParticipantDetails = (participantId) => {
+    setExpandedParticipants((prev) =>
+      prev.includes(participantId)
+        ? prev.filter((id) => id !== participantId)
+        : [...prev, participantId],
+    );
+  };
+
+  const humanize = (value) => {
+    if (!value) return "Unknown";
+    return value
+      .split("_")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  };
+
+  const decisionLabel = (decision) => {
+    if (!decision || decision === "undecided") {
+      return "Awaiting decision";
+    }
+    return humanize(decision);
+  };
+
+  const statusToneClass = (status) => {
+    const normalized = (status || "").toLowerCase();
+    if (normalized === "reviewed") return "bg-emerald-600 text-white";
+    if (normalized === "submitted") return "bg-blue-600 text-white";
+    if (normalized === "in_progress") return "bg-amber-500 text-white";
+    if (normalized === "pending") return "bg-muted text-foreground";
+    return "bg-muted text-foreground";
+  };
+
+  const decisionToneClass = (decision) => {
+    const normalized = (decision || "").toLowerCase();
+    if (normalized === "approved") return "bg-green-600 text-white";
+    if (normalized === "rejected") return "bg-destructive text-destructive-foreground";
+    return "bg-muted text-foreground";
+  };
+
+  const formatDateTime = (value, fallback = "—") => {
+    if (!value) return fallback;
+    return new Date(value).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   };
 
    const getTotalWeight = () => {
@@ -476,13 +535,13 @@ function StudyCreationWizard() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label>Evaluation criteria</Label>
-                  <p className="text-xs text-muted-foreground">
-                    e.g., Readability, Correctness, Maintainability, Confidence…
-                  </p>
                   <Button variant="ghost" size="sm" onClick={() => setIsDialogOpen(true)}>
                     Add new +
                   </Button>
                 </div>
+                <p className="text-sm text-muted-foreground">
+                  e.g., Readability, Correctness, Maintainability, Confidence…
+                </p>
                 <div className="space-y-2 rounded-md border p-4">
                   {criteria.map((item, index) => (
                     <div key={`${item.label}-${index}`} className="flex items-center justify-between text-sm">
@@ -503,126 +562,128 @@ function StudyCreationWizard() {
           {currentStep === 2 ? (
             <>
               <div className="space-y-4 rounded-md border p-4">
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="require-assessment"
-                    checked={requireAssessment}
-                    onCheckedChange={setRequireAssessment}
-                  />
-                  <Label htmlFor="require-assessment" className="font-normal">
-                    Require participants to pass a competency assessment
-                  </Label>
-                </div>
-                {requireAssessment ? (
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label>Choose assessment</Label>
-                      <div className="space-y-2">
-                        {ASSESSMENTS.map((assessment) => (
-                          <div
-                            key={assessment.id}
-                            className={`flex items-center justify-between rounded-md border p-3 text-sm ${selectedAssessment === assessment.id ? "border-primary bg-primary/5" : ""}`}
-                          >
-                            <div>
-                              <p className="font-medium">{assessment.title}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {assessment.completions} completions
-                              </p>
-                            </div>
-                            <Checkbox
-                              checked={selectedAssessment === assessment.id}
-                              onCheckedChange={() => setSelectedAssessment(assessment.id)}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Target participant segment</Label>
-                      <div className="space-y-2">
-                        {PARTICIPANT_SEGMENTS.map((segment) => (
-                          <div
-                            key={segment.id}
-                            className={`flex items-center justify-between rounded-md border p-3 text-sm ${selectedSegment === segment.id ? "border-primary bg-primary/5" : ""}`}
-                          >
-                            <span>{segment.label}</span>
-                            <Checkbox
-                              checked={selectedSegment === segment.id}
-                              onCheckedChange={() => setSelectedSegment(segment.id)}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <Separator />
-                    <div className="space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <Label>Select participants</Label>
-                          <p className="text-xs text-muted-foreground">
-                            {isParticipantsLoading
-                              ? "Loading participants…"
-                              : `${selectedParticipants.length} selected • these folks will receive the competency quiz.`}
-                          </p>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={selectAllParticipants}
-                          disabled={!participants.length}
-                        >
-                          Select all
-                        </Button>
-                      </div>
-                      <Input
-                        placeholder="Search by name or email"
-                        value={participantSearch}
-                        onChange={(event) => setParticipantSearch(event.target.value)}
-                        disabled={!participants.length}
-                      />
-                      {participantsError ? (
-                        <p className="text-xs text-destructive">{participantsError}</p>
-                      ) : null}
-                      <div className="max-h-[280px] space-y-2 overflow-y-auto rounded-md border p-2">
-                        {isParticipantsLoading ? (
-                          <p className="py-6 text-center text-xs text-muted-foreground">Fetching participants…</p>
-                        ) : filteredParticipants.length ? (
-                          filteredParticipants.map((participant) => (
-                            <div
-                              key={participant.id}
-                              className={`flex flex-col gap-1 rounded-md border p-3 text-sm md:flex-row md:items-center md:justify-between ${
-                                selectedParticipants.includes(participant.id) ? "border-primary bg-primary/5" : "border-muted"
-                              }`}
-                            >
-                              <div>
-                                <p className="font-medium text-foreground">
-                                  {participant.name}
-                                  <span className="text-muted-foreground"> • {participant.email}</span>
-                                </p>
-                                <p className="text-xs text-muted-foreground">
-                                  {participant.role || "participant"} • Joined{" "}
-                                  {participant.created_at
-                                    ? new Date(participant.created_at).toLocaleDateString()
-                                    : "—"}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Badge variant="outline">Eligible</Badge>
-                                <Checkbox
-                                  checked={selectedParticipants.includes(participant.id)}
-                                  onCheckedChange={() => toggleParticipant(participant.id)}
-                                />
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <p className="py-6 text-center text-xs text-muted-foreground">No participants match this search.</p>
-                        )}
-                      </div>
-                    </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <Label>Select participants</Label>
+                    <p className="text-xs text-muted-foreground">
+                      {isParticipantsLoading
+                        ? "Loading participants…"
+                        : `${selectedParticipants.length} selected • showing everyone tied to your competency quizzes.`}
+                    </p>
                   </div>
-                ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={selectAllParticipants}
+                    disabled={!participants.length}
+                  >
+                    Select all
+                  </Button>
+                </div>
+
+                <Input
+                  placeholder="Search by name or assessment"
+                  value={participantSearch}
+                  onChange={(event) => setParticipantSearch(event.target.value)}
+                  disabled={!participants.length}
+                />
+
+                {participantsError ? <p className="text-xs text-destructive">{participantsError}</p> : null}
+
+                <div className="max-h-[280px] space-y-2 overflow-y-auto rounded-md border p-2">
+                  {isParticipantsLoading ? (
+                    <p className="py-6 text-center text-xs text-muted-foreground">Fetching participants…</p>
+                  ) : filteredParticipants.length ? (
+                    filteredParticipants.map((participant) => {
+                            const assignments = Array.isArray(participant.assignments)
+                              ? participant.assignments
+                              : [];
+                            const hasAssignments = assignments.length > 0;
+                            const isExpanded = expandedParticipants.includes(participant.id);
+                            return (
+                              <div
+                                key={participant.id}
+                                className={`flex flex-col gap-3 rounded-md border p-3 text-sm ${
+                                  selectedParticipants.includes(participant.id)
+                                    ? "border-primary bg-primary/5"
+                                    : "border-muted"
+                                }`}
+                              >
+                                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                  <div>
+                                    <p className="font-medium text-foreground">
+                                      {participant.name || "Participant"}
+                                      <span className="text-muted-foreground"> • {participant.email}</span>
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {hasAssignments
+                                        ? `${assignments.length} competency ${assignments.length === 1 ? "test" : "tests"} • Last update ${formatDateTime(participant.lastActivity, "—")}`
+                                        : "No competency assignments yet"}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Badge
+                                      variant={participant.hasApproved ? "default" : "outline"}
+                                      className={participant.hasApproved ? "bg-emerald-600 text-white" : ""}
+                                    >
+                                      {participant.hasApproved ? "Has approved quiz" : "Awaiting approval"}
+                                    </Badge>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      className="px-2"
+                                      onClick={() => toggleParticipantDetails(participant.id)}
+                                    >
+                                      {isExpanded ? "Hide details" : "See details"}
+                                    </Button>
+                                    <Checkbox
+                                      checked={selectedParticipants.includes(participant.id)}
+                                      onCheckedChange={() => toggleParticipant(participant.id)}
+                                    />
+                                  </div>
+                                </div>
+                                {isExpanded ? (
+                                  <div className="space-y-2 rounded-md border bg-muted/40 p-2 text-xs">
+                                    {hasAssignments ? (
+                                      assignments.map((assignment) => (
+                                        <div
+                                          key={assignment.assignmentId}
+                                          className="flex flex-col gap-2 rounded-md bg-background/70 p-2 md:flex-row md:items-center md:justify-between"
+                                        >
+                                          <div>
+                                            <p className="font-medium text-foreground">{assignment.assessmentTitle}</p>
+                                            <p className="text-[11px] text-muted-foreground">
+                                              Updated {formatDateTime(assignment.updatedAt || assignment.createdAt, "—")}
+                                            </p>
+                                          </div>
+                                          <div className="flex flex-wrap gap-2">
+                                            <Badge className={statusToneClass(assignment.status)}>
+                                              {humanize(assignment.status)}
+                                            </Badge>
+                                            <Badge className={decisionToneClass(assignment.decision)}>
+                                              {decisionLabel(assignment.decision)}
+                                            </Badge>
+                                          </div>
+                                        </div>
+                                      ))
+                                    ) : (
+                                      <p className="text-muted-foreground">
+                                        This participant has not been added to a competency quiz yet.
+                                      </p>
+                                    )}
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })
+                  ) : (
+                    <p className="py-6 text-center text-xs text-muted-foreground">
+                      No competency participants match this search.
+                    </p>
+                  )}
+                </div>
               </div>
               <div className="flex items-center space-x-2">
                 <Checkbox id="auto-invite" checked={autoInvite} onCheckedChange={setAutoInvite} />

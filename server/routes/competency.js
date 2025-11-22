@@ -182,7 +182,7 @@ router.get('/assignments/submitted', async (req, res) => {
         {
           model: User,
           as: 'participant',
-          attributes: ['id', 'name', 'email'],
+          attributes: ['id', 'name', 'email', 'created_at'],
         },
       ],
       order: [['submittedAt', 'DESC']],
@@ -267,6 +267,86 @@ router.get('/assignments/researcher', async (req, res) => {
   } catch (error) {
     console.error('Fetch researcher assignments error', error);
     return res.status(500).json({ message: 'Unable to load researcher assignments right now.' });
+  }
+});
+
+router.get('/participants/overview', async (req, res) => {
+  try {
+    const { researcherId } = req.query;
+    if (!researcherId) {
+      return res.status(400).json({ message: 'researcherId is required.' });
+    }
+
+    const assignments = await CompetencyAssignment.findAll({
+      where: { researcherId },
+      include: [
+        {
+          model: CompetencyAssessment,
+          as: 'assessment',
+        },
+        {
+          model: User,
+          as: 'participant',
+          attributes: ['id', 'name', 'email'],
+        },
+      ],
+      order: [['updatedAt', 'DESC']],
+    });
+
+    const participantsMap = new Map();
+
+    assignments.forEach((record) => {
+      const plain = record.get({ plain: true });
+      const participant = plain.participant;
+      if (!participant) {
+        return;
+      }
+
+      const assessment = plain.assessment || {};
+      const joinedAt = participant.createdAt || participant.created_at || null;
+      const current = participantsMap.get(participant.id) || {
+        id: participant.id,
+        name: participant.name,
+        email: participant.email,
+        assignments: [],
+        hasApproved: false,
+        lastActivity: null,
+        joinedAt,
+      };
+
+      const assignmentSummary = {
+        assignmentId: plain.id,
+        assessmentId: plain.assessmentId,
+        assessmentTitle: assessment.title || 'Assessment',
+        status: plain.status,
+        decision: plain.decision,
+        submittedAt: plain.submittedAt,
+        reviewedAt: plain.reviewedAt,
+        updatedAt: plain.updatedAt,
+        createdAt: plain.createdAt,
+      };
+
+      current.assignments.push(assignmentSummary);
+      current.hasApproved = current.hasApproved || plain.decision === 'approved';
+
+      const latestTimestamp = plain.updatedAt || plain.createdAt;
+      if (!current.lastActivity || new Date(latestTimestamp) > new Date(current.lastActivity)) {
+        current.lastActivity = latestTimestamp;
+      }
+
+      participantsMap.set(participant.id, current);
+    });
+
+    const participants = Array.from(participantsMap.values()).sort((a, b) => {
+      const dateA = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
+      const dateB = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
+      return dateB - dateA;
+    });
+
+    return res.json({ participants });
+  } catch (error) {
+    console.error('Fetch competency participants overview error', error);
+    return res.status(500).json({ message: 'Unable to load competency participants right now.' });
   }
 });
 
