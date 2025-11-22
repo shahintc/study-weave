@@ -1,6 +1,7 @@
 // ArtifactsComparison.jsx — React (.jsx)
 
 import { useEffect, useRef, useState } from "react";
+import { createTwoFilesPatch } from "diff";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,7 +14,47 @@ import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 
-/** Small helper for unique ids */
+/** Bug categories (from bug_categories.md idea) */
+const BUG_CATEGORIES = [
+  "Functional",
+  "Configuration",
+  "Security",
+  "Performance",
+  "GUI",
+  "Documentation",
+  "Other",
+];
+
+/** SOLID violation categories */
+const SOLID_VIOLATIONS = [
+  { id: "srp", label: "SRP – Single Responsibility Principle" },
+  { id: "ocp", label: "OCP – Open/Closed Principle" },
+  { id: "lsp", label: "LSP – Liskov Substitution Principle" },
+  { id: "isp", label: "ISP – Interface Segregation Principle" },
+  { id: "dip", label: "DIP – Dependency Inversion Principle" },
+];
+
+const COMPLEXITY_LEVELS = ["EASY", "MEDIUM", "HARD"];
+
+/** Clone categories for patch mode */
+const PATCH_CLONE_TYPES = [
+  { id: "type1", label: "Type-1 – Exact (whitespace/comments only)" },
+  { id: "type2", label: "Type-2 – Same structure, different identifiers" },
+  { id: "type3", label: "Type-3 – Copied with added/removed/modified lines" },
+  {
+    id: "type4",
+    label: "Type-4 – Semantically similar, different implementation",
+  },
+];
+
+/** Snapshot study outcomes */
+const SNAPSHOT_OUTCOMES = [
+  { id: "failure", label: "Actual failure" },
+  { id: "intended", label: "Intended UI change" },
+  { id: "unclear", label: "Unclear / not sure" },
+];
+
+/** Small helper for unique ids (used only for annotations etc.) */
 const uid = () => Math.random().toString(36).slice(2, 9);
 
 /** Helper: Convert file to Base64 (for storage) */
@@ -55,13 +96,166 @@ const base64ToBlobUrl = (base64) => {
   }
 };
 
-const STORAGE_KEY = "artifacts-comparison-autosave-v6-fixed";
+// Ensure we have patch-like text for a side when in patch mode.
+// If the text is already a diff -> return it unchanged.
+// Otherwise, create a unified diff against the OTHER pane.
+const ensurePatchText = (side, leftData, rightData) => {
+  const isLeft = side === "left";
+  const current = isLeft ? leftData : rightData;
+
+  // Strip your artificial line numbers first
+  const currentText = stripLineNumbers(current.text || "");
+
+  // If it already looks like a diff, just use it
+  if (isDiffLike(currentText)) return currentText;
+
+  // Only generate a diff if the other side is also text
+  const other = isLeft ? rightData : leftData;
+  if (other.type !== "text") return currentText;
+
+  const otherText = stripLineNumbers(other.text || "");
+
+  // createTwoFilesPatch(oldFileName, newFileName, oldStr, newStr, oldHeader, newHeader)
+  const patch = createTwoFilesPatch(
+    current.name || (isLeft ? "A" : "B"),
+    other.name || (isLeft ? "B" : "A"),
+    currentText,
+    otherText,
+    "",
+    ""
+  );
+
+  return patch;
+};
+
+/** Text helpers for line numbering */
+const stripLineNumbers = (text) =>
+  text ? text.replace(/^\s*\d+\.\s*/gm, "") : "";
+
+const numberLines = (text) => {
+  if (!text) return "";
+  return stripLineNumbers(text)
+    .split(/\r?\n/)
+    .map((line, idx) => `${idx + 1}. ${line}`)
+    .join("\n");
+};
+
+/**
+ * Auto-detects if a text looks like a diff/patch file
+ */
+const isDiffLike = (text) => {
+  if (!text) return false;
+  if (/^diff --git /m.test(text)) return true;
+  if (/^Index:/m.test(text)) return true;
+  if (/^@@ /m.test(text)) return true;
+  if (/^--- /m.test(text) || /^\+\+\+ /m.test(text)) return true;
+  // many lines starting with + or - (but not +++, ---)
+  const plusMinus = text.match(/^[+-](?![+-])/gm);
+  return plusMinus && plusMinus.length > 3;
+};
+
+/**
+ * Normalize content lines for similarity comparison (ignore diff markers & headers)
+ */
+const getNormalizedContentLines = (text) => {
+  if (!text) return [];
+  return text
+    .split(/\r?\n/)
+    .map((line) => {
+      let l = line;
+      if (/^diff --git /.test(l)) return null;
+      if (/^Index:/.test(l)) return null;
+      if (/^@@/.test(l)) return null;
+      if (/^(\+\+\+|---)/.test(l)) return null;
+      // remove leading + or - for diff content
+      if (/^[+-](?![+-])/.test(l)) {
+        l = l.slice(1);
+      }
+      return l.trim();
+    })
+    .filter((l) => l);
+};
+
+/**
+ * Build diff line descriptors: { raw, type, inOther }
+ */
+const buildDiffLines = (text, otherSet) => {
+  const lines = text ? text.split(/\r?\n/) : [];
+  return lines.map((raw, idx) => {
+    let type = "context";
+    if (/^diff --git /.test(raw) || /^Index:/.test(raw) || /^(\+\+\+|---)/.test(raw)) {
+      type = "header";
+    } else if (/^@@/.test(raw)) {
+      type = "hunk";
+    } else if (/^\+(?!\+)/.test(raw)) {
+      type = "add";
+    } else if (/^-(?!-)/.test(raw)) {
+      type = "del";
+    }
+
+    let normalized = raw.replace(/^[-+]/, "").trim();
+    if (/^diff --git /.test(raw) || /^Index:/.test(raw) || /^(\+\+\+|---)/.test(raw) || /^@@/.test(raw)) {
+      normalized = "";
+    }
+    const inOther = !!(otherSet && normalized && otherSet.has(normalized));
+
+    return { id: idx, raw, type, inOther };
+  });
+};
+
+/**
+ * Helper: Try to interpret a JSON file as defects4j_metadata and
+ * download a bug report from URL if available.
+ * Returns true if it successfully handled as metadata, false otherwise.
+ */
+async function loadDefectFromMetadata(parsed, setData) {
+  try {
+    // Try to find an array of bug objects
+    const bugsArray = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed.bugs)
+      ? parsed.bugs
+      : Array.isArray(parsed.defects)
+      ? parsed.defects
+      : null;
+
+    if (!bugsArray || bugsArray.length === 0) {
+      return false;
+    }
+
+    const bug = bugsArray[0];
+    const url = bug.report_url || bug.url;
+    if (!url) return false;
+
+    const resp = await fetch(url);
+    if (!resp.ok) return false;
+
+    const text = await resp.text();
+    setData({
+      type: "text",
+      text: numberLines(text),
+      name: url,
+    });
+
+    return true;
+  } catch (err) {
+    console.error("Failed to load from metadata:", err);
+    return false;
+  }
+}
+
+const STORAGE_KEY = "artifacts-comparison-autosave-v9-bug-solid-patch";
 
 export default function ArtifactsComparison() {
+  // ===== GLOBAL MODES =====
+  // stage1: participant labels a single bug report
+  // stage2: reviewer compares two labels (participant vs participant/AI)
+  // solid: participant labels SOLID violation + complexity for a code snippet
+  // patch: compare two patches and classify clone type
+  // snapshot: participant decides if screenshot case is failure vs intended UI change
+  const [mode, setMode] = useState("stage2");
+
   const [syncScroll, setSyncScroll] = useState(true);
-  const [artifactChoice, setArtifactChoice] = useState("a");
-  const [rating, setRating] = useState(3);
-  const [viewMode, setViewMode] = useState("split");
   const [showBig, setShowBig] = useState(false);
 
   const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(true);
@@ -92,7 +286,30 @@ export default function ArtifactsComparison() {
   const [leftSummaryStatus, setLeftSummaryStatus] = useState("idle");
   const [rightSummaryStatus, setRightSummaryStatus] = useState("idle");
 
-  // Pending Comment State
+  // Labeling states for bug tasks
+  const [leftCategory, setLeftCategory] = useState(""); // participant 1 or stage1 label
+  const [rightCategory, setRightCategory] = useState(""); // participant 2 or AI label
+  const [matchCorrectness, setMatchCorrectness] = useState(""); // "correct" | "incorrect" | ""
+  const [finalCategory, setFinalCategory] = useState(""); // final choice in stage2
+  const [finalOtherCategory, setFinalOtherCategory] = useState(""); // if reviewer chooses "other"
+
+  // SOLID mode classification
+  const [solidViolation, setSolidViolation] = useState(""); // "srp" | "ocp" | ...
+  const [solidComplexity, setSolidComplexity] = useState(""); // "EASY" | "MEDIUM" | "HARD"
+  const [solidFixedCode, setSolidFixedCode] = useState(""); // optional refactored version
+
+  // Patch mode classification
+  const [patchAreClones, setPatchAreClones] = useState(""); // "yes" | "no"
+  const [patchCloneType, setPatchCloneType] = useState(""); // "type1".."type4"
+  const [patchCloneComment, setPatchCloneComment] = useState(""); // reasoning
+
+  // Snapshot mode outcome
+  const [snapshotOutcome, setSnapshotOutcome] = useState(""); // "failure" | "intended" | "unclear"
+
+  // Generic comment / notes
+  const [assessmentComment, setAssessmentComment] = useState("");
+
+  // Pending Comment State (for annotations)
   const [pendingAnnotation, setPendingAnnotation] = useState(null);
   const [pendingComment, setPendingComment] = useState("");
 
@@ -122,7 +339,9 @@ export default function ArtifactsComparison() {
   const leftDrawingState = useRef({ drawing: false, x: 0, y: 0 });
   const rightDrawingState = useRef({ drawing: false, x: 0, y: 0 });
 
-  const ACCEPT = ".png,.jpg,.jpeg,.pdf,.txt,.doc,.docx";
+  const ACCEPT =
+    ".png,.jpg,.jpeg,.pdf,.txt,.json,.patch,.diff," +
+    ".java,.js,.jsx,.ts,.tsx,.py,.c,.h,.cpp,.cs,.go,.rs,.kt,.php,.rb,.html,.css,.md";
   const radioClass =
     "relative h-4 w-4 rounded-full border border-gray-400 data-[state=checked]:border-black data-[state=checked]:ring-2 data-[state=checked]:ring-black before:content-[''] before:absolute before:inset-1 before:rounded-full before:bg-black before:opacity-0 data-[state=checked]:before:opacity-100";
 
@@ -138,11 +357,42 @@ export default function ArtifactsComparison() {
           if (saved.right) setRightData((prev) => ({ ...prev, ...saved.right }));
           if (Array.isArray(saved.leftAnn)) setLeftAnn(saved.leftAnn);
           if (Array.isArray(saved.rightAnn)) setRightAnn(saved.rightAnn);
-          if (typeof saved.rating === "number") setRating(saved.rating);
-          if (saved.artifactChoice) setArtifactChoice(saved.artifactChoice);
-          if (typeof saved.syncScroll === "boolean") setSyncScroll(saved.syncScroll);
+          if (typeof saved.syncScroll === "boolean")
+            setSyncScroll(saved.syncScroll);
           if (saved.leftSummary) setLeftSummary(saved.leftSummary);
           if (saved.rightSummary) setRightSummary(saved.rightSummary);
+          if (typeof saved.mode === "string") setMode(saved.mode);
+
+          if (typeof saved.leftCategory === "string")
+            setLeftCategory(saved.leftCategory);
+          if (typeof saved.rightCategory === "string")
+            setRightCategory(saved.rightCategory);
+          if (typeof saved.matchCorrectness === "string")
+            setMatchCorrectness(saved.matchCorrectness);
+          if (typeof saved.finalCategory === "string")
+            setFinalCategory(saved.finalCategory);
+          if (typeof saved.finalOtherCategory === "string")
+            setFinalOtherCategory(saved.finalOtherCategory);
+
+          if (typeof saved.solidViolation === "string")
+            setSolidViolation(saved.solidViolation);
+          if (typeof saved.solidComplexity === "string")
+            setSolidComplexity(saved.solidComplexity);
+          if (typeof saved.solidFixedCode === "string")
+            setSolidFixedCode(saved.solidFixedCode);
+
+          if (typeof saved.patchAreClones === "string")
+            setPatchAreClones(saved.patchAreClones);
+          if (typeof saved.patchCloneType === "string")
+            setPatchCloneType(saved.patchCloneType);
+          if (typeof saved.patchCloneComment === "string")
+            setPatchCloneComment(saved.patchCloneComment);
+
+          if (typeof saved.snapshotOutcome === "string")
+            setSnapshotOutcome(saved.snapshotOutcome);
+
+          if (typeof saved.assessmentComment === "string")
+            setAssessmentComment(saved.assessmentComment);
         }
       } catch (err) {
         console.error("Failed to load state", err);
@@ -161,15 +411,27 @@ export default function ArtifactsComparison() {
     if (typeof window === "undefined") return;
     try {
       const state = {
+        mode,
         left: leftData,
         right: rightData,
         leftAnn,
         rightAnn,
-        rating,
-        artifactChoice,
         syncScroll,
         leftSummary,
         rightSummary,
+        leftCategory,
+        rightCategory,
+        matchCorrectness,
+        finalCategory,
+        finalOtherCategory,
+        solidViolation,
+        solidComplexity,
+        solidFixedCode,
+        patchAreClones,
+        patchCloneType,
+        patchCloneComment,
+        snapshotOutcome,
+        assessmentComment,
       };
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch (err) {
@@ -185,15 +447,27 @@ export default function ArtifactsComparison() {
   useEffect(() => {
     scheduleAutosave();
   }, [
+    mode,
     leftData,
     rightData,
     leftAnn,
     rightAnn,
-    rating,
-    artifactChoice,
     syncScroll,
     leftSummary,
     rightSummary,
+    leftCategory,
+    rightCategory,
+    matchCorrectness,
+    finalCategory,
+    finalOtherCategory,
+    solidViolation,
+    solidComplexity,
+    solidFixedCode,
+    patchAreClones,
+    patchCloneType,
+    patchCloneComment,
+    snapshotOutcome,
+    assessmentComment,
   ]);
 
   // ===== RESET =====
@@ -203,23 +477,39 @@ export default function ArtifactsComparison() {
     setRightData({ type: "text", text: "" });
     setLeftAnn([]);
     setRightAnn([]);
-    setRating(3);
-    setArtifactChoice("a");
     setLeftSummary("");
     setRightSummary("");
     setLeftZoom(1);
     setRightZoom(1);
+    setLeftCategory("");
+    setRightCategory("");
+    setMatchCorrectness("");
+    setFinalCategory("");
+    setFinalOtherCategory("");
+    setSolidViolation("");
+    setSolidComplexity("");
+    setSolidFixedCode("");
+    setPatchAreClones("");
+    setPatchCloneType("");
+    setPatchCloneComment("");
+    setSnapshotOutcome("");
+    setAssessmentComment("");
 
-    [leftCanvasRef, rightCanvasRef, leftBigCanvasRef, rightBigCanvasRef].forEach(
-      (ref) => {
-        if (ref.current)
-          ref.current
-            .getContext("2d")
-            ?.clearRect(0, 0, ref.current.width, ref.current.height);
-      }
-    );
+    [
+      leftCanvasRef,
+      rightCanvasRef,
+      leftBigCanvasRef,
+      rightBigCanvasRef,
+    ].forEach((ref) => {
+      if (ref.current)
+        ref.current
+          .getContext("2d")
+          ?.clearRect(0, 0, ref.current.width, ref.current.height);
+    });
 
-    window.localStorage.removeItem(STORAGE_KEY);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(STORAGE_KEY);
+    }
   };
 
   // ===== SYNC SCROLL =====
@@ -259,18 +549,9 @@ export default function ArtifactsComparison() {
     };
   }, [syncScroll, showBig]);
 
-  // ===== TEXT HELPERS =====
-  const stripLineNumbers = (text) =>
-    text ? text.replace(/^\s*\d+\.\s*/gm, "") : "";
-  const numberLines = (text) => {
-    if (!text) return "";
-    return stripLineNumbers(text)
-      .split(/\r?\n/)
-      .map((line, idx) => `${idx + 1}. ${line}`)
-      .join("\n");
-  };
-
+  // ===== EDIT TOGGLE =====
   const toggleEdit = (side) => {
+    if (mode === "patch") return; // editing disabled in patch mode
     const isLeft = side === "left";
     const isEditing = isLeft ? leftEditing : rightEditing;
     const data = isLeft ? leftData : rightData;
@@ -297,12 +578,40 @@ export default function ArtifactsComparison() {
     if (!file) return;
 
     const name = file.name;
-    const isTxt = name.toLowerCase().endsWith(".txt");
-    const isImg = /\.(png|jpg|jpeg)$/i.test(name);
-    const isPdf = name.toLowerCase().endsWith(".pdf");
+    const lower = name.toLowerCase();
+    const textExts = [
+      ".txt",
+      ".patch",
+      ".diff",
+      ".java",
+      ".js",
+      ".jsx",
+      ".ts",
+      ".tsx",
+      ".py",
+      ".c",
+      ".h",
+      ".cpp",
+      ".cs",
+      ".go",
+      ".rs",
+      ".kt",
+      ".php",
+      ".rb",
+      ".html",
+      ".css",
+      ".md",
+    ];
 
-    if (!(isTxt || isImg || isPdf)) {
-      alert("Unsupported file type.");
+    const isTxt = textExts.some((ext) => lower.endsWith(ext));
+    const isImg = /\.(png|jpg|jpeg)$/i.test(name);
+    const isPdf = lower.endsWith(".pdf");
+    const isJson = lower.endsWith(".json");
+
+    if (!(isTxt || isImg || isPdf || isJson)) {
+      alert(
+        "Unsupported file type. Please upload .txt, .json, .pdf, image, .patch or .diff."
+      );
       return;
     }
 
@@ -315,16 +624,65 @@ export default function ArtifactsComparison() {
       setRightZoom(1);
     }
 
+    // JSON: either a direct bug report, metadata file, or SOLID-violations dataset
+    if (isJson) {
+      try {
+        const raw = await file.text();
+        const parsed = JSON.parse(raw);
+
+        // Try to treat as defects4j_metadata
+        const handled = await loadDefectFromMetadata(parsed, setData);
+        if (!handled) {
+          // Try to treat as SOLID violations dataset:
+          // either top-level array or { records: [...] } where each item has "input"
+          const solidArray = Array.isArray(parsed)
+            ? parsed
+            : Array.isArray(parsed.records)
+            ? parsed.records
+            : null;
+
+          if (
+            solidArray &&
+            solidArray.length > 0 &&
+            typeof solidArray[0].input === "string"
+          ) {
+            const first = solidArray[0];
+            // Show only the violating code (input) to the participant
+            setData({
+              type: "text",
+              text: numberLines(first.input),
+              name,
+            });
+            // We intentionally do NOT pre-fill solidViolation / solidComplexity,
+            // to avoid leaking ground truth answers.
+            return;
+          }
+
+          // Fallback: just show JSON content as numbered text
+          const pretty = JSON.stringify(parsed, null, 2);
+          setData({ type: "text", text: numberLines(pretty), name });
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Invalid JSON file.");
+      }
+      return;
+    }
+
+    // Plain text / diff / patch file
     if (isTxt) {
       const text = await file.text();
       setData({ type: "text", text: numberLines(text), name });
-    } else {
-      try {
-        const base64Url = await fileToBase64(file); // data:...base64
-        setData({ type: isImg ? "image" : "pdf", url: base64Url, name });
-      } catch (err) {
-        alert("Error reading file.");
-      }
+      return;
+    }
+
+    // Image or PDF
+    try {
+      const base64Url = await fileToBase64(file); // data:...base64
+      setData({ type: isImg ? "image" : "pdf", url: base64Url, name });
+    } catch (err) {
+      console.error(err);
+      alert("Error reading file.");
     }
   };
 
@@ -349,7 +707,7 @@ export default function ArtifactsComparison() {
     }
   };
 
-  // ===== SELECTION =====
+  // ===== SELECTION (annotations) =====
   const selectionOffsets = (container) => {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return null;
@@ -365,6 +723,7 @@ export default function ArtifactsComparison() {
   };
 
   const onSimpleHighlight = (side) => {
+    if (mode === "patch") return; // no annotations in patch mode
     const ref = showBig
       ? side === "left"
         ? leftBigRef
@@ -393,6 +752,7 @@ export default function ArtifactsComparison() {
   };
 
   const onAddComment = (side) => {
+    if (mode === "patch") return; // no annotations in patch mode
     const ref = showBig
       ? side === "left"
         ? leftBigRef
@@ -403,13 +763,13 @@ export default function ArtifactsComparison() {
     const container = ref.current?.querySelector('[data-content-area="true"]');
     if (!container) return;
 
+    const text = (side === "left" ? leftData.text : rightData.text) || "";
     const off = selectionOffsets(container);
     if (!off || off.start >= off.end) {
       alert("Please select text first.");
       return;
     }
 
-    const text = (side === "left" ? leftData.text : rightData.text) || "";
     const snippet =
       text.slice(off.start, Math.min(off.end, off.start + 50)).trim() + "...";
     setPendingAnnotation({ side, start: off.start, end: off.end, snippet });
@@ -485,7 +845,7 @@ export default function ArtifactsComparison() {
       cvs.style.width = `${img.width}px`;
       cvs.style.height = `${img.height}px`;
       const ctx = cvs.getContext("2d");
-      ctx.scale(dpr, dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
       ctx.lineWidth = 3;
@@ -630,40 +990,47 @@ export default function ArtifactsComparison() {
     const data = isLeft ? leftData : rightData;
     const editing = isLeft ? leftEditing : rightEditing;
     const isDraw = isLeft ? leftDraw : rightDraw;
+    const patchMode = mode === "patch";
 
     return (
       <div className="flex items-center justify-between px-3 py-2 border-b bg-white min-h-[46px]">
         <span className="font-semibold text-sm mr-2 truncate">{title}</span>
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
           {data.type === "text" ? (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs px-2"
-                onClick={() => toggleEdit(side)}
-              >
-                {editing ? "Done" : "Edit"}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs px-2 bg-gray-100 hover:bg-gray-200 text-gray-700"
-                disabled={editing}
-                onClick={() => onSimpleHighlight(side)}
-              >
-                Highlight
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs px-2 bg-gray-100 hover:bg-gray-200 text-gray-700"
-                disabled={editing}
-                onClick={() => onAddComment(side)}
-              >
-                Comment
-              </Button>
-            </>
+            patchMode ? (
+              <span className="text-[11px] text-gray-500 px-2 py-1 bg-gray-100 rounded">
+                Patch view (read-only)
+              </span>
+            ) : (
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2"
+                  onClick={() => toggleEdit(side)}
+                >
+                  {editing ? "Done" : "Edit"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs px-2 bg-gray-100 hover:bg-gray-200 text-gray-700"
+                  disabled={editing}
+                  onClick={() => onSimpleHighlight(side)}
+                >
+                  Highlight
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs px-2 bg-gray-100 hover:bg-gray-200 text-gray-700"
+                  disabled={editing}
+                  onClick={() => onAddComment(side)}
+                >
+                  Comment
+                </Button>
+              </>
+            )
           ) : (
             <>
               <Button
@@ -727,7 +1094,7 @@ export default function ArtifactsComparison() {
             size="sm"
             className="h-7 w-7 p-0"
             onClick={() =>
-              (isLeft ? leftFileRef : rightFileRef).current.click()
+              (isLeft ? leftFileRef : rightFileRef).current?.click()
             }
             title="Upload"
           >
@@ -769,7 +1136,7 @@ export default function ArtifactsComparison() {
     );
   };
 
-  const renderContent = (side, isBig = false) => {
+  const renderContent = (side, isBig = false, otherNormalizedSet = null) => {
     const isLeft = side === "left";
     const data = isLeft ? leftData : rightData;
     const zoom = isLeft ? leftZoom : rightZoom;
@@ -805,6 +1172,100 @@ export default function ArtifactsComparison() {
         </div>
       );
 
+    // PATCH MODE: unified diff visualization
+    if (mode === "patch" && data.type === "text" && data.text) {
+      // Always get a patch-like string (real patch or synthetic)
+      const rawText = ensurePatchText(side, leftData, rightData);
+      const diffLines = buildDiffLines(rawText, otherNormalizedSet);
+
+      return (
+        <div
+          ref={ref}
+          className="h-full w-full overflow-auto bg-slate-950 relative"
+        >
+          <div className="min-w-full text-xs font-mono text-slate-100">
+            {diffLines.map((line) => {
+              const isLeftSide = side === "left";
+              let bg = "bg-slate-950";
+              let symbol = " ";
+              let tooltip = "Context line (unchanged)";
+
+              if (isLeftSide) {
+                // Original code pane: neutral background
+                if (line.type === "header") {
+                  tooltip = "File header / metadata";
+                } else if (line.type === "hunk") {
+                  tooltip = "Hunk header (line range)";
+                } else if (line.type === "add") {
+                  symbol = "+";
+                  tooltip = "Added line";
+                } else if (line.type === "del") {
+                  symbol = "-";
+                  tooltip = "Deleted line";
+                } else {
+                  tooltip = "Context line (unchanged)";
+                }
+              } else {
+                // Comparison pane (Patch B): colors indicate relation to Patch A
+                if (line.type === "header") {
+                  bg = "bg-slate-800";
+                  tooltip = "File header / metadata";
+                } else if (line.type === "hunk") {
+                  bg = "bg-slate-900";
+                  tooltip = "Hunk header (line range)";
+                } else if (line.type === "add") {
+                  symbol = "+";
+                  if (line.inOther) {
+                    bg = "bg-emerald-900/60";
+                    tooltip = "Added line (also in Patch A)";
+                  } else {
+                    bg = "bg-emerald-900/90";
+                    tooltip = "Added line (only in Patch B)";
+                  }
+                } else if (line.type === "del") {
+                  symbol = "-";
+                  if (line.inOther) {
+                    bg = "bg-rose-900/60";
+                    tooltip = "Deleted line (also in Patch A)";
+                  } else {
+                    bg = "bg-rose-900/90";
+                    tooltip = "Deleted line (only in Patch B)";
+                  }
+                } else if (line.type === "context") {
+                  if (line.inOther) {
+                    bg = "bg-sky-900/50";
+                    tooltip = "Context line (shared with Patch A)";
+                  } else {
+                    bg = "bg-slate-950";
+                    tooltip = "Context line (only in Patch B)";
+                  }
+                }
+              }
+
+              return (
+                <div
+                  key={line.id}
+                  className={`flex items-start gap-2 px-3 py-0.5 border-b border-slate-900/60 ${bg}`}
+                  title={tooltip}
+                >
+                  <span className="w-8 text-right text-slate-500 select-none">
+                    {line.id + 1}
+                  </span>
+                  <span className="w-4 text-slate-400 select-none">
+                    {symbol}
+                  </span>
+                  <pre className="whitespace-pre-wrap flex-1">
+                    {line.raw}
+                  </pre>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    // Normal TEXT view (non-patch)
     if (data.type === "text") {
       return (
         <div
@@ -830,6 +1291,7 @@ export default function ArtifactsComparison() {
       );
     }
 
+    // IMAGE / PDF view
     return (
       <div
         ref={ref}
@@ -868,7 +1330,9 @@ export default function ArtifactsComparison() {
           <canvas
             ref={canvasRef}
             className={`absolute inset-0 z-10 ${
-              isDraw ? "cursor-crosshair pointer-events-auto" : "pointer-events-none"
+              isDraw
+                ? "cursor-crosshair pointer-events-auto"
+                : "pointer-events-none"
             }`}
             onMouseDown={(e) => isDraw && startDraw(side, e, isBig)}
             onMouseMove={(e) => isDraw && moveDraw(side, e, isBig)}
@@ -886,7 +1350,9 @@ export default function ArtifactsComparison() {
     return (
       <div className="border-t p-3 bg-gray-50/50">
         <div className="flex justify-between items-center mb-1">
-          <span className="text-xs font-semibold text-gray-600">AI Summary</span>
+          <span className="text-xs font-semibold text-gray-600">
+            AI Summary
+          </span>
           <Button
             variant="outline"
             size="sm"
@@ -904,15 +1370,86 @@ export default function ArtifactsComparison() {
     );
   };
 
+  const labelsMatch =
+    leftCategory && rightCategory && leftCategory === rightCategory;
+
+  // ===== PATCH SIMILARITY (heatmap bar) =====
+  let leftNormSet = null;
+  let rightNormSet = null;
+  let patchSimilarity = null;
+
+  if (
+    mode === "patch" &&
+    leftData.type === "text" &&
+    rightData.type === "text"
+  ) {
+    const leftLines = getNormalizedContentLines(stripLineNumbers(leftData.text));
+    const rightLines = getNormalizedContentLines(
+      stripLineNumbers(rightData.text)
+    );
+    leftNormSet = new Set(leftLines);
+    rightNormSet = new Set(rightLines);
+
+    let intersection = 0;
+    leftNormSet.forEach((v) => {
+      if (rightNormSet.has(v)) intersection += 1;
+    });
+    const unionSize =
+      leftNormSet.size + rightNormSet.size - intersection || 0;
+    const ratio = unionSize ? Math.round((intersection / unionSize) * 100) : 0;
+    patchSimilarity = ratio;
+  }
+
   // ===== MAIN RENDER =====
   return (
     <div className="min-h-screen bg-white p-6 text-gray-900 font-sans">
       <div className="max-w-[1400px] mx-auto space-y-6">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-bold">
-            Study: AI vs. Human Code Readability
-          </h1>
+          <div className="flex flex-col gap-1">
+            <h1 className="text-xl font-bold">
+              Bug & Code Labeling / Patch Tool
+            </h1>
+            <p className="text-xs text-gray-500">
+              Upload bug reports, SOLID-violation code snippets, patches, or
+              UI snapshots and assign labels, complexity, clone types, or
+              failure vs change decisions.
+            </p>
+          </div>
           <div className="flex items-center gap-3">
+            {/* Mode selector */}
+            <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-md border">
+              <label
+                htmlFor="mode-select"
+                className="text-xs font-medium text-gray-700"
+              >
+                Mode
+              </label>
+              <select
+                id="mode-select"
+                value={mode}
+                onChange={(e) => {
+                  setMode(e.target.value);
+                }}
+                className="border rounded-md px-2 py-1 text-xs bg-white"
+              >
+                <option value="stage1">
+                  Stage 1: Participant Bug Labeling
+                </option>
+                <option value="stage2">
+                  Stage 2: Reviewer Bug Label Comparison
+                </option>
+                <option value="snapshot">
+                  Snapshot Study: UI Change vs Failure
+                </option>
+                <option value="solid">
+                  SOLID Violations: Code & Complexity
+                </option>
+                <option value="patch">
+                  Patch Mode: Code Diff / Clone Detection
+                </option>
+              </select>
+            </div>
+
             <div className="flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-md border">
               <Checkbox
                 id="sync-mode"
@@ -939,6 +1476,9 @@ export default function ArtifactsComparison() {
                 const tS = leftSummary;
                 setLeftSummary(rightSummary);
                 setRightSummary(tS);
+                const tC = leftCategory;
+                setLeftCategory(rightCategory);
+                setRightCategory(tC);
               }}
             >
               Swap Sides
@@ -966,73 +1506,496 @@ export default function ArtifactsComparison() {
           </div>
         </div>
 
-        <div className="flex border rounded-lg h-[650px] shadow-sm overflow-hidden">
-          <div className="flex-1 w-1/2 flex flex-col min-w-0 border-r relative">
-            <PaneToolbar side="left" title="Artifact A" />
-            <div className="flex-1 relative overflow-hidden">
-              {renderContent("left", false)}
+        {/* Patch similarity heatmap bar */}
+        {mode === "patch" && patchSimilarity !== null && (
+          <div className="border rounded-md px-3 py-2 bg-gray-50 flex items-center gap-3 text-xs text-gray-700">
+            <span className="font-medium">Patch similarity</span>
+            <div className="flex-1 h-2 rounded-full bg-gray-200 overflow-hidden">
+              <div
+                className="h-2 rounded-full bg-emerald-500"
+                style={{ width: `${patchSimilarity}%` }}
+              />
             </div>
-            <AnnotationList side="left" />
+            <span className="w-10 text-right font-semibold">
+              {patchSimilarity}%
+            </span>
+          </div>
+        )}
+
+        {/* MAIN VIEWER */}
+        <div className="flex border rounded-lg h-[650px] shadow-sm overflow-hidden">
+          {/* LEFT always visible */}
+          <div
+            className={`flex-1 flex flex-col min-w-0 border-r relative ${
+              mode === "stage1" || mode === "solid" ? "w-full" : "w-1/2"
+            }`}
+          >
+            <PaneToolbar
+              side="left"
+              title={
+                mode === "patch"
+                  ? "Patch A"
+                  : mode === "stage1"
+                  ? "Bug Report"
+                  : mode === "solid"
+                  ? "Violating Code (input)"
+                  : mode === "snapshot"
+                  ? "Reference / Failure / Diff (A)"
+                  : "Bug Report / Artifact A"
+              }
+            />
+            <div className="flex-1 relative overflow-hidden">
+              {renderContent(
+                "left",
+                false,
+                mode === "patch" ? rightNormSet : null
+              )}
+            </div>
+            {mode !== "patch" && <AnnotationList side="left" />}
             <AISummary side="left" />
           </div>
-          <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
-            <PaneToolbar side="right" title="Artifact B" />
-            <div className="flex-1 relative overflow-hidden">
-              {renderContent("right", false)}
+
+          {/* RIGHT pane: Stage 2, Patch & Snapshot */}
+          {(mode === "stage2" || mode === "patch" || mode === "snapshot") && (
+            <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
+              <PaneToolbar
+                side="right"
+                title={
+                  mode === "patch"
+                    ? "Patch B"
+                    : mode === "snapshot"
+                    ? "Reference / Failure / Diff (B)"
+                    : "Participant 2 / AI Label Artifact"
+                }
+              />
+              <div className="flex-1 relative overflow-hidden">
+                {renderContent(
+                  "right",
+                  false,
+                  mode === "patch" ? leftNormSet : null
+                )}
+              </div>
+              {mode !== "patch" && <AnnotationList side="right" />}
+              <AISummary side="right" />
             </div>
-            <AnnotationList side="right" />
-            <AISummary side="right" />
-          </div>
+          )}
         </div>
 
+        {/* ASSESSMENT CARD */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Assessment</CardTitle>
+            <CardTitle className="text-lg">
+              {mode === "stage1"
+                ? "Stage 1: Participant Bug Label"
+                : mode === "stage2"
+                ? "Stage 2: Reviewer Bug Label Comparison"
+                : mode === "solid"
+                ? "SOLID Violations: Code & Complexity Labeling"
+                : mode === "snapshot"
+                ? "Snapshot Study: Failure vs Intended UI Change"
+                : "Patch Mode: Code Clone Assessment"}
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="space-y-3">
-              <Label>Which artifact is better?</Label>
-              <RadioGroup
-                value={artifactChoice}
-                onValueChange={setArtifactChoice}
-                className="flex gap-4"
-              >
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem
-                    value="a"
-                    id="r-a"
-                    className={radioClass}
-                  />
-                  <Label htmlFor="r-a">Artifact A</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem
-                    value="b"
-                    id="r-b"
-                    className={radioClass}
-                  />
-                  <Label htmlFor="r-b">Artifact B</Label>
-                </div>
-              </RadioGroup>
-            </div>
-            <div className="space-y-3">
-              <Label>Rate Readability (1-5)</Label>
-              <div className="flex gap-2">
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <button
-                    key={n}
-                    onClick={() => setRating(n)}
-                    className={`w-10 h-10 rounded border flex items-center justify-center transition-colors ${
-                      rating >= n
-                        ? "bg-yellow-400 border-yellow-500 text-white"
-                        : "bg-white hover:bg-gray-50"
-                    }`}
+            {mode === "patch" ? (
+              <>
+                <div className="space-y-2">
+                  <Label>Are these two patches code clones?</Label>
+                  <RadioGroup
+                    value={patchAreClones}
+                    onValueChange={(v) => {
+                      setPatchAreClones(v);
+                      if (v === "no") {
+                        setPatchCloneType("");
+                      }
+                    }}
+                    className="flex flex-wrap gap-4 mt-1"
                   >
-                    ★
-                  </button>
-                ))}
-              </div>
-            </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem
+                        value="yes"
+                        id="patch-clone-yes"
+                        className={radioClass}
+                      />
+                      <Label htmlFor="patch-clone-yes">Yes</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem
+                        value="no"
+                        id="patch-clone-no"
+                        className={radioClass}
+                      />
+                      <Label htmlFor="patch-clone-no">No</Label>
+                    </div>
+                  </RadioGroup>
+                  <p className="text-[11px] text-gray-400">
+                    A “clone” means the patches represent essentially the same
+                    change.
+                  </p>
+                </div>
+
+                {patchAreClones === "yes" && (
+                  <div className="space-y-2">
+                    <Label>Select clone type</Label>
+                    <select
+                      value={patchCloneType}
+                      onChange={(e) => setPatchCloneType(e.target.value)}
+                      className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    >
+                      <option value="">Choose clone type...</option>
+                      {PATCH_CLONE_TYPES.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-gray-400">
+                      Use Type-1 for almost identical patches, up to Type-4 for
+                      very different implementations with the same effect.
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label htmlFor="patch-comment">
+                    Notes (why did you decide this?)
+                  </Label>
+                  <Textarea
+                    id="patch-comment"
+                    value={patchCloneComment}
+                    onChange={(e) => setPatchCloneComment(e.target.value)}
+                    rows={3}
+                    placeholder="E.g., 'Both patches change the same API call and condition, only variable names differ, so Type-2.'"
+                  />
+                </div>
+              </>
+            ) : mode === "stage1" ? (
+              <>
+                <div className="space-y-2">
+                  <Label>Select bug category for this report</Label>
+                  <select
+                    value={leftCategory}
+                    onChange={(e) => setLeftCategory(e.target.value)}
+                    className="border rounded px-2 py-1 text-sm w-full bg-white"
+                  >
+                    <option value="">Choose category...</option>
+                    {BUG_CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-400">
+                    Participant labels the bug report using the provided
+                    taxonomy.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="overall-comment-stage1">
+                    Optional comment (why did you choose this category?)
+                  </Label>
+                  <Textarea
+                    id="overall-comment-stage1"
+                    value={assessmentComment}
+                    onChange={(e) => setAssessmentComment(e.target.value)}
+                    rows={3}
+                    placeholder="E.g., 'The description mentions UI layout breaking after resize, so I chose GUI.'"
+                  />
+                </div>
+              </>
+            ) : mode === "solid" ? (
+              <>
+                <div className="space-y-2">
+                  <Label>Select SOLID violation for this code</Label>
+                  <select
+                    value={solidViolation}
+                    onChange={(e) => setSolidViolation(e.target.value)}
+                    className="border rounded px-2 py-1 text-sm w-full bg-white"
+                  >
+                    <option value="">Choose violation...</option>
+                    {SOLID_VIOLATIONS.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-400">
+                    Participants see only the violating code (input) and choose
+                    which SOLID principle is being broken.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Complexity level of this violation</Label>
+                  <RadioGroup
+                    value={solidComplexity}
+                    onValueChange={setSolidComplexity}
+                    className="flex flex-wrap gap-4 mt-1"
+                  >
+                    {COMPLEXITY_LEVELS.map((lvl) => (
+                      <div
+                        key={lvl}
+                        className="flex items-center space-x-2 min-w-[90px]"
+                      >
+                        <RadioGroupItem
+                          value={lvl}
+                          id={`solid-level-${lvl.toLowerCase()}`}
+                          className={radioClass}
+                        />
+                        <Label htmlFor={`solid-level-${lvl.toLowerCase()}`}>
+                          {lvl}
+                        </Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                  <p className="text-[11px] text-gray-400">
+                    EASY: obvious and local; HARD: subtle, spread across
+                    classes or methods.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="solid-fixed-code">
+                    Optional: non-violating version of the code
+                  </Label>
+                  <Textarea
+                    id="solid-fixed-code"
+                    value={solidFixedCode}
+                    onChange={(e) => setSolidFixedCode(e.target.value)}
+                    rows={6}
+                    placeholder="Paste or write a refactored version that no longer violates the chosen principle (optional)."
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="overall-comment-solid">
+                    Explanation (why this violation and level?)
+                  </Label>
+                  <Textarea
+                    id="overall-comment-solid"
+                    value={assessmentComment}
+                    onChange={(e) => setAssessmentComment(e.target.value)}
+                    rows={3}
+                    placeholder="E.g., 'Class handles both persistence and business logic, so SRP is violated; refactoring requires splitting responsibilities, so I marked it MEDIUM.'"
+                  />
+                </div>
+              </>
+            ) : mode === "snapshot" ? (
+              <>
+                <div className="space-y-2">
+                  <Label>
+                    Based on the reference, failure, and diff images, what is
+                    your decision?
+                  </Label>
+                  <RadioGroup
+                    value={snapshotOutcome}
+                    onValueChange={setSnapshotOutcome}
+                    className="flex flex-wrap gap-4 mt-1"
+                  >
+                    {SNAPSHOT_OUTCOMES.map((o) => (
+                      <div
+                        key={o.id}
+                        className="flex items-center space-x-2 min-w-[140px]"
+                      >
+                        <RadioGroupItem
+                          value={o.id}
+                          id={`snapshot-${o.id}`}
+                          className={radioClass}
+                        />
+                        <Label htmlFor={`snapshot-${o.id}`}>{o.label}</Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                  <p className="text-[11px] text-gray-400">
+                    Participants review the reference, failure, and diff
+                    snapshots and decide whether the case is an actual failure
+                    or an intended UI change.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="snapshot-comment">
+                    Notes (brief explanation of your choice)
+                  </Label>
+                  <Textarea
+                    id="snapshot-comment"
+                    value={assessmentComment}
+                    onChange={(e) => setAssessmentComment(e.target.value)}
+                    rows={3}
+                    placeholder="E.g., 'Layout change matches updated design specs, text and icons align with new style guide, so this is an intended UI change.'"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Stage 2: Reviewer sees two labels */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Participant 1 Label (Artifact A)</Label>
+                    <select
+                      value={leftCategory}
+                      onChange={(e) => setLeftCategory(e.target.value)}
+                      className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    >
+                      <option value="">Select...</option>
+                      {BUG_CATEGORIES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Participant 2 / AI Label (Artifact B)</Label>
+                    <select
+                      value={rightCategory}
+                      onChange={(e) => setRightCategory(e.target.value)}
+                      className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    >
+                      <option value="">Select...</option>
+                      {BUG_CATEGORIES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {leftCategory && rightCategory && (
+                  <>
+                    {labelsMatch ? (
+                      <div className="space-y-3">
+                        <div className="space-y-1">
+                          <Label>
+                            The two labels match ({leftCategory}). Is this
+                            category correct?
+                          </Label>
+                          <RadioGroup
+                            value={matchCorrectness}
+                            onValueChange={(v) => {
+                              setMatchCorrectness(v);
+                              if (v === "correct") {
+                                setFinalCategory(leftCategory);
+                                setFinalOtherCategory("");
+                              } else {
+                                setFinalCategory("");
+                                setFinalOtherCategory("");
+                              }
+                            }}
+                            className="flex gap-4 mt-1"
+                          >
+                            <div className="flex items-center space-x-2">
+                              <RadioGroupItem
+                                value="correct"
+                                id="match-correct"
+                                className={radioClass}
+                              />
+                              <Label htmlFor="match-correct">Correct</Label>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <RadioGroupItem
+                                value="incorrect"
+                                id="match-incorrect"
+                                className={radioClass}
+                              />
+                              <Label htmlFor="match-incorrect">
+                                Incorrect
+                              </Label>
+                            </div>
+                          </RadioGroup>
+                        </div>
+
+                        {matchCorrectness === "incorrect" && (
+                          <div className="space-y-2">
+                            <Label>Select the correct category</Label>
+                            <select
+                              value={finalCategory}
+                              onChange={(e) => {
+                                setFinalCategory(e.target.value);
+                                setFinalOtherCategory("");
+                              }}
+                              className="border rounded px-2 py-1 text-sm w-full bg-white"
+                            >
+                              <option value="">Choose category...</option>
+                              {BUG_CATEGORIES.map((c) => (
+                                <option key={c} value={c}>
+                                  {c}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <Label>
+                          The labels differ ({leftCategory} vs {rightCategory}).
+                          Choose a final category:
+                        </Label>
+                        <select
+                          value={finalCategory}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setFinalCategory(val);
+                            if (val !== "other") {
+                              setFinalOtherCategory("");
+                            }
+                          }}
+                          className="border rounded px-2 py-1 text-sm w-full bg-white"
+                        >
+                          <option value="">Select...</option>
+                          <option value={leftCategory}>
+                            Accept Participant 1: {leftCategory}
+                          </option>
+                          <option value={rightCategory}>
+                            Accept Participant 2 / AI: {rightCategory}
+                          </option>
+                          <option value="other">
+                            Neither – choose another category
+                          </option>
+                        </select>
+
+                        {finalCategory === "other" && (
+                          <div className="space-y-2">
+                            <Label>Choose alternative category</Label>
+                            <select
+                              value={finalOtherCategory}
+                              onChange={(e) =>
+                                setFinalOtherCategory(e.target.value)
+                              }
+                              className="border rounded px-2 py-1 text-sm w-full bg-white"
+                            >
+                              <option value="">Select...</option>
+                              {BUG_CATEGORIES.map((c) => (
+                                <option key={c} value={c}>
+                                  {c}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                <div className="space-y-2">
+                  <Label htmlFor="overall-comment-stage2">
+                    Reviewer notes (brief explanation of your decision)
+                  </Label>
+                  <Textarea
+                    id="overall-comment-stage2"
+                    value={assessmentComment}
+                    onChange={(e) => setAssessmentComment(e.target.value)}
+                    rows={3}
+                    placeholder="E.g., 'Although both labeled it as Performance, the description mentions incorrect configuration of environment variables, so I chose Configuration.'"
+                  />
+                </div>
+              </>
+            )}
+
             <div className="pt-4 flex justify-between">
               <Button
                 variant="outline"
@@ -1044,6 +2007,40 @@ export default function ArtifactsComparison() {
               <Button
                 size="lg"
                 className="bg-black text-white hover:bg-gray-800"
+                onClick={() => {
+                  const finalPatchCloneType =
+                    patchCloneType ||
+                    (patchAreClones === "yes" ? "unspecified" : "");
+                  const bugFinalCategory =
+                    finalCategory === "other" && finalOtherCategory
+                      ? finalOtherCategory
+                      : finalCategory || (labelsMatch ? leftCategory : "");
+
+                  console.log("Saved assessment:", {
+                    mode,
+                    leftFileName: leftData.name,
+                    rightFileName: rightData.name,
+                    // Bug labeling states
+                    leftCategory,
+                    rightCategory,
+                    matchCorrectness,
+                    bugFinalCategory,
+                    // SOLID mode states
+                    solidViolation,
+                    solidComplexity,
+                    solidFixedCode,
+                    // Patch mode states
+                    patchAreClones,
+                    patchCloneType: finalPatchCloneType,
+                    patchCloneComment,
+                    // Snapshot mode
+                    snapshotOutcome,
+                    // Generic notes
+                    assessmentComment,
+                    patchSimilarity,
+                  });
+                  alert("Assessment state logged to console.");
+                }}
               >
                 Save Assessment
               </Button>
@@ -1051,6 +2048,7 @@ export default function ArtifactsComparison() {
           </CardContent>
         </Card>
 
+        {/* Pending comment modal */}
         {pendingAnnotation && (
           <div
             className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/20 backdrop-blur-sm"
@@ -1084,6 +2082,7 @@ export default function ArtifactsComparison() {
           </div>
         )}
 
+        {/* Fullscreen mode */}
         {showBig && (
           <div className="fixed inset-0 z-50 bg-white flex flex-col animate-in fade-in duration-200">
             <div className="border-b p-4 flex justify-between items-center bg-gray-50">
@@ -1093,22 +2092,58 @@ export default function ArtifactsComparison() {
               </Button>
             </div>
             <div className="flex-1 flex overflow-hidden">
-              <div className="flex-1 w-1/2 flex flex-col min-w-0 border-r relative">
-                <PaneToolbar side="left" title="Artifact A" />
+              <div
+                className={`flex-1 flex flex-col min-w-0 border-r relative ${
+                  mode === "stage1" || mode === "solid" ? "w-full" : "w-1/2"
+                }`}
+              >
+                <PaneToolbar
+                  side="left"
+                  title={
+                    mode === "patch"
+                      ? "Patch A"
+                      : mode === "stage1"
+                      ? "Bug Report"
+                      : mode === "solid"
+                      ? "Violating Code (input)"
+                      : mode === "snapshot"
+                      ? "Reference / Failure / Diff (A)"
+                      : "Bug Report / Artifact A"
+                  }
+                />
                 <div className="flex-1 relative overflow-hidden">
-                  {renderContent("left", true)}
+                  {renderContent(
+                    "left",
+                    true,
+                    mode === "patch" ? rightNormSet : null
+                  )}
                 </div>
-                <AnnotationList side="left" />
+                {mode !== "patch" && <AnnotationList side="left" />}
                 <AISummary side="left" />
               </div>
-              <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
-                <PaneToolbar side="right" title="Artifact B" />
-                <div className="flex-1 relative overflow-hidden">
-                  {renderContent("right", true)}
+              {(mode === "stage2" || mode === "patch" || mode === "snapshot") && (
+                <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
+                  <PaneToolbar
+                    side="right"
+                    title={
+                      mode === "patch"
+                        ? "Patch B"
+                        : mode === "snapshot"
+                        ? "Reference / Failure / Diff (B)"
+                        : "Participant 2 / AI Artifact"
+                    }
+                  />
+                  <div className="flex-1 relative overflow-hidden">
+                    {renderContent(
+                      "right",
+                      true,
+                      mode === "patch" ? leftNormSet : null
+                    )}
+                  </div>
+                  {mode !== "patch" && <AnnotationList side="right" />}
+                  <AISummary side="right" />
                 </div>
-                <AnnotationList side="right" />
-                <AISummary side="right" />
-              </div>
+              )}
             </div>
           </div>
         )}
