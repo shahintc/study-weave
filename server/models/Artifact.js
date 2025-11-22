@@ -190,6 +190,33 @@ class Artifact {
       throw error;
     }
   }
+
+  static async findArtifactById(id) {
+    try {
+      const artifact = await SequelizeArtifact.findByPk(id, {
+        attributes: ['id', 'name', 'type', 'userId', 'filePath', 'fileMimeType', 'fileOriginalName', 'createdAt', 'updatedAt'],
+        include: [{
+          model: Tag,
+          as: 'tags',
+          attributes: ['id', 'name'],
+          through: { attributes: [] }
+        }]
+      });
+
+      if (!artifact) {
+        return null;
+      }
+
+      const plainArtifact = artifact.get({ plain: true });
+      return {
+        ...plainArtifact,
+        tags: plainArtifact.tags ? plainArtifact.tags.map(tag => ({ id: tag.id, name: tag.name })) : [],
+      };
+    } catch (error) {
+      console.error(`Error fetching artifact by ID ${id}:`, error);
+      throw error;
+    }
+  }
 }
 
 module.exports = Artifact;
