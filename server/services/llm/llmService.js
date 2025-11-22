@@ -4,7 +4,7 @@ import { getInstruction } from '../../config/llmSystemInstructions.js';
 const ai = new GoogleGenAI({});
 const model = "gemini-2.5-flash";
 
-export async function generateContent(prompt, systemInstruction='', uploadedFile=null) {
+export async function generateContent(prompt, systemInstruction='', uploadedFiles=[]) {
     const config = {
         systemInstruction: systemInstruction,
     };
@@ -12,7 +12,7 @@ export async function generateContent(prompt, systemInstruction='', uploadedFile
     try {
         const response = await ai.models.generateContent({
             model: model,
-            contents: uploadedFile ? [{ fileData: { mimeType: uploadedFile.mimeType, fileUri: uploadedFile.uri } }, { text: prompt }] : { text : prompt },
+            contents: uploadedFiles.length > 0 ? [...uploadedFiles.map(file => ({ fileData: { mimeType: file.mimeType, fileUri: file.uri } })), { text: prompt }] : { text : prompt },
             config: config,
         });
 
@@ -34,7 +34,7 @@ export async function generateContentRouteHandler(req, res){
     let systemInstruction = '';
     let parser = null;
     let contentProvider = null;
-    let uploaded = null;
+    let uploadedFiles = [];
 
     if (llmConfig) {
         systemInstruction = llmConfig.systemInstruction || '';
@@ -51,33 +51,49 @@ export async function generateContentRouteHandler(req, res){
     try {
         if (contentProvider && contentProvider.getContent) {
             console.log(`${key}: Calling content provider`);
-            const { filepath, mimeType } = await contentProvider.getContent(id);
-            console.log(`File ${filepath} fetched`)
+            const filesToUpload = await contentProvider.getContent(id);
+            console.log(`Found ${filesToUpload.length} files from content provider.`);
 
-            try {
-                uploaded = await ai.files.upload({
-                    file: filepath,
-                    config: { mimeType: mimeType }
-                });
-            } catch (error){
-                console.log(`File upload error: ${error}`);
+            for (const file of filesToUpload) {
+                console.log(`Attempting to upload file: ${file.filepath}`);
+                try {
+                    const uploaded = await ai.files.upload({
+                        file: file.filepath,
+                        config: { mimeType: file.mimeType }
+                    });
+                    uploadedFiles.push(uploaded);
+                    console.log(`File ${file.filepath} uploaded successfully.`);
+                } catch (error) {
+                    console.log(`File upload error for ${file.filepath}: ${error}`);
+                }
             }
         }
 
-        let llmResponse = await generateContent(prompt, systemInstruction, uploaded);
-
-        console.log(llmResponse)
-
-        if (parser && parser.parse) {
-            console.log(`${key}: Calling parser`);
-            llmResponse = parser.parse(llmResponse);
+        let llmResponse = await generateContent(prompt, systemInstruction, uploadedFiles);
+ 
+         console.log(llmResponse)
+ 
+         if (parser && parser.parse) {
+             console.log(`${key}: Calling parser`);
+             llmResponse = parser.parse(llmResponse);
+         }
+ 
+         res.json({ response: llmResponse });
+     } catch (error) {
+         console.error(error.message);
+         res.status(500).json({
+             error: "Error processing LLM request."
+         });
+     } finally {
+        // Delete uploaded files after the request is processed, regardless of success or failure
+        for (const uploadedFile of uploadedFiles) {
+            try {
+                console.log(`Attempting to delete uploaded file: ${uploadedFile.name}`);
+                await ai.files.delete(uploadedFile.name);
+                console.log(`Successfully deleted file: ${uploadedFile.name}`);
+            } catch (deleteError) {
+                console.error(`Error deleting uploaded file ${uploadedFile.name}:`, deleteError);
+            }
         }
-
-        res.json({ response: llmResponse });
-    } catch (error) {
-        console.error(error.message);
-        res.status(500).json({
-            error: "Error processing LLM request."
-        });
-    }
+     }
 }

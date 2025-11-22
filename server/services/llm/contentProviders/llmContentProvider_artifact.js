@@ -16,8 +16,8 @@ export async function getContent(artifactId){
 
     console.log(`Artifact fetched: ${artifact.fileMimeType}`)
 
-    return {
+    return [{
         filepath: artifact.filePath,
-        mime: artifact.fileMimeType
-    };
+        mimeType: artifact.fileMimeType
+    }];
 }
