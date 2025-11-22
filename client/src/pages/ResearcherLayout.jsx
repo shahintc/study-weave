@@ -43,6 +43,7 @@ export default function ResearcherLayout() {
     { to: "/researcher", label: "Dashboard" },
     { to: "/researcher/artifacts", label: "Artifacts" },
     { to: "/researcher/assess", label: "Assess" },
+    { to: "/researcher/competency-review", label: "Competency Review" },
     { to: "/researcher/study-creation-wizard", label: "Study Wizard" },
   ];
 
