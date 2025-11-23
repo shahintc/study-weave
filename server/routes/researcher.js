@@ -7,9 +7,22 @@ const {
   StudyArtifact,
   Artifact,
   Evaluation,
+  ArtifactAssessment,
+  CompetencyAssignment,
 } = require('../models');
+const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
+
+const ARTIFACT_MODE_OPTIONS = [
+  { value: 'stage1', label: 'Bug labeling – Stage 1', assessmentType: 'bug_stage' },
+  { value: 'stage2', label: 'Bug adjudication – Stage 2', assessmentType: 'bug_stage' },
+  { value: 'solid', label: 'SOLID review', assessmentType: 'solid' },
+  { value: 'clone', label: 'Patch clone check', assessmentType: 'clone' },
+  { value: 'snapshot', label: 'Snapshot intent', assessmentType: 'snapshot' },
+];
+
+const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
 
 router.get('/studies', async (req, res) => {
   try {
@@ -47,6 +60,147 @@ router.get('/studies', async (req, res) => {
     res.status(500).json({ message: 'Unable to load studies right now' });
   }
 });
+
+router.get('/studies/:studyId/participants', authMiddleware, async (req, res) => {
+  try {
+    const studyId = Number(req.params.studyId);
+    if (Number.isNaN(studyId)) {
+      return res.status(400).json({ message: 'Invalid study id provided.' });
+    }
+
+    const study = await Study.findByPk(studyId, {
+      include: [
+        {
+          model: StudyArtifact,
+          as: 'studyArtifacts',
+          include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name', 'type'] }],
+        },
+      ],
+    });
+
+    if (!study) {
+      return res.status(404).json({ message: `Study ${studyId} was not found.` });
+    }
+
+    if (!canManageStudy(req.user, study)) {
+      return res.status(403).json({ message: 'You are not allowed to access this study.' });
+    }
+
+    const artifactMeta = buildArtifactLookup(study.studyArtifacts || []);
+
+    const participantRows = await StudyParticipant.findAll({
+      where: { studyId: study.id },
+      include: [
+        { model: User, as: 'participant', attributes: ['id', 'name', 'email'] },
+        {
+          model: CompetencyAssignment,
+          as: 'sourceAssignment',
+          attributes: ['id', 'status', 'decision', 'score', 'submittedAt', 'reviewedAt'],
+        },
+        {
+          model: ArtifactAssessment,
+          as: 'artifactAssessments',
+          attributes: ['id', 'assessmentType', 'status', 'createdAt', 'updatedAt', 'payload'],
+        },
+      ],
+      order: [['createdAt', 'ASC']],
+    });
+
+    return res.json({
+      study: { id: String(study.id), title: study.title },
+      participants: participantRows.map((row) => formatParticipantDetail(row, artifactMeta.lookup)),
+      studyArtifacts: artifactMeta.list,
+      artifactModes: ARTIFACT_MODE_OPTIONS,
+    });
+  } catch (error) {
+    console.error('Researcher participant progress error', error);
+    return res.status(500).json({ message: 'Unable to load participant progress right now.' });
+  }
+});
+
+router.patch(
+  '/studies/:studyId/participants/:studyParticipantId/next-assignment',
+  authMiddleware,
+  async (req, res) => {
+    try {
+      const studyId = Number(req.params.studyId);
+      const studyParticipantId = Number(req.params.studyParticipantId);
+      if (Number.isNaN(studyId) || Number.isNaN(studyParticipantId)) {
+        return res.status(400).json({ message: 'Invalid identifier provided.' });
+      }
+
+      const { mode, studyArtifactId } = req.body || {};
+      if (!mode || !ARTIFACT_MODE_SET.has(mode)) {
+        return res.status(400).json({ message: 'A valid artifact mode is required.' });
+      }
+
+      const study = await Study.findByPk(studyId, {
+        include: [
+          {
+            model: StudyArtifact,
+            as: 'studyArtifacts',
+            include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name', 'type'] }],
+          },
+        ],
+      });
+
+      if (!study) {
+        return res.status(404).json({ message: `Study ${studyId} was not found.` });
+      }
+
+      if (!canManageStudy(req.user, study)) {
+        return res.status(403).json({ message: 'You are not allowed to update this study.' });
+      }
+
+      let normalizedStudyArtifactId = null;
+      if (typeof studyArtifactId !== 'undefined' && studyArtifactId !== null && studyArtifactId !== '') {
+        const parsedArtifactId = Number(studyArtifactId);
+        if (Number.isNaN(parsedArtifactId)) {
+          return res.status(400).json({ message: 'studyArtifactId must be numeric.' });
+        }
+        const belongsToStudy = (study.studyArtifacts || []).some(
+          (artifact) => Number(artifact.id) === parsedArtifactId,
+        );
+        if (!belongsToStudy) {
+          return res.status(400).json({ message: 'studyArtifactId does not belong to this study.' });
+        }
+        normalizedStudyArtifactId = parsedArtifactId;
+      }
+
+      const participant = await StudyParticipant.findOne({
+        where: { id: studyParticipantId, studyId: study.id },
+        include: [
+          { model: User, as: 'participant', attributes: ['id', 'name', 'email'] },
+          {
+            model: CompetencyAssignment,
+            as: 'sourceAssignment',
+            attributes: ['id', 'status', 'decision', 'score', 'submittedAt', 'reviewedAt'],
+          },
+          {
+            model: ArtifactAssessment,
+            as: 'artifactAssessments',
+            attributes: ['id', 'assessmentType', 'status', 'createdAt', 'updatedAt', 'payload'],
+          },
+        ],
+      });
+
+      if (!participant) {
+        return res.status(404).json({ message: 'Study participant not found for this study.' });
+      }
+
+      participant.nextArtifactMode = mode;
+      participant.nextStudyArtifactId = normalizedStudyArtifactId;
+      await participant.save();
+
+      const artifactMeta = buildArtifactLookup(study.studyArtifacts || []);
+
+      return res.json({ participant: formatParticipantDetail(participant, artifactMeta.lookup) });
+    } catch (error) {
+      console.error('Researcher assignment update error', error);
+      return res.status(500).json({ message: 'Unable to update the next assignment right now.' });
+    }
+  },
+);
 
 async function loadStudyRatings(studyIds = []) {
   const ratingMap = new Map();
@@ -155,6 +309,159 @@ function normalizeJson(value) {
   } catch {
     return {};
   }
+}
+
+function buildArtifactLookup(studyArtifacts = []) {
+  const sorted = studyArtifacts
+    .map((entry) => (typeof entry.get === 'function' ? entry.get({ plain: true }) : entry))
+    .sort((a, b) => (a.orderIndex || 0) - (b.orderIndex || 0));
+
+  const list = sorted.map((artifact) => ({
+    id: String(artifact.id),
+    studyArtifactId: String(artifact.id),
+    artifactId: artifact.artifactId ? String(artifact.artifactId) : null,
+    label: artifact.label || artifact.artifact?.name || `Artifact ${artifact.id}`,
+    artifactName: artifact.artifact?.name || null,
+    orderIndex: artifact.orderIndex || 0,
+  }));
+
+  const lookup = new Map(list.map((entry) => [Number(entry.id), entry]));
+  return { list, lookup };
+}
+
+function formatParticipantDetail(row, artifactLookup) {
+  const plain = typeof row.get === 'function' ? row.get({ plain: true }) : row;
+  const profile = normalizeJson(plain.lastCheckpoint);
+
+  return {
+    id: String(plain.id),
+    participantId: String(plain.participantId),
+    userId: String(plain.participantId),
+    name: plain.participant?.name || `Participant ${plain.participantId}`,
+    email: plain.participant?.email || null,
+    persona: profile.persona || 'Participant',
+    region: profile.region || 'Unknown',
+    participationStatus: plain.participationStatus,
+    progressPercent: plain.progressPercent || 0,
+    competency: summarizeCompetencyProgress(plain.sourceAssignment),
+    artifactProgress: summarizeArtifactProgress(plain.artifactAssessments || []),
+    nextAssignment: buildNextAssignmentPayload(plain, artifactLookup),
+    lastUpdatedAt: plain.updatedAt ? new Date(plain.updatedAt).toISOString() : null,
+  };
+}
+
+function summarizeCompetencyProgress(assignment) {
+  if (!assignment) {
+    return {
+      status: 'not_assigned',
+      statusLabel: 'Not assigned',
+      completionPercent: 0,
+      decision: 'undecided',
+    };
+  }
+
+  const statusMap = {
+    pending: { label: 'Pending start', percent: 10 },
+    in_progress: { label: 'In progress', percent: 40 },
+    submitted: { label: 'Awaiting review', percent: 80 },
+    reviewed: { label: assignment.decision === 'approved' ? 'Approved' : 'Reviewed', percent: 100 },
+  };
+
+  const view = typeof assignment.get === 'function' ? assignment.get({ plain: true }) : assignment;
+  const statusEntry = statusMap[view.status] || { label: view.status, percent: 0 };
+
+  return {
+    assignmentId: view.id,
+    status: view.status,
+    statusLabel: statusEntry.label,
+    completionPercent: statusEntry.percent,
+    decision: view.decision,
+    score: view.score,
+    submittedAt: view.submittedAt,
+    reviewedAt: view.reviewedAt,
+  };
+}
+
+function summarizeArtifactProgress(assessments = []) {
+  const template = {};
+  ARTIFACT_MODE_OPTIONS.forEach((mode) => {
+    template[mode.value] = { completed: 0, lastSubmittedAt: null };
+  });
+
+  let submittedTotal = 0;
+
+  assessments.forEach((record) => {
+    const plain = typeof record.get === 'function' ? record.get({ plain: true }) : record;
+    if (plain.status !== 'submitted') {
+      return;
+    }
+    const modeKey = resolveModeKey(plain);
+    if (!modeKey || !template[modeKey]) {
+      return;
+    }
+    submittedTotal += 1;
+    template[modeKey].completed += 1;
+    const timestamp = plain.createdAt || plain.updatedAt;
+    if (timestamp) {
+      const isoValue = new Date(timestamp).toISOString();
+      if (!template[modeKey].lastSubmittedAt || isoValue > template[modeKey].lastSubmittedAt) {
+        template[modeKey].lastSubmittedAt = isoValue;
+      }
+    }
+  });
+
+  return { modes: template, totals: { submitted: submittedTotal } };
+}
+
+function resolveModeKey(assessment) {
+  if (!assessment) {
+    return null;
+  }
+  const type = assessment.assessmentType;
+  const payload =
+    assessment.payload && typeof assessment.payload === 'string'
+      ? normalizeJson(assessment.payload)
+      : assessment.payload || {};
+  if (type === 'bug_stage') {
+    return payload.mode === 'stage1' ? 'stage1' : 'stage2';
+  }
+  if (type === 'solid') {
+    return 'solid';
+  }
+  if (type === 'clone') {
+    return 'clone';
+  }
+  if (type === 'snapshot') {
+    return 'snapshot';
+  }
+  return null;
+}
+
+function buildNextAssignmentPayload(participant, artifactLookup) {
+  const artifactId = participant.nextStudyArtifactId ? Number(participant.nextStudyArtifactId) : null;
+  const artifact = artifactId ? artifactLookup.get(artifactId) : null;
+  const modeMeta = ARTIFACT_MODE_OPTIONS.find((entry) => entry.value === participant.nextArtifactMode);
+
+  return {
+    mode: participant.nextArtifactMode || null,
+    modeLabel: modeMeta?.label || null,
+    studyArtifactId: artifact ? artifact.id : participant.nextStudyArtifactId ? String(participant.nextStudyArtifactId) : null,
+    artifactLabel: artifact?.label || null,
+    updatedAt: participant.updatedAt ? new Date(participant.updatedAt).toISOString() : null,
+  };
+}
+
+function canManageStudy(user, study) {
+  if (!user) {
+    return false;
+  }
+  if (user.role === 'admin') {
+    return true;
+  }
+  if (user.role === 'researcher' && Number(user.id) === Number(study.researcherId)) {
+    return true;
+  }
+  return false;
 }
 
 module.exports = router;

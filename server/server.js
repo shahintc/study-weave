@@ -24,6 +24,7 @@ app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/researcher', require('./routes/researcher'));
 app.use('/api/competency', require('./routes/competency'));
 app.use('/api/llm', require('./routes/llm'));
+app.use('/api/artifact-assessments', require('./routes/artifactAssessments'));
 
 app.get('/', (req, res) => res.send('Backend ready with PostgreSQL!'));
 
