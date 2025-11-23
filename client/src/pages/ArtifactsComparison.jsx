@@ -1,7 +1,8 @@
 // ArtifactsComparison.jsx — React (.jsx)
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTwoFilesPatch } from "diff";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
+import api from "@/api/axios";
 
 /** Bug categories (Defects4J/GHRB taxonomy) */
 const BUG_CATEGORIES = [
@@ -325,6 +327,80 @@ const buildDiffLines = (text, otherSet) => {
 const STORAGE_KEY = "artifacts-comparison-autosave-v9-bug-solid-patch";
 
 export default function ArtifactsComparison() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const paramsKey = searchParams.toString();
+
+  const parseNumeric = (value) => {
+    if (value === undefined || value === null || value === "") return null;
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  };
+
+  const studyContext = useMemo(() => {
+    const state = location.state || {};
+    return {
+      studyId: parseNumeric(searchParams.get("studyId") ?? state.studyId),
+      studyArtifactId: parseNumeric(
+        searchParams.get("studyArtifactId") ?? state.studyArtifactId
+      ),
+      studyParticipantId: parseNumeric(
+        searchParams.get("studyParticipantId") ??
+          state.studyParticipantId ??
+          state.participationId
+      ),
+      sourceEvaluationId: parseNumeric(
+        searchParams.get("sourceEvaluationId") ?? state.sourceEvaluationId
+      ),
+      comparisonId: parseNumeric(
+        searchParams.get("comparisonId") ?? state.comparisonId
+      ),
+    };
+  }, [location.state, paramsKey, searchParams]);
+
+  const participantSummary = useMemo(() => {
+    const state = location.state || {};
+    return state.participant || state.studyParticipant || null;
+  }, [location.state]);
+
+  const [authToken, setAuthToken] = useState(() => {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem("token");
+  });
+  const [currentUser, setCurrentUser] = useState(null);
+  const [assessmentLoading, setAssessmentLoading] = useState(false);
+  const [assessmentSaving, setAssessmentSaving] = useState(false);
+  const [assessmentError, setAssessmentError] = useState("");
+  const [assessmentSuccess, setAssessmentSuccess] = useState("");
+  const [activeAssessmentId, setActiveAssessmentId] = useState(null);
+  const [resolvedStudyParticipantId, setResolvedStudyParticipantId] = useState(
+    studyContext.studyParticipantId || null
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const rawUser = window.localStorage.getItem("user");
+    const token = window.localStorage.getItem("token");
+    if (!rawUser || !token) {
+      navigate("/login");
+      return;
+    }
+    try {
+      setCurrentUser(JSON.parse(rawUser));
+      setAuthToken(token);
+    } catch (error) {
+      console.error("Failed to parse user from storage", error);
+      navigate("/login");
+    }
+  }, [navigate]);
+
+  useEffect(() => {
+    if (studyContext.studyParticipantId) {
+      setResolvedStudyParticipantId(studyContext.studyParticipantId);
+    }
+  }, [studyContext.studyParticipantId]);
+
   // ===== GLOBAL MODES =====
   // stage1: participant labels a single bug report
   // stage2: reviewer compares two labels (participant vs participant/AI)
@@ -446,7 +522,7 @@ export default function ArtifactsComparison() {
 
   // 🔹 Initial Load
   useEffect(() => {
-    const timer = setTimeout(() => setIsLoadingArtifacts(false), 600);
+    let isCancelled = false;
     if (typeof window !== "undefined") {
       try {
         const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -506,82 +582,191 @@ export default function ArtifactsComparison() {
         console.error("Failed to load state", err);
       }
     }
+
+    if (!isCancelled) {
+      setIsLoadingArtifacts(false);
+    }
+
     return () => {
-      clearTimeout(timer);
-      // cleanup blob URLs
+      isCancelled = true;
       blobUrlCache.forEach((url) => URL.revokeObjectURL(url));
       blobUrlCache.clear();
     };
   }, []);
 
   // 🔹 Autosave
-  const doSaveToLocalStorage = () => {
-    if (typeof window === "undefined") return;
-    try {
-      const state = {
-        mode,
-        left: leftData,
-        right: rightData,
-        leftAnn,
-        rightAnn,
-        syncScroll,
-        leftSummary,
-        rightSummary,
-        leftCategory,
-        rightCategory,
-        matchCorrectness,
-        finalCategory,
-        finalOtherCategory,
-        bugCategoryOptions,
-        solidViolation,
-        solidComplexity,
-        solidFixedCode,
-        patchAreClones,
-        patchCloneType,
-        patchCloneComment,
-        snapshotOutcome,
-        snapshotChangeType,
-        snapshotChangeTypeOther,
-        assessmentComment,
-      };
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (err) {
-      // Ignore quota exceeded errors for large files
-    }
-  };
+  const captureAssessmentState = useCallback(
+    () => ({
+      mode,
+      left: leftData,
+      right: rightData,
+      leftAnn,
+      rightAnn,
+      syncScroll,
+      leftSummary,
+      rightSummary,
+      leftCategory,
+      rightCategory,
+      matchCorrectness,
+      finalCategory,
+      finalOtherCategory,
+      bugCategoryOptions,
+      solidViolation,
+      solidComplexity,
+      solidFixedCode,
+      patchAreClones,
+      patchCloneType,
+      patchCloneComment,
+      snapshotOutcome,
+      snapshotChangeType,
+      snapshotChangeTypeOther,
+      assessmentComment,
+    }),
+    [
+      mode,
+      leftData,
+      rightData,
+      leftAnn,
+      rightAnn,
+      syncScroll,
+      leftSummary,
+      rightSummary,
+      leftCategory,
+      rightCategory,
+      matchCorrectness,
+      finalCategory,
+      finalOtherCategory,
+      bugCategoryOptions,
+      solidViolation,
+      solidComplexity,
+      solidFixedCode,
+      patchAreClones,
+      patchCloneType,
+      patchCloneComment,
+      snapshotOutcome,
+      snapshotChangeType,
+      snapshotChangeTypeOther,
+      assessmentComment,
+    ]
+  );
 
-  const scheduleAutosave = () => {
-    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    autosaveTimerRef.current = setTimeout(doSaveToLocalStorage, 1000);
-  };
+  const hydrateAssessmentPayload = useCallback((payload = {}) => {
+    if (!payload || typeof payload !== "object") return;
+    if (payload.left) setLeftData(payload.left);
+    if (payload.right) setRightData(payload.right);
+    if (Array.isArray(payload.leftAnn)) setLeftAnn(payload.leftAnn);
+    if (Array.isArray(payload.rightAnn)) setRightAnn(payload.rightAnn);
+    if (typeof payload.syncScroll === "boolean") setSyncScroll(payload.syncScroll);
+    if (payload.leftSummary) setLeftSummary(payload.leftSummary);
+    if (payload.rightSummary) setRightSummary(payload.rightSummary);
+    if (payload.mode) setMode(payload.mode);
+    if (typeof payload.leftCategory === "string") setLeftCategory(payload.leftCategory);
+    if (typeof payload.rightCategory === "string") setRightCategory(payload.rightCategory);
+    if (typeof payload.matchCorrectness === "string") setMatchCorrectness(payload.matchCorrectness);
+    if (typeof payload.finalCategory === "string") setFinalCategory(payload.finalCategory);
+    if (typeof payload.finalOtherCategory === "string") setFinalOtherCategory(payload.finalOtherCategory);
+    if (Array.isArray(payload.bugCategoryOptions) && payload.bugCategoryOptions.length)
+      setBugCategoryOptions(payload.bugCategoryOptions);
+    if (typeof payload.solidViolation === "string") setSolidViolation(payload.solidViolation);
+    if (typeof payload.solidComplexity === "string") setSolidComplexity(payload.solidComplexity);
+    if (typeof payload.solidFixedCode === "string") setSolidFixedCode(payload.solidFixedCode);
+    if (typeof payload.patchAreClones === "string") setPatchAreClones(payload.patchAreClones);
+    if (typeof payload.patchCloneType === "string") setPatchCloneType(payload.patchCloneType);
+    if (typeof payload.patchCloneComment === "string") setPatchCloneComment(payload.patchCloneComment);
+    if (typeof payload.snapshotOutcome === "string") setSnapshotOutcome(payload.snapshotOutcome);
+    if (typeof payload.snapshotChangeType === "string") setSnapshotChangeType(payload.snapshotChangeType);
+    if (typeof payload.snapshotChangeTypeOther === "string")
+      setSnapshotChangeTypeOther(payload.snapshotChangeTypeOther);
+    if (typeof payload.assessmentComment === "string") setAssessmentComment(payload.assessmentComment);
+  }, []);
 
   useEffect(() => {
-    scheduleAutosave();
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+    }
+    autosaveTimerRef.current = setTimeout(() => {
+      if (typeof window === "undefined") return;
+      try {
+        window.localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify(captureAssessmentState())
+        );
+      } catch (error) {
+        console.warn("Autosave skipped (likely storage limit)", error);
+      }
+    }, 1000);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [captureAssessmentState]);
+
+  useEffect(() => {
+    if (!authToken || !studyContext.studyId || !studyContext.studyArtifactId) {
+      return;
+    }
+
+    let cancelled = false;
+    setAssessmentLoading(true);
+    setAssessmentError("");
+
+    api
+      .get("/api/artifact-assessments", {
+        params: {
+          studyId: studyContext.studyId,
+          studyArtifactId: studyContext.studyArtifactId,
+          studyParticipantId: studyContext.studyParticipantId || undefined,
+          includeItems: false,
+        },
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      })
+      .then((response) => {
+        if (cancelled) return;
+        const record = Array.isArray(response.data?.assessments)
+          ? response.data.assessments[0]
+          : null;
+        if (record) {
+          setActiveAssessmentId(record.id);
+          if (record.studyParticipantId) {
+            setResolvedStudyParticipantId(record.studyParticipantId);
+          }
+          hydrateAssessmentPayload(record.payload);
+        } else {
+          setActiveAssessmentId(null);
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        if (error.response?.status === 401) {
+          navigate("/login");
+          return;
+        }
+        setAssessmentError(
+          error.response?.data?.message ||
+            "Unable to load existing artifact assessment."
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAssessmentLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [
-    mode,
-    leftData,
-    rightData,
-    leftAnn,
-    rightAnn,
-    syncScroll,
-    leftSummary,
-    rightSummary,
-    leftCategory,
-    rightCategory,
-    matchCorrectness,
-    finalCategory,
-    finalOtherCategory,
-    bugCategoryOptions,
-    solidViolation,
-    solidComplexity,
-    solidFixedCode,
-    patchAreClones,
-    patchCloneType,
-    patchCloneComment,
-    snapshotOutcome,
-    snapshotChangeType,
-    snapshotChangeTypeOther,
-    assessmentComment,
+    authToken,
+    hydrateAssessmentPayload,
+    navigate,
+    studyContext.studyArtifactId,
+    studyContext.studyId,
+    studyContext.studyParticipantId,
   ]);
 
   // ===== RESET =====
@@ -622,6 +807,9 @@ export default function ArtifactsComparison() {
     setMetadataLoadingId("");
     setMetadataPane("left");
     setPatchPairLabel("");
+    setAssessmentError("");
+    setAssessmentSuccess("");
+    setActiveAssessmentId(null);
 
     [
       leftCanvasRef,
@@ -1676,6 +1864,13 @@ export default function ArtifactsComparison() {
         ]
       : null;
 
+  const activeParticipantId =
+    resolvedStudyParticipantId ||
+    studyContext.studyParticipantId ||
+    null;
+  const missingStudyContext =
+    !studyContext.studyId || !studyContext.studyArtifactId;
+
   // ===== PATCH SIMILARITY (heatmap bar) =====
   let leftNormSet = null;
   let rightNormSet = null;
@@ -1751,6 +1946,84 @@ export default function ArtifactsComparison() {
       }
     }
     return null;
+  };
+
+  const handleSaveAssessment = async () => {
+    setAssessmentError("");
+    setAssessmentSuccess("");
+
+    const validationMessage = validateBeforeSave();
+    if (validationMessage) {
+      setAssessmentError(validationMessage);
+      return;
+    }
+
+    if (missingStudyContext) {
+      setAssessmentError(
+        "Missing study context. Please open this task from your study assignment."
+      );
+      return;
+    }
+
+    if (!authToken) {
+      setAssessmentError("Please log in again to submit your assessment.");
+      navigate("/login");
+      return;
+    }
+
+    const assessmentType =
+      mode === "solid"
+        ? "solid"
+        : mode === "patch"
+        ? "clone"
+        : mode === "snapshot"
+        ? "snapshot"
+        : "bug_stage";
+
+    setAssessmentSaving(true);
+    try {
+      const response = await api.post(
+        "/api/artifact-assessments",
+        {
+          studyId: studyContext.studyId,
+          studyArtifactId: studyContext.studyArtifactId,
+          studyParticipantId: activeParticipantId,
+          assessmentType,
+          status: "submitted",
+          payload: captureAssessmentState(),
+          sourceEvaluationId: studyContext.sourceEvaluationId || null,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        }
+      );
+
+      const saved = response.data?.assessment;
+      if (saved) {
+        setActiveAssessmentId(saved.id);
+        if (saved.studyParticipantId) {
+          setResolvedStudyParticipantId(saved.studyParticipantId);
+        }
+        if (saved.payload) {
+          hydrateAssessmentPayload(saved.payload);
+        }
+      }
+
+      setAssessmentSuccess("Assessment saved successfully.");
+    } catch (error) {
+      if (error.response?.status === 401) {
+        navigate("/login");
+        return;
+      }
+      setAssessmentError(
+        error.response?.data?.message ||
+          "Unable to save this artifact assessment right now."
+      );
+    } finally {
+      setAssessmentSaving(false);
+    }
   };
 
   // ===== MAIN RENDER =====
@@ -1857,6 +2130,52 @@ export default function ArtifactsComparison() {
               </svg>
             </Button>
           </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="border rounded-md px-4 py-3 bg-gray-50 text-xs text-gray-700 flex flex-wrap gap-4">
+            <span>Study #{studyContext.studyId ?? "—"}</span>
+            <span>Artifact link #{studyContext.studyArtifactId ?? "—"}</span>
+            <span>Participant record #{activeParticipantId ?? "—"}</span>
+            <span>
+              Signed in as {currentUser?.name || currentUser?.email || "participant"}
+            </span>
+            {activeAssessmentId && (
+              <span className="text-emerald-700 font-semibold">
+                Last saved ID #{activeAssessmentId}
+              </span>
+            )}
+          </div>
+          {participantSummary && (
+            <div className="border border-slate-200 bg-white rounded-md px-4 py-2 text-xs text-slate-600">
+              Assigned participant:
+              <span className="font-semibold text-slate-900 ml-1">
+                {participantSummary.name || `User ${participantSummary.id}`}
+              </span>
+              {participantSummary.email ? ` • ${participantSummary.email}` : null}
+            </div>
+          )}
+          {missingStudyContext && (
+            <div className="border border-amber-200 bg-amber-50 text-amber-900 text-sm px-3 py-2 rounded">
+              Open this task from your assigned study so the submission can be
+              linked to the correct artifact.
+            </div>
+          )}
+          {assessmentLoading && (
+            <div className="border border-blue-200 bg-blue-50 text-blue-900 text-sm px-3 py-2 rounded">
+              Loading your previous submission…
+            </div>
+          )}
+          {assessmentError && (
+            <div className="border border-red-200 bg-red-50 text-red-900 text-sm px-3 py-2 rounded">
+              {assessmentError}
+            </div>
+          )}
+          {assessmentSuccess && (
+            <div className="border border-emerald-200 bg-emerald-50 text-emerald-900 text-sm px-3 py-2 rounded">
+              {assessmentSuccess}
+            </div>
+          )}
         </div>
 
         {/* Patch similarity heatmap bar */}
@@ -2595,57 +2914,10 @@ export default function ArtifactsComparison() {
               <Button
                 size="lg"
                 className="bg-black text-white hover:bg-gray-800"
-                onClick={() => {
-                  const validationMessage = validateBeforeSave();
-                  if (validationMessage) {
-                    alert(validationMessage);
-                    return;
-                  }
-                  const finalPatchCloneType =
-                    patchCloneType ||
-                    (patchAreClones === "yes" ? "unspecified" : "");
-                  const bugFinalCategory =
-                    finalCategory === "other" && finalOtherCategory
-                      ? finalOtherCategory
-                      : finalCategory || (labelsMatch ? leftCategory : "");
-                  const resolvedSnapshotChangeType =
-                    snapshotChangeType === "other"
-                      ? snapshotChangeTypeOther.trim()
-                      : snapshotChangeType;
-
-                  console.log("Saved assessment:", {
-                    mode,
-                    leftFileName: leftData.name,
-                    rightFileName: rightData.name,
-                    // Bug labeling states
-                    leftCategory,
-                    rightCategory,
-                    matchCorrectness,
-                    bugFinalCategory,
-                    // SOLID mode states
-                    solidViolation,
-                    solidComplexity,
-                    solidFixedCode,
-                    // Patch mode states
-                    patchAreClones,
-                    patchCloneType: finalPatchCloneType,
-                    patchCloneComment,
-                    // Snapshot mode
-                    snapshotOutcome,
-                    snapshotChangeType: resolvedSnapshotChangeType,
-                    snapshotArtifacts: {
-                      reference: snapshotAssets.reference?.name,
-                      failure: snapshotAssets.failure?.name,
-                      diff: snapshotDiffData?.name,
-                    },
-                    // Generic notes
-                    assessmentComment,
-                    patchSimilarity,
-                  });
-                  alert("Assessment state logged to console.");
-                }}
+                onClick={handleSaveAssessment}
+                disabled={assessmentSaving}
               >
-                Save Assessment
+                {assessmentSaving ? "Saving..." : "Save Assessment"}
               </Button>
             </div>
           </CardContent>
