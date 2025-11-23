@@ -209,7 +209,7 @@ const formatBugReportText = (report) => {
   if (!report || typeof report !== "object") {
     try {
       return JSON.stringify(report, null, 2);
-    } catch (err) {
+    } catch {
       return String(report);
     }
   }
@@ -254,7 +254,7 @@ const formatBugReportText = (report) => {
   lines.push("", "---- RAW ARTIFACT ----");
   try {
     lines.push(JSON.stringify(report, null, 2));
-  } catch (err) {
+  } catch {
     lines.push(String(report));
   }
 

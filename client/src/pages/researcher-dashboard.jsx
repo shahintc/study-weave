@@ -90,6 +90,7 @@ const formatDateLabel = (value) => {
 export default function ResearcherDashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
+  const [authToken, setAuthToken] = useState(null);
   const [monitorDialogOpen, setMonitorDialogOpen] = useState(false);
   const [monitoringStudyId, setMonitoringStudyId] = useState(null);
   const [monitorFilters, setMonitorFilters] = useState(() => createDefaultFilters());
@@ -100,6 +101,11 @@ export default function ResearcherDashboard() {
   const [studies, setStudies] = useState([]);
   const [isStudiesLoading, setIsStudiesLoading] = useState(false);
   const [studiesError, setStudiesError] = useState("");
+  const [participantMatrix, setParticipantMatrix] = useState(null);
+  const [participantError, setParticipantError] = useState("");
+  const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
+  const [assignmentDrafts, setAssignmentDrafts] = useState({});
+  const [assignmentSaving, setAssignmentSaving] = useState({});
   const analyticsRef = useRef(null);
 
   const loadStudies = useCallback(async () => {
@@ -122,14 +128,16 @@ export default function ResearcherDashboard() {
   }, [user?.id]);
 
   useEffect(() => {
-    const raw = localStorage.getItem("user");
-    if (!raw) {
+    const rawUser = localStorage.getItem("user");
+    const token = localStorage.getItem("token");
+    if (!rawUser || !token) {
       navigate("/login");
       return;
     }
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(rawUser);
       setUser(parsed);
+      setAuthToken(token);
       if (parsed.role !== "researcher") {
         navigate("/participant-dashboard");
       }
@@ -152,7 +160,7 @@ export default function ResearcherDashboard() {
   const dashboardHighlights = useMemo(() => {
     if (!studies.length) {
       return [
-        { label: "Active studies", value: 0, helper: "Syncing data…", icon: Activity },
+        { label: "Active studies", value: 0, helper: "Syncing data...", icon: Activity },
         { label: "Participants engaged", value: 0, helper: "Invite participants to begin", icon: Users },
         { label: "Avg artifact rating", value: "0.0", helper: "No submissions yet", icon: LineChartIcon },
       ];
@@ -225,6 +233,90 @@ export default function ResearcherDashboard() {
     [monitorFilters],
   );
 
+  const fetchParticipantMatrix = useCallback(
+    async (studyId) => {
+      if (!studyId || !authToken) {
+        return;
+      }
+      setIsParticipantsLoading(true);
+      setParticipantError("");
+      try {
+        const { data } = await api.get(`/api/researcher/studies/${studyId}/participants`, {
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+          },
+        });
+        setParticipantMatrix(data);
+        setAssignmentDrafts(
+          Object.fromEntries(
+            (data.participants || []).map((participant) => [
+              participant.id,
+              {
+                mode: participant.nextAssignment?.mode || "",
+                studyArtifactId: participant.nextAssignment?.studyArtifactId || "",
+              },
+            ]),
+          ),
+        );
+      } catch (error) {
+        console.error("Participant matrix fetch failed", error);
+        const message =
+          error.response?.data?.message || "Unable to load participant details";
+        setParticipantError(message);
+      } finally {
+        setIsParticipantsLoading(false);
+      }
+    },
+    [authToken],
+  );
+
+  const handleAssignmentDraftChange = useCallback((participantId, field, value) => {
+    setAssignmentDrafts((prev) => ({
+      ...prev,
+      [participantId]: {
+        ...prev[participantId],
+        [field]: value,
+      },
+    }));
+  }, []);
+
+  const handleAssignmentSave = useCallback(
+    async (participantId) => {
+      if (!monitoringStudyId || !authToken) {
+        return;
+      }
+      const draft = assignmentDrafts[participantId];
+      if (!draft || !draft.mode) {
+        setParticipantError("Select a stage before assigning.");
+        return;
+      }
+      setAssignmentSaving((prev) => ({ ...prev, [participantId]: true }));
+      try {
+        await api.patch(
+          `/api/researcher/studies/${monitoringStudyId}/participants/${participantId}/next-assignment`,
+          {
+            mode: draft.mode,
+            studyArtifactId: draft.studyArtifactId || null,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+            },
+          },
+        );
+        await fetchParticipantMatrix(monitoringStudyId);
+      } catch (error) {
+        console.error("Participant assignment save failed", error);
+        const message =
+          error.response?.data?.message || "Unable to update the assignment right now";
+        setParticipantError(message);
+      } finally {
+        setAssignmentSaving((prev) => ({ ...prev, [participantId]: false }));
+      }
+    },
+    [assignmentDrafts, authToken, fetchParticipantMatrix, monitoringStudyId],
+  );
+
   useEffect(() => {
     if (!monitorDialogOpen || !monitoringStudyId) {
       return undefined;
@@ -235,12 +327,24 @@ export default function ResearcherDashboard() {
   }, [monitorDialogOpen, monitoringStudyId, fetchAnalytics]);
 
   useEffect(() => {
+    if (!monitorDialogOpen || !monitoringStudyId) {
+      return;
+    }
+    fetchParticipantMatrix(monitoringStudyId);
+  }, [monitorDialogOpen, monitoringStudyId, fetchParticipantMatrix]);
+
+  useEffect(() => {
     if (!monitorDialogOpen) {
       setMonitoringStudyId(null);
       setAnalytics(null);
       setMonitorFilters(createDefaultFilters());
       setAnalyticsError("");
       setLastRefreshAt(null);
+      setParticipantMatrix(null);
+      setAssignmentDrafts({});
+      setParticipantError("");
+      setIsParticipantsLoading(false);
+      setAssignmentSaving({});
     }
   }, [monitorDialogOpen]);
 
@@ -353,7 +457,7 @@ export default function ResearcherDashboard() {
           </CardHeader>
           <CardContent className="space-y-6">
             {isStudiesLoading ? (
-              <p className="text-sm text-muted-foreground">Loading studies…</p>
+              <p className="text-sm text-muted-foreground">Loading studies...</p>
             ) : studiesError ? (
               <p className="text-sm text-destructive">{studiesError}</p>
             ) : !studies.length ? (
@@ -454,6 +558,13 @@ export default function ResearcherDashboard() {
               onExportPdf={exportAsPdf}
               analyticsRef={analyticsRef}
               lastRefreshAt={lastRefreshAt}
+              participantMatrix={participantMatrix}
+              participantError={participantError}
+              isParticipantsLoading={isParticipantsLoading}
+              assignmentDrafts={assignmentDrafts}
+              onAssignmentDraftChange={handleAssignmentDraftChange}
+              onAssignmentSave={handleAssignmentSave}
+              assignmentSaving={assignmentSaving}
             />
           ) : (
             <p className="text-sm text-muted-foreground">Choose a study to open the monitor.</p>
@@ -477,6 +588,13 @@ function StudyMonitorPanel({
   onExportPdf,
   analyticsRef,
   lastRefreshAt,
+  participantMatrix,
+  participantError,
+  isParticipantsLoading,
+  assignmentDrafts,
+  onAssignmentDraftChange,
+  onAssignmentSave,
+  assignmentSaving,
 }) {
   const summary = analytics?.summary;
   const hasPayload = Boolean(summary);
@@ -484,6 +602,43 @@ function StudyMonitorPanel({
   const completionTrend = analytics?.charts?.completionTrend ?? [];
   const artifactAverages = analytics?.charts?.artifactAverages ?? [];
   const participants = analytics?.participants ?? [];
+  const participantDetails = participantMatrix?.participants ?? [];
+  const availableModes = participantMatrix?.artifactModes ?? [];
+  const studyArtifacts = participantMatrix?.studyArtifacts ?? [];
+
+  const formatParticipationStatus = (status) => {
+    switch (status) {
+      case 'completed':
+        return { label: 'Completed', tone: 'border-emerald-200 text-emerald-600' };
+      case 'in_progress':
+        return { label: 'In progress', tone: 'border-slate-200 text-slate-600' };
+      default:
+        return { label: 'Not started', tone: 'border-slate-200 text-slate-600' };
+    }
+  };
+
+  const renderArtifactProgress = (progress) => {
+    if (!progress?.modes) {
+      return <p className="text-xs text-muted-foreground">No artifact submissions yet.</p>;
+    }
+    return (
+      <div className="flex flex-wrap gap-2">
+        {availableModes.map((mode) => {
+          const entry = progress.modes[mode.value] || { completed: 0 };
+          const count = entry.completed || 0;
+          return (
+            <Badge
+              key={mode.value}
+              variant={count ? 'default' : 'outline'}
+              className="text-xs"
+            >
+              {mode.label.split(' – ')[0]} • {count}
+            </Badge>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -561,6 +716,129 @@ function StudyMonitorPanel({
           {error}
         </div>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Participant progress</CardTitle>
+          <CardDescription>Compare competency vs. artifact modes and queue the next assignment.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {participantError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {participantError}
+            </div>
+          )}
+          {isParticipantsLoading ? (
+            <p className="text-sm text-muted-foreground">Loading participant data...</p>
+          ) : participantDetails.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No participants have joined this study yet.</p>
+          ) : (
+            participantDetails.map((participant) => {
+              const draft = assignmentDrafts?.[participant.id] || { mode: '', studyArtifactId: '' };
+              const inFlight = Boolean(assignmentSaving?.[participant.id]);
+              const statusMeta = formatParticipationStatus(participant.participationStatus);
+              const artifactSuffix = participant.nextAssignment?.artifactLabel
+                ? ` • ${participant.nextAssignment.artifactLabel}`
+                : '';
+              const currentAssignmentLabel = participant.nextAssignment?.modeLabel
+                ? `${participant.nextAssignment.modeLabel}${artifactSuffix}`
+                : 'Not assigned';
+
+              return (
+                <div key={participant.id} className="space-y-3 rounded-md border px-3 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium">{participant.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {participant.persona} • {participant.region}
+                      </p>
+                    </div>
+                    <Badge variant="outline" className={statusMeta.tone}>
+                      {statusMeta.label}
+                    </Badge>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>Competency</span>
+                        <span>{participant.competency?.completionPercent ?? 0}%</span>
+                      </div>
+                      <Progress value={participant.competency?.completionPercent ?? 0} />
+                      <p className="text-xs text-muted-foreground">
+                        {participant.competency?.statusLabel || 'Not assigned'}
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">Artifact modes</p>
+                      {renderArtifactProgress(participant.artifactProgress)}
+                      <p className="text-xs text-muted-foreground">
+                        {participant.artifactProgress?.totals?.submitted || 0} submissions total
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">Stage</label>
+                        <Select
+                          value={draft.mode || undefined}
+                          onValueChange={(value) =>
+                            onAssignmentDraftChange?.(participant.id, 'mode', value)
+                          }
+                          disabled={!availableModes.length}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select stage" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableModes.map((mode) => (
+                              <SelectItem key={mode.value} value={mode.value}>
+                                {mode.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs text-muted-foreground">Artifact (optional)</label>
+                        <Select
+                          value={draft.studyArtifactId || '__any'}
+                          onValueChange={(value) =>
+                            onAssignmentDraftChange?.(
+                              participant.id,
+                              'studyArtifactId',
+                              value === '__any' ? '' : value,
+                            )
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Any artifact" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__any">Any artifact</SelectItem>
+                            {studyArtifacts.map((artifact) => (
+                              <SelectItem key={artifact.id} value={artifact.id}>
+                                {artifact.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        onClick={() => onAssignmentSave?.(participant.id)}
+                        disabled={!draft.mode || inFlight}
+                      >
+                        {inFlight ? 'Saving...' : 'Assign task'}
+                      </Button>
+                      <p className="text-xs text-muted-foreground">Current next task: {currentAssignmentLabel}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </CardContent>
+      </Card>
 
       {!hasPayload && !isLoading && (
         <div className="flex min-h-[180px] items-center justify-center rounded-md border text-sm text-muted-foreground">

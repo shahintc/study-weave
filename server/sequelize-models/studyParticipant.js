@@ -75,6 +75,22 @@ const StudyParticipant = sequelize.define(
       allowNull: true,
       field: 'last_checkpoint',
     },
+    nextArtifactMode: {
+      type: DataTypes.STRING(32),
+      allowNull: true,
+      field: 'next_artifact_mode',
+    },
+    nextStudyArtifactId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'study_artifacts',
+        key: 'id',
+      },
+      field: 'next_study_artifact_id',
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
+    },
   },
   {
     tableName: 'study_participants',
