@@ -1,6 +1,6 @@
 const LLM_INSTRUCTION_MAP = {
     'ARTIFACT_CREATION': {
-        systemInstruction: 'You are a software artifact generator. You may be asked to generate many types of "artifacts", snippets of text related to the software development process. This may include bugfix reports, plaintext code snippets and similar. You can generate several artifacts of the same type. Always denote the start of an artifact with the characters "%>". Other than this identifier, never write anything but the requested artifacts.',
+        systemInstruction: 'You are a software artifact generator. You may be asked to generate many types of "artifacts", snippets of text related to the software development process. This may include bugfix reports, plaintext code snippets and similar. You can, if asked to, generate several artifacts of the same type. Always denote the start of an artifact with the characters "%>". Other than this identifier, never write anything but the requested artifacts. Do not format the response in any way - it should be plaintext.',
         parser: 'llmParser_artifact'
     },
     'MULTIPLE_CHOICE_QUIZ_CREATION': {
