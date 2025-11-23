@@ -11,10 +11,11 @@ import {
   DropdownMenuTrigger,
   DropdownMenuCheckboxItem
 } from "@/components/ui/dropdown-menu";
-import { IconPlus } from "@tabler/icons-react";
+import { IconPlus, IconBolt } from "@tabler/icons-react";
 // import { FileUploadModal } from '@/pages/artifactManagement/UploadModal'; // Import the FileUploadModal (for replacements) - No longer needed
 import { DetailedUploadModal } from '@/pages/artifactManagement/DetailedUploadModal'; // Import the DetailedUploadModal (for new artifacts)
 import { ManageModal } from '@/pages/artifactManagement/ManageModal'; // Import the ManageModal
+import { GenerateArtifactModal } from "./GenerateArtifactModal";
 
 export default function ResearcherDashboard() {
   // Placeholder for current user ID. In a real app, this would come from auth context/state.
@@ -23,6 +24,7 @@ export default function ResearcherDashboard() {
   const [selectedType, setSelectedType] = useState(null); // Changed to single selection
   const [selectedTags, setSelectedTags] = useState([]);
   const [isNewArtifactModalOpen, setIsNewArtifactModalOpen] = useState(false);
+  const [isGenerateArtifactModalOpen, setIsGenerateArtifactModalOpen] = useState(false); // State for the new generate artifact modal
   const [isReplaceUploadModalOpen, setIsReplaceUploadModalOpen] = useState(false);
   const [isManageModalOpen, setIsManageModalOpen] = useState(false);
   const [artifactToManage, setArtifactToManage] = useState(null);
@@ -120,22 +122,39 @@ export default function ResearcherDashboard() {
       <section className="space-y-4">
         <div className="flex justify-between items-center">
           <h2 className="text-xl font-semibold">My Artifacts</h2>
-          {/* Button to open FileUploadModal for new artifacts */}
-          <Button
-            onClick={() => {
-              setIsNewArtifactModalOpen(true);
-            }}
-            className="flex items-center gap-2"
-          >
-            <IconPlus className="h-4 w-4" />
-            New Artifact
-          </Button>
+          <div className="flex gap-2"> {/* New div to group buttons */}
+            {/* Button to open FileUploadModal for new artifacts */}
+            <Button
+              onClick={() => {
+                setIsNewArtifactModalOpen(true);
+              }}
+              className="flex items-center gap-2"
+            >
+              <IconPlus className="h-4 w-4" />
+              Upload Artifact
+            </Button>
+            <Button
+              onClick={() => {
+                setIsGenerateArtifactModalOpen(true);
+              }}
+              className="flex items-center gap-2"
+            >
+              <IconBolt className="h-4 w-4" />
+              Generate Artifact
+            </Button>
+          </div>
           {/* DetailedUploadModal for new artifacts */}
           <DetailedUploadModal
             isOpen={isNewArtifactModalOpen}
             setIsOpen={setIsNewArtifactModalOpen}
             artifactToReplaceId={null} // Always null for new artifacts
             onUploadSuccess={handleUploadSuccess}
+          />
+          {/* GenerateArtifactModal for generating new artifacts */}
+          <GenerateArtifactModal
+            isOpen={isGenerateArtifactModalOpen}
+            setIsOpen={setIsGenerateArtifactModalOpen}
+            onGenerateSuccess={handleUploadSuccess} // Assuming generation also triggers a refresh
           />
 
           {/* FileUploadModal for file replacements - This modal is no longer used directly, but the import remains for now */}

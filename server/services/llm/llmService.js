@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { getInstruction } from '../../config/llmSystemInstructions.mjs';
 
 const ai = new GoogleGenAI({});
-const model = "gemini-2.5-pro";
+const model = process.env.GEMINI_LLM_NAME;
 
 export async function generateContent(prompt, systemInstruction='', uploadedFiles=[]) {
     const config = {
