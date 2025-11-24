@@ -22,6 +22,7 @@ app.use('/api/artifacts', require('./routes/artifacts'));
 app.use('/api/tags', require('./routes/tags'));
 app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/researcher', require('./routes/researcher'));
+app.use('/api/reviewer', require('./routes/reviewer'));
 app.use('/api/competency', require('./routes/competency'));
 app.use('/api/llm', require('./routes/llm'));
 app.use('/api/artifact-assessments', require('./routes/artifactAssessments'));
