@@ -20,6 +20,7 @@ import ParticipantLayout from "./pages/ParticipantLayout";
 import ParticipantsListPage from "./pages/ParticipantsListPage";
 import AdminRoleManagementPage from "./pages/AdminRoleManagementPage";
 import CompetencyEvaluationReview from "./pages/CompetencyEvaluationReview";
+import ReviewerAdjudication from "./pages/ReviewerAdjudication";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <BrowserRouter>
@@ -43,6 +44,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <Route path="assess" element={<AssessmentCreation />} />
           <Route path="assessment-creation" element={<AssessmentCreation />} />
           <Route path="competency-review" element={<CompetencyEvaluationReview />} />
+          <Route path="reviewer" element={<ReviewerAdjudication />} />
           <Route path="study-creation-wizard" element={<StudyCreationWizard />} /> 
           <Route path="participants-list" element={<ParticipantsListPage />} />
           {/* Alias for older links */}

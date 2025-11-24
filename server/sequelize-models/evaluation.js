@@ -86,10 +86,46 @@ const Evaluation = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    participantPayload: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      field: 'participant_payload',
+    },
+    groundTruthPayload: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      field: 'ground_truth_payload',
+    },
+    adjudicatedLabel: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'adjudicated_label',
+    },
+    reviewStatus: {
+      type: DataTypes.ENUM('pending', 'in_review', 'resolved'),
+      allowNull: false,
+      defaultValue: 'pending',
+      field: 'review_status',
+    },
+    reviewerDecision: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'reviewer_decision',
+    },
+    reviewerNotes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'reviewer_notes',
+    },
     submittedAt: {
       type: DataTypes.DATE,
       allowNull: true,
       field: 'submitted_at',
+    },
+    reviewedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'reviewed_at',
     },
   },
   {

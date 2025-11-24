@@ -51,6 +51,11 @@ const StudyComparison = sequelize.define(
       allowNull: true,
       defaultValue: {},
     },
+    groundTruth: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      field: 'ground_truth',
+    },
   },
   {
     tableName: 'study_comparisons',

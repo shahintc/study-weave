@@ -220,6 +220,11 @@ module.exports = {
             secondary_artifact_id: studyArtifactRows[1].id,
             prompt: 'Which artifact better explains the concept and why?',
             criteria: JSON.stringify({ rubric: ['clarity', 'accuracy'] }),
+            ground_truth: JSON.stringify({
+              expectedWinner: 'primary',
+              rationale: 'LLM judged Artifact A clearer and more complete.',
+              confidence: 0.82,
+            }),
             createdAt: now,
             updatedAt: now,
           },
@@ -279,6 +284,14 @@ module.exports = {
         rating: baseRatings[idx] ?? 4,
         metrics: JSON.stringify({ timeSeconds: 60 + idx * 15 }),
         summary: 'Seeded evaluation',
+        participant_payload: JSON.stringify({
+          label: idx % 2 === 0 ? 'clarity' : 'accuracy',
+          explanation: idx % 2 === 0 ? 'Artifact A reads better' : 'Artifact B is more precise',
+        }),
+        ground_truth_payload: JSON.stringify({
+          label: 'primary',
+          explanation: 'LLM baseline prefers Artifact A for clarity',
+        }),
         submitted_at: new Date(now.getTime() - idx * 60 * 60 * 1000),
         createdAt: now,
         updatedAt: now,
