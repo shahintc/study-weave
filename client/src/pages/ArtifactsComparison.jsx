@@ -2010,8 +2010,12 @@ export default function ArtifactsComparison() {
           hydrateAssessmentPayload(saved.payload);
         }
       }
-
-      setAssessmentSuccess("Assessment saved successfully.");
+      const notified = Boolean(response.data?.notificationQueued);
+      setAssessmentSuccess(
+        notified
+          ? "Assessment saved and the researcher has been notified."
+          : "Assessment saved successfully."
+      );
     } catch (error) {
       if (error.response?.status === 401) {
         navigate("/login");

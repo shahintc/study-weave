@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { CompetencyAssessment, CompetencyAssignment, User } = require('../models');
+const submissionNotifications = require('../services/submissionNotifications');
 
 const normalizeNumber = (value) => {
   if (value === null || value === undefined || value === '') {
@@ -351,17 +352,23 @@ router.get('/participants/overview', async (req, res) => {
 });
 
 router.post('/assignments/:id/submit', async (req, res) => {
+  const transaction = await CompetencyAssignment.sequelize.transaction();
   try {
     const { id } = req.params;
     const { responses } = req.body;
 
-    const assignment = await CompetencyAssignment.findByPk(id);
+    const assignment = await CompetencyAssignment.findByPk(id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
 
     if (!assignment) {
+      await transaction.rollback();
       return res.status(404).json({ message: 'Assignment not found.' });
     }
 
     if (assignment.status === 'submitted' || assignment.status === 'reviewed') {
+      await transaction.rollback();
       return res.status(400).json({ message: 'This assessment has already been submitted.' });
     }
 
@@ -369,12 +376,26 @@ router.post('/assignments/:id/submit', async (req, res) => {
     assignment.submittedAt = new Date();
     assignment.responses = responses;
 
-    await assignment.save();
+    await assignment.save({ transaction });
 
-    res.status(200).json({ message: 'Assessment submitted successfully.' });
+    const notificationContext = await submissionNotifications.handleCompetencySubmission({
+      assignmentId: assignment.id,
+      transaction,
+    });
+
+    await transaction.commit();
+
+    if (notificationContext) {
+      submissionNotifications
+        .sendResearcherNotification(notificationContext)
+        .catch((error) => console.error('Competency notification error:', error));
+    }
+
+    return res.status(200).json({ message: 'Assessment submitted successfully.' });
   } catch (error) {
+    await transaction.rollback();
     console.error('Submit competency assessment error', error);
-    res.status(500).json({ message: 'Unable to submit competency assessment right now.' });
+    return res.status(500).json({ message: 'Unable to submit competency assessment right now.' });
   }
 });
 

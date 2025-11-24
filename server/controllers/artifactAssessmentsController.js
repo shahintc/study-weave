@@ -10,6 +10,7 @@ const {
   User,
   Evaluation,
 } = require('../models');
+const submissionNotifications = require('../services/submissionNotifications');
 
 const VALID_ASSESSMENT_TYPES = ['bug_stage', 'solid', 'clone', 'snapshot'];
 const VALID_STATUS_VALUES = ['draft', 'submitted', 'archived'];
@@ -243,13 +244,29 @@ const createArtifactAssessment = async (req, res) => {
       await ArtifactAssessmentItem.bulkCreate(normalizedItems, { transaction });
     }
 
+    let notificationContext = null;
+    if (status === 'submitted') {
+      notificationContext = await submissionNotifications.handleArtifactSubmission({
+        assessmentId: assessment.id,
+        transaction,
+      });
+    }
+
     await transaction.commit();
 
     const createdRecord = await ArtifactAssessment.findByPk(assessment.id, {
       include: baseIncludes(true),
     });
 
-    return res.status(201).json({ assessment: formatAssessment(createdRecord) });
+    if (notificationContext) {
+      submissionNotifications
+        .sendResearcherNotification(notificationContext)
+        .catch((error) => console.error('Artifact notification error:', error));
+    }
+
+    return res
+      .status(201)
+      .json({ assessment: formatAssessment(createdRecord), notificationQueued: Boolean(notificationContext) });
   } catch (error) {
     await transaction.rollback();
     const statusCode = error.message === 'INVALID_PARTICIPANT' ? 400 : 500;
