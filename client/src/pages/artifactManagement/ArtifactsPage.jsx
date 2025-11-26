@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import api from '@/api/axios';
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
@@ -18,8 +19,9 @@ import { ManageModal } from '@/pages/artifactManagement/ManageModal'; // Import 
 import { GenerateArtifactModal } from "./GenerateArtifactModal";
 
 export default function ResearcherDashboard() {
-  // Placeholder for current user ID. In a real app, this would come from auth context/state.
-  const currentUserId = 1; // Assuming user with ID 1 exists for demonstration
+  const navigate = useNavigate();
+  const [currentUser, setCurrentUser] = useState(null);
+  const currentUserId = currentUser?.id || currentUser?.userId || null;
 
   const [selectedType, setSelectedType] = useState(null); // Changed to single selection
   const [selectedTags, setSelectedTags] = useState([]);
@@ -42,14 +44,17 @@ export default function ResearcherDashboard() {
   const availableTypes = ["human", "AI"];
 
   // Function to fetch artifacts
-  const fetchArtifacts = async () => {
+  const fetchArtifacts = useCallback(async () => {
     setLoadingArtifacts(true);
     setErrorArtifacts(null);
+    if (!currentUserId) {
+      setArtifactsData([]);
+      setLoadingArtifacts(false);
+      return;
+    }
     try {
       const response = await api.get(`/api/artifacts/user/${currentUserId}`);
-      console.log(response.data.artifacts)
       setArtifactsData(response.data.artifacts);
-      console.log(artifactsData)
     } catch (error) {
       if (error.response && error.response.status === 404) {
         // No artifacts found, which is a valid scenario
@@ -62,7 +67,7 @@ export default function ResearcherDashboard() {
     } finally {
       setLoadingArtifacts(false);
     }
-  };
+  }, [currentUserId]);
 
   // Function to fetch available tags
   const fetchAvailableTags = async () => {
@@ -83,9 +88,27 @@ export default function ResearcherDashboard() {
 
   // useEffect to fetch data on component mount
   useEffect(() => {
+    const rawUser = localStorage.getItem("user");
+    if (!rawUser) {
+      navigate("/login");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(rawUser);
+      if (parsed.role !== "researcher") {
+        navigate("/login");
+        return;
+      }
+      setCurrentUser(parsed);
+    } catch {
+      navigate("/login");
+    }
+  }, [navigate]);
+
+  useEffect(() => {
     fetchArtifacts();
     fetchAvailableTags();
-  }, [currentUserId]); // Re-fetch if currentUserId changes
+  }, [fetchArtifacts]);
 
   const handleTypeChange = (type) => {
     setSelectedType((prev) => (prev === type ? null : type)); // Toggle selected type
@@ -149,12 +172,14 @@ export default function ResearcherDashboard() {
             setIsOpen={setIsNewArtifactModalOpen}
             artifactToReplaceId={null} // Always null for new artifacts
             onUploadSuccess={handleUploadSuccess}
+            currentUserId={currentUserId}
           />
           {/* GenerateArtifactModal for generating new artifacts */}
           <GenerateArtifactModal
             isOpen={isGenerateArtifactModalOpen}
             setIsOpen={setIsGenerateArtifactModalOpen}
-            onGenerateSuccess={handleUploadSuccess} // Assuming generation also triggers a refresh
+            onGenerateSuccess={handleUploadSuccess}
+            currentUserId={currentUserId}
           />
 
           {/* FileUploadModal for file replacements - This modal is no longer used directly, but the import remains for now */}

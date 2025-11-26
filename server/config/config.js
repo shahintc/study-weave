@@ -8,19 +8,19 @@ const common = {
 
 module.exports = {
   development: {
-    username: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || null,
-    database: process.env.DB_NAME || 'study_weave_db',
-    host: process.env.DB_HOST || '127.0.0.1',
-    port: Number(process.env.DB_PORT || 5432),
+    username: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT),
     ...common,
   },
   test: {
-    username: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || null,
-    database: (process.env.DB_NAME || 'study_weave_db') + '_test',
-    host: process.env.DB_HOST || '127.0.0.1',
-    port: Number(process.env.DB_PORT || 5432),
+    username: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: (process.env.DB_NAME) + '_test',
+    host: process.env.DB_HOST,
+    port: Number(process.env.DB_PORT),
     ...common,
   },
   production: process.env.DATABASE_URL
@@ -33,11 +33,11 @@ module.exports = {
         logging: false,
       }
     : {
-        username: process.env.DB_USER || 'postgres',
-        password: process.env.DB_PASSWORD || null,
-        database: process.env.DB_NAME || 'study_weave_db',
-        host: process.env.DB_HOST || '127.0.0.1',
-        port: Number(process.env.DB_PORT || 5432),
+        username: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_NAME,
+        host: process.env.DB_HOST,
+        port: Number(process.env.DB_PORT),
         ...common,
       },
 };

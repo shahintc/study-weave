@@ -23,6 +23,9 @@ const ARTIFACT_MODE_OPTIONS = [
 ];
 
 const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
+const DEFAULT_ARTIFACT_MODE = 'stage1';
+
+const resolveArtifactMode = (value) => (value && ARTIFACT_MODE_SET.has(value) ? value : DEFAULT_ARTIFACT_MODE);
 
 router.get('/studies', async (req, res) => {
   try {
@@ -87,6 +90,8 @@ router.get('/studies/:studyId/participants', authMiddleware, async (req, res) =>
     }
 
     const artifactMeta = buildArtifactLookup(study.studyArtifacts || []);
+    const metadata = normalizeJson(study.metadata);
+    const defaultArtifactMode = resolveArtifactMode(metadata.defaultArtifactMode);
 
     const participantRows = await StudyParticipant.findAll({
       where: { studyId: study.id },
@@ -108,9 +113,10 @@ router.get('/studies/:studyId/participants', authMiddleware, async (req, res) =>
 
     return res.json({
       study: { id: String(study.id), title: study.title },
-      participants: participantRows.map((row) => formatParticipantDetail(row, artifactMeta.lookup)),
+      participants: participantRows.map((row) => formatParticipantDetail(row, artifactMeta.lookup, defaultArtifactMode)),
       studyArtifacts: artifactMeta.list,
       artifactModes: ARTIFACT_MODE_OPTIONS,
+      defaultArtifactMode,
     });
   } catch (error) {
     console.error('Researcher participant progress error', error);
@@ -193,8 +199,10 @@ router.patch(
       await participant.save();
 
       const artifactMeta = buildArtifactLookup(study.studyArtifacts || []);
+      const metadata = normalizeJson(study.metadata);
+      const defaultArtifactMode = resolveArtifactMode(metadata.defaultArtifactMode);
 
-      return res.json({ participant: formatParticipantDetail(participant, artifactMeta.lookup) });
+      return res.json({ participant: formatParticipantDetail(participant, artifactMeta.lookup, defaultArtifactMode) });
     } catch (error) {
       console.error('Researcher assignment update error', error);
       return res.status(500).json({ message: 'Unable to update the next assignment right now.' });
@@ -329,7 +337,7 @@ function buildArtifactLookup(studyArtifacts = []) {
   return { list, lookup };
 }
 
-function formatParticipantDetail(row, artifactLookup) {
+function formatParticipantDetail(row, artifactLookup, defaultMode) {
   const plain = typeof row.get === 'function' ? row.get({ plain: true }) : row;
   const profile = normalizeJson(plain.lastCheckpoint);
 
@@ -345,7 +353,7 @@ function formatParticipantDetail(row, artifactLookup) {
     progressPercent: plain.progressPercent || 0,
     competency: summarizeCompetencyProgress(plain.sourceAssignment),
     artifactProgress: summarizeArtifactProgress(plain.artifactAssessments || []),
-    nextAssignment: buildNextAssignmentPayload(plain, artifactLookup),
+    nextAssignment: buildNextAssignmentPayload(plain, artifactLookup, defaultMode),
     lastUpdatedAt: plain.updatedAt ? new Date(plain.updatedAt).toISOString() : null,
   };
 }
@@ -437,13 +445,14 @@ function resolveModeKey(assessment) {
   return null;
 }
 
-function buildNextAssignmentPayload(participant, artifactLookup) {
+function buildNextAssignmentPayload(participant, artifactLookup, defaultMode) {
   const artifactId = participant.nextStudyArtifactId ? Number(participant.nextStudyArtifactId) : null;
   const artifact = artifactId ? artifactLookup.get(artifactId) : null;
-  const modeMeta = ARTIFACT_MODE_OPTIONS.find((entry) => entry.value === participant.nextArtifactMode);
+  const resolvedMode = participant.nextArtifactMode || defaultMode || null;
+  const modeMeta = ARTIFACT_MODE_OPTIONS.find((entry) => entry.value === resolvedMode);
 
   return {
-    mode: participant.nextArtifactMode || null,
+    mode: resolvedMode,
     modeLabel: modeMeta?.label || null,
     studyArtifactId: artifact ? artifact.id : participant.nextStudyArtifactId ? String(participant.nextStudyArtifactId) : null,
     artifactLabel: artifact?.label || null,

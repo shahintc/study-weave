@@ -38,7 +38,7 @@ const ALLOWED_FILE_TYPES = ['text/plain', 'image/png', 'application/pdf']; // Mi
 
 // const API_BASE_URL = 'http://localhost:5200'; // Backend URL - No longer needed with Axios instance
 
-export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess }) {
+export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess, currentUserId }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [error, setError] = useState('');
@@ -145,8 +145,10 @@ export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess }) {
       return;
     }
 
-    // Placeholder for current user ID. In a real app, this would come from auth context/state.
-    const currentUserId = 1;
+    if (!currentUserId) {
+      setError('You must be signed in as a researcher to upload artifacts.');
+      return;
+    }
 
     setIsLoading(true); // Start loading
     setError(''); // Clear previous errors

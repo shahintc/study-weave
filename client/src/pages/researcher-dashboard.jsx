@@ -247,12 +247,13 @@ export default function ResearcherDashboard() {
           },
         });
         setParticipantMatrix(data);
+        const defaultMode = data.defaultArtifactMode || "";
         setAssignmentDrafts(
           Object.fromEntries(
             (data.participants || []).map((participant) => [
               participant.id,
               {
-                mode: participant.nextAssignment?.mode || "",
+                mode: participant.nextAssignment?.mode || defaultMode || "",
                 studyArtifactId: participant.nextAssignment?.studyArtifactId || "",
               },
             ]),
@@ -604,6 +605,8 @@ function StudyMonitorPanel({
   const participants = analytics?.participants ?? [];
   const participantDetails = participantMatrix?.participants ?? [];
   const availableModes = participantMatrix?.artifactModes ?? [];
+  const studyDefaultMode = participantMatrix?.defaultArtifactMode || null;
+  const defaultModeMeta = availableModes.find((entry) => entry.value === studyDefaultMode);
   const studyArtifacts = participantMatrix?.studyArtifacts ?? [];
 
   const formatParticipationStatus = (status) => {
@@ -646,6 +649,11 @@ function StudyMonitorPanel({
         <div>
           <h3 className="text-xl font-semibold">{study.title}</h3>
           <p className="text-sm text-muted-foreground">{study.window} • {study.nextMilestone}</p>
+          {defaultModeMeta && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Default artifact task · <span className="font-medium">{defaultModeMeta.label}</span>
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={onExportImage} disabled={!hasPayload}>

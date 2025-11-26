@@ -25,6 +25,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 
 const WIZARD_STEPS = [
   { id: 0, label: "Study details", helper: "Title, description, window" },
@@ -46,6 +53,14 @@ const PARTICIPANT_SEGMENTS = [
   { id: "seg-3", label: "Design partners" },
 ];
 
+const ARTIFACT_MODE_OPTIONS = [
+  { value: "stage1", label: "Stage 1 – Participant bug labeling" },
+  { value: "stage2", label: "Stage 2 – Reviewer bug comparison" },
+  { value: "solid", label: "SOLID violations" },
+  { value: "clone", label: "Patch clone detection" },
+  { value: "snapshot", label: "Snapshot change vs failure" },
+];
+
 function StudyCreationWizard() {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
@@ -60,6 +75,7 @@ function StudyCreationWizard() {
   const [newCriterionText, setNewCriterionText] = useState("");
   const [newCriterionWeight, setNewCriterionWeight] = useState("10");
   const [participantTarget, setParticipantTarget] = useState("20");
+  const [studyMode, setStudyMode] = useState(ARTIFACT_MODE_OPTIONS[0].value);
   const [windowStart, setWindowStart] = useState("");
   const [windowEnd, setWindowEnd] = useState("");
   const [selectedArtifacts, setSelectedArtifacts] = useState([]);
@@ -217,6 +233,7 @@ function StudyCreationWizard() {
       isBlinded,
       timelineStart: windowStart || null,
       timelineEnd: windowEnd || null,
+      defaultArtifactMode: studyMode,
       metadata: {
         participantTarget: Number(participantTarget) || 0,
         windowStart,
@@ -229,17 +246,18 @@ function StudyCreationWizard() {
         selectedArtifacts,
         selectedParticipants,
         isBlinded,
+        defaultArtifactMode: studyMode,
       },
     };
 
     try {
       const response = await axios.post("/api/studies", payload);
-      const newStudy = response.data;
-      alert(`Study Created Successfully! (ID: ${newStudy.id})`);
+      const newStudy = response.data?.study || response.data;
+      alert(`Study Created Successfully! (ID: ${newStudy?.id ?? "unknown"})`);
       navigate("/researcher/participants-list");
     } catch (err) {
       console.error("Failed to create study:", err);
-      setError("Failed to create study. Please try again.");
+      setError(err.response?.data?.message || "Failed to create study. Please try again.");
     }
   };
 
@@ -471,6 +489,24 @@ function StudyCreationWizard() {
                   value={participantTarget}
                   onChange={(event) => setParticipantTarget(event.target.value)}
                 />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="study-mode">Default artifact task</Label>
+                <Select value={studyMode} onValueChange={setStudyMode}>
+                  <SelectTrigger id="study-mode">
+                    <SelectValue placeholder="Select task" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ARTIFACT_MODE_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Participants will see this assignment on their dashboard as soon as they are invited.
+                </p>
               </div>
               <div className="space-y-2 rounded-md border p-4">
                 <div className="flex items-center space-x-2">

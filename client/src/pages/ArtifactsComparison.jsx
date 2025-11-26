@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTwoFilesPatch } from "diff";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -68,6 +69,34 @@ const SNAPSHOT_CHANGE_TYPES = [
   { id: "animation", label: "Animation / interaction regression" },
   { id: "other", label: "Other (describe)" },
 ];
+
+const SERVER_MODE_TO_UI = {
+  clone: "patch",
+};
+
+const SUPPORTED_UI_MODES = new Set(["stage1", "stage2", "solid", "patch", "snapshot"]);
+
+const MODE_LABELS = {
+  stage1: "Stage 1: Participant Bug Labeling",
+  stage2: "Stage 2: Reviewer Bug Label Comparison",
+  solid: "SOLID Violations: Code & Complexity",
+  patch: "Patch Mode: Code Diff / Clone Detection",
+  snapshot: "Snapshot Study: UI Change vs Failure",
+};
+
+const normalizeModeValue = (raw) => {
+  if (!raw || typeof raw !== "string") {
+    return null;
+  }
+  const lowered = raw.toLowerCase();
+  if (SERVER_MODE_TO_UI[lowered]) {
+    return SERVER_MODE_TO_UI[lowered];
+  }
+  if (SUPPORTED_UI_MODES.has(lowered)) {
+    return lowered;
+  }
+  return null;
+};
 
 /** Small helper for unique ids (used only for annotations etc.) */
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -330,7 +359,27 @@ export default function ArtifactsComparison() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const paramsKey = searchParams.toString();
+
+  const assignedMode = useMemo(() => {
+    const state = location.state || {};
+    const studyState = state.study || {};
+    const candidates = [
+      searchParams.get("mode"),
+      state.assignedMode,
+      studyState?.defaultArtifactMode,
+      studyState?.metadata?.defaultArtifactMode,
+      studyState?.nextAssignment?.mode,
+      studyState?.cta?.mode,
+    ];
+
+    for (const candidate of candidates) {
+      const normalized = normalizeModeValue(candidate);
+      if (normalized) {
+        return normalized;
+      }
+    }
+    return null;
+  }, [location.state, searchParams]);
 
   const parseNumeric = (value) => {
     if (value === undefined || value === null || value === "") return null;
@@ -357,7 +406,7 @@ export default function ArtifactsComparison() {
         searchParams.get("comparisonId") ?? state.comparisonId
       ),
     };
-  }, [location.state, paramsKey, searchParams]);
+  }, [location.state, searchParams]);
 
   const participantSummary = useMemo(() => {
     const state = location.state || {};
@@ -407,7 +456,13 @@ export default function ArtifactsComparison() {
   // solid: participant labels SOLID violation + complexity for a code snippet
   // patch: compare two patches and classify clone type
   // snapshot: participant decides if screenshot case is failure vs intended UI change
-  const [mode, setMode] = useState("stage2");
+  const [mode, setMode] = useState(assignedMode || "stage2");
+
+  useEffect(() => {
+    if (assignedMode) {
+      setMode((prev) => (prev === assignedMode ? prev : assignedMode));
+    }
+  }, [assignedMode]);
 
   const [syncScroll, setSyncScroll] = useState(true);
   const [showBig, setShowBig] = useState(false);
@@ -650,7 +705,8 @@ export default function ArtifactsComparison() {
     ]
   );
 
-  const hydrateAssessmentPayload = useCallback((payload = {}) => {
+  const hydrateAssessmentPayload = useCallback(
+    (payload = {}) => {
     if (!payload || typeof payload !== "object") return;
     if (payload.left) setLeftData(payload.left);
     if (payload.right) setRightData(payload.right);
@@ -659,7 +715,7 @@ export default function ArtifactsComparison() {
     if (typeof payload.syncScroll === "boolean") setSyncScroll(payload.syncScroll);
     if (payload.leftSummary) setLeftSummary(payload.leftSummary);
     if (payload.rightSummary) setRightSummary(payload.rightSummary);
-    if (payload.mode) setMode(payload.mode);
+      if (payload.mode && !assignedMode) setMode(payload.mode);
     if (typeof payload.leftCategory === "string") setLeftCategory(payload.leftCategory);
     if (typeof payload.rightCategory === "string") setRightCategory(payload.rightCategory);
     if (typeof payload.matchCorrectness === "string") setMatchCorrectness(payload.matchCorrectness);
@@ -678,7 +734,9 @@ export default function ArtifactsComparison() {
     if (typeof payload.snapshotChangeTypeOther === "string")
       setSnapshotChangeTypeOther(payload.snapshotChangeTypeOther);
     if (typeof payload.assessmentComment === "string") setAssessmentComment(payload.assessmentComment);
-  }, []);
+    },
+    [assignedMode],
+  );
 
   useEffect(() => {
     if (autosaveTimerRef.current) {
@@ -1958,6 +2016,13 @@ export default function ArtifactsComparison() {
       return;
     }
 
+    if (!assignedMode) {
+      setAssessmentError(
+        "Missing assignment context. Please relaunch this artifact task from your dashboard.",
+      );
+      return;
+    }
+
     if (missingStudyContext) {
       setAssessmentError(
         "Missing study context. Please open this task from your study assignment."
@@ -2010,7 +2075,6 @@ export default function ArtifactsComparison() {
           hydrateAssessmentPayload(saved.payload);
         }
       }
-
       setAssessmentSuccess("Assessment saved successfully.");
     } catch (error) {
       if (error.response?.status === 401) {
@@ -2043,37 +2107,17 @@ export default function ArtifactsComparison() {
           </div>
           <div className="flex items-center gap-3">
             {/* Mode selector */}
-            <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-md border">
-              <label
-                htmlFor="mode-select"
-                className="text-xs font-medium text-gray-700"
-              >
-                Mode
-              </label>
-              <select
-                id="mode-select"
-                value={mode}
-                onChange={(e) => {
-                  setMode(e.target.value);
-                }}
-                className="border rounded-md px-2 py-1 text-xs bg-white"
-              >
-                <option value="stage1">
-                  Stage 1: Participant Bug Labeling
-                </option>
-                <option value="stage2">
-                  Stage 2: Reviewer Bug Label Comparison
-                </option>
-                <option value="snapshot">
-                  Snapshot Study: UI Change vs Failure
-                </option>
-                <option value="solid">
-                  SOLID Violations: Code & Complexity
-                </option>
-                <option value="patch">
-                  Patch Mode: Code Diff / Clone Detection
-                </option>
-              </select>
+            <div className="flex items-center gap-2 rounded-md border bg-gray-50 px-3 py-1.5">
+              <span className="text-xs font-medium text-gray-700">Assigned task</span>
+              {assignedMode ? (
+                <Badge variant="secondary" className="text-xs">
+                  {MODE_LABELS[assignedMode] || assignedMode}
+                </Badge>
+              ) : (
+                <span className="text-xs text-gray-500">
+                  Open from your dashboard to lock the correct mode
+                </span>
+              )}
             </div>
 
             <div className="flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-md border">
@@ -2131,6 +2175,13 @@ export default function ArtifactsComparison() {
             </Button>
           </div>
         </div>
+
+        {!assignedMode && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+            No assignment metadata detected. Return to your participant dashboard and relaunch this task so we
+            can load the researcher-selected mode.
+          </div>
+        )}
 
         <div className="space-y-2">
           <div className="border rounded-md px-4 py-3 bg-gray-50 text-xs text-gray-700 flex flex-wrap gap-4">

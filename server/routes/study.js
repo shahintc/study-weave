@@ -1,6 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const { sequelize, Study, CompetencyAssignment, StudyArtifact } = require('../models');
+const { sequelize, Study, CompetencyAssignment, StudyArtifact, StudyParticipant } = require('../models');
+
+const ARTIFACT_MODE_OPTIONS = [
+  { value: 'stage1', label: 'Bug labeling – Stage 1' },
+  { value: 'stage2', label: 'Bug adjudication – Stage 2' },
+  { value: 'solid', label: 'SOLID review' },
+  { value: 'clone', label: 'Patch clone check' },
+  { value: 'snapshot', label: 'Snapshot intent' },
+];
+
+const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
+const DEFAULT_ARTIFACT_MODE = 'stage1';
+
+const resolveDefaultArtifactMode = (value) => {
+  if (value && ARTIFACT_MODE_SET.has(value)) {
+    return value;
+  }
+  return DEFAULT_ARTIFACT_MODE;
+};
 
 // const authMiddleware = require('../middleware/auth'); // We will add security to this later
 
@@ -54,6 +72,12 @@ router.post('/', async (req, res) => {
     if (typeof preparedMetadata.isBlinded === 'undefined') {
       preparedMetadata.isBlinded = Boolean(isBlinded);
     }
+
+    const requestedDefaultMode = typeof req.body.defaultArtifactMode === 'string'
+      ? req.body.defaultArtifactMode
+      : preparedMetadata.defaultArtifactMode;
+    const defaultArtifactMode = resolveDefaultArtifactMode(requestedDefaultMode);
+    preparedMetadata.defaultArtifactMode = defaultArtifactMode;
 
     const newStudy = await Study.create({
       title,
@@ -135,12 +159,44 @@ router.post('/', async (req, res) => {
       );
     }
 
+    const assignmentByParticipant = new Map();
+    assignments.forEach((assignment) => {
+      const plain = assignment.get({ plain: true });
+      assignmentByParticipant.set(plain.participantId, plain);
+    });
+
+    const defaultStudyArtifactId = studyArtifacts.length ? studyArtifacts[0].id : null;
+    let studyParticipants = [];
+    if (sanitizedParticipants.length) {
+      studyParticipants = await Promise.all(
+        sanitizedParticipants.map((participantId) =>
+          StudyParticipant.create(
+            {
+              studyId: newStudy.id,
+              participantId,
+              competencyAssignmentId: assignmentByParticipant.get(participantId)?.id || null,
+              invitationStatus: autoInviteFlag ? 'accepted' : 'pending',
+              participationStatus: 'not_started',
+              progressPercent: 0,
+              startedAt: null,
+              completedAt: null,
+              lastCheckpoint: null,
+              nextArtifactMode: defaultArtifactMode,
+              nextStudyArtifactId: defaultStudyArtifactId,
+            },
+            { transaction },
+          ),
+        ),
+      );
+    }
+
     await transaction.commit();
 
     res.status(201).json({
       study: newStudy.get({ plain: true }),
       competencyAssignments: assignments.map((entry) => entry.get({ plain: true })),
       studyArtifacts: studyArtifacts.map((entry) => entry.get({ plain: true })),
+      studyParticipants: studyParticipants.map((entry) => entry.get({ plain: true })),
     });
   } catch (error) {
     console.error('Error creating study:', error);

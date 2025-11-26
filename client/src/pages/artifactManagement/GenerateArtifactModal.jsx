@@ -25,7 +25,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 
-export function GenerateArtifactModal({ isOpen, setIsOpen, onGenerateSuccess }) {
+export function GenerateArtifactModal({ isOpen, setIsOpen, onGenerateSuccess, currentUserId }) {
   const [error, setError] = useState('');
   const [artifactName, setArtifactName] = useState('');
   const [topic, setTopic] = useState('');
@@ -100,6 +100,11 @@ export function GenerateArtifactModal({ isOpen, setIsOpen, onGenerateSuccess }) 
       return;
     }
 
+    if (!currentUserId) {
+      setError("You must be signed in as a researcher to save an artifact.");
+      return;
+    }
+
     setIsSaving(true);
     setError('');
 
@@ -113,7 +118,7 @@ export function GenerateArtifactModal({ isOpen, setIsOpen, onGenerateSuccess }) 
     formData.append('name', artifactName);
     formData.append('tags', JSON.stringify(selectedTags));
     formData.append('type', artifactType);
-    formData.append('userId', 1); // Placeholder for current user ID
+    formData.append('userId', currentUserId);
 
     try {
       // POST to the same endpoint as DetailedUploadModal

@@ -1,42 +1,194 @@
-import React from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { useState, useEffect } from "react";
+import axios from "../api/axios";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
-import { AlertTriangle, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
+
+const ARTIFACT_MODE_LABELS = {
+  stage1: "Stage 1 bug labeling",
+  stage2: "Stage 2 adjudication",
+  solid: "SOLID review",
+  clone: "Patch clone check",
+  snapshot: "Snapshot intent",
+};
+
+const PARTICIPATION_STATUS_META = {
+  not_started: { label: "Not started", variant: "secondary" },
+  in_progress: { label: "In progress", variant: "default" },
+  completed: { label: "Completed", variant: "outline" },
+};
+
+const clampPercent = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return 0;
+  }
+  return Math.min(100, Math.max(0, numeric));
+};
+
+const getParticipationStatusMeta = (status) =>
+  PARTICIPATION_STATUS_META[status] || {
+    label: status ? status.replace(/_/g, " ") : "Unknown",
+    variant: "outline",
+  };
 
 export default function ParticipantDashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
+  const [studies, setStudies] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-    useEffect(() => {
-      const raw = localStorage.getItem("user");
-      if (!raw) {
+  useEffect(() => {
+    const raw = localStorage.getItem("user");
+    if (!raw) {
+      navigate("/login");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed.role !== "participant") {
+        navigate("/researcher");
+        return;
+      }
+      setUser(parsed);
+    } catch {
+      navigate("/login");
+    }
+  }, [navigate]);
+
+  const fetchAssignments = useCallback(async () => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      navigate("/login");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const { data } = await axios.get("/api/participant/assignments", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setStudies(data.studies || []);
+      setNotifications(data.notifications || []);
+    } catch (err) {
+      if (err.response?.status === 401) {
         navigate("/login");
         return;
       }
-      try {
-        const u = JSON.parse(raw);
-        setUser(u);
-        if (u.role !== "participant") {
-          navigate("/researcher");
-        }
-      } catch {
-        navigate("/login");
-      }
-    }, [navigate]);
+      setError(err.response?.data?.message || "Unable to load assignments right now.");
+    } finally {
+      setLoading(false);
+    }
+  }, [navigate]);
 
-  // logout handled by layout header
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    fetchAssignments();
+  }, [user, fetchAssignments]);
+
+  const actionableStudies = useMemo(
+    () => studies.filter((study) => study?.cta && study.cta.type !== "none"),
+    [studies],
+  );
+  const quickActions = actionableStudies.slice(0, 3);
+  const noStudiesYet = !loading && studies.length === 0;
+
+  const handleOpenCta = useCallback(
+    (study) => {
+      const cta = study?.cta;
+      if (!cta || cta.type === "none") {
+        return;
+      }
+      if (cta.type === "competency") {
+        navigate("/participant/competency", {
+          state: {
+            assignmentId: cta.assignmentId,
+            studyParticipantId: cta.studyParticipantId
+              ? Number(cta.studyParticipantId)
+              : undefined,
+            studyId: cta.studyId ? Number(cta.studyId) : undefined,
+          },
+        });
+        return;
+      }
+
+      const params = new URLSearchParams();
+      if (cta.studyId) params.set("studyId", cta.studyId);
+      if (cta.studyParticipantId) params.set("studyParticipantId", cta.studyParticipantId);
+      if (cta.studyArtifactId) params.set("studyArtifactId", cta.studyArtifactId);
+      if (cta.mode) params.set("mode", cta.mode);
+      const search = params.toString();
+      const path = search ? `/participant/artifacts-comparison?${search}` : "/participant/artifacts-comparison";
+
+      navigate(path, {
+        state: {
+          studyId: cta.studyId ? Number(cta.studyId) : undefined,
+          studyParticipantId: cta.studyParticipantId ? Number(cta.studyParticipantId) : undefined,
+          studyArtifactId: cta.studyArtifactId ? Number(cta.studyArtifactId) : undefined,
+          participant: user ? { id: user.id, name: user.name } : undefined,
+          study,
+          assignedMode: cta.mode || study?.nextAssignment?.mode || null,
+        },
+      });
+    },
+    [navigate, user],
+  );
+
+  const handleRefresh = () => {
+    if (!loading) {
+      fetchAssignments();
+    }
+  };
+
+  const renderArtifactChips = (modeMap = {}) => {
+    const entries = Object.entries(modeMap).filter(([, meta]) => meta.completed > 0);
+    if (!entries.length) {
+      return <p className="text-sm text-muted-foreground">No artifact submissions yet.</p>;
+    }
+    return (
+      <div className="flex flex-wrap gap-2">
+        {entries.map(([key, meta]) => (
+          <Badge key={key} variant="outline">
+            {meta.completed} × {ARTIFACT_MODE_LABELS[key] || key}
+          </Badge>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-6">
-      {/* Greeting */}
-      <section>
-        <h2 className="text-xl font-semibold">Welcome back, {user?.name || "Participant"}!</h2>
+      <section className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-xl font-semibold">Welcome back, {user?.name || "Participant"}!</h2>
+          <p className="text-sm text-muted-foreground">
+            Track your competency assessments and artifact assignments in one place.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading}>
+          {loading ? (
+            <span className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" /> Refreshing
+            </span>
+          ) : (
+            "Refresh"
+          )}
+        </Button>
       </section>
 
-      {/* Notifications + Quick actions */}
+      {error && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+
       <section className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader>
@@ -44,70 +196,131 @@ export default function ParticipantDashboard() {
             <CardDescription>Recent activity</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 text-yellow-600" />
-              <p>
-                You have been invited to <span className="font-medium">“Study X”</span>.
-                <span className="text-muted-foreground"> (Due Oct 30)</span>
-              </p>
-            </div>
-            <div className="flex items-start gap-3">
-              <CheckCircle2 className="mt-0.5 h-4 w-4 text-green-600" />
-              <p>Your “Study Y” submission was received.</p>
-            </div>
+            {loading ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Loading notifications…
+              </div>
+            ) : notifications.length ? (
+              notifications.map((item) => {
+                const Icon = item.type === "info" ? CheckCircle2 : AlertTriangle;
+                const colorClass = item.type === "info" ? "text-green-600" : "text-yellow-600";
+                return (
+                  <div key={item.id} className="flex items-start gap-3">
+                    <Icon className={`mt-0.5 h-4 w-4 ${colorClass}`} />
+                    <div>
+                      <p className="text-sm">{item.message}</p>
+                      {item.studyId && (
+                        <p className="text-xs text-muted-foreground">Study #{item.studyId}</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <p className="text-sm text-muted-foreground">You're all caught up. We'll notify you when new tasks are ready.</p>
+            )}
           </CardContent>
         </Card>
 
-        <Card className="hidden md:block">
+        <Card>
           <CardHeader>
             <CardTitle>Quick Actions</CardTitle>
             <CardDescription>Jump back into your work</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
-            <Button size="sm">Start next task</Button>
-            <Button size="sm" variant="outline">Browse studies</Button>
-            <Button size="sm" variant="ghost">View history</Button>
+            {quickActions.length ? (
+              quickActions.map((study) => (
+                <Button
+                  key={`${study.studyParticipantId}-${study.cta.type}`}
+                  size="sm"
+                  variant="secondary"
+                  className="gap-1"
+                  onClick={() => handleOpenCta(study)}
+                >
+                  {study.cta.buttonLabel}
+                  <span className="text-xs text-muted-foreground">· {study.title}</span>
+                </Button>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">No pending actions. Check back soon.</p>
+            )}
           </CardContent>
         </Card>
       </section>
 
-      {/* Assigned studies */}
       <section className="space-y-4">
         <h2 className="text-lg font-semibold">My Assigned Studies</h2>
+        {loading ? (
+          <Card>
+            <CardContent className="flex items-center gap-3 py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <span className="text-sm text-muted-foreground">Loading your assignments…</span>
+            </CardContent>
+          </Card>
+        ) : noStudiesYet ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>No studies assigned yet</CardTitle>
+              <CardDescription>We'll email you as soon as a researcher assigns you to a study.</CardDescription>
+            </CardHeader>
+          </Card>
+        ) : (
+          studies.map((study) => {
+            const statusMeta = getParticipationStatusMeta(study.participationStatus);
+            const progressPercent = clampPercent(study.progressPercent);
+            const competency = study.competency || {};
+            const nextModeLabel = study.nextAssignment?.modeLabel || null;
+            const artifactTotals = study.artifactProgress?.totals?.submitted || 0;
+            return (
+              <Card key={study.studyParticipantId}>
+                <CardHeader className="pb-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <CardTitle>{study.title}</CardTitle>
+                      <CardDescription>
+                        {study.studyWindow ? study.studyWindow : "Active study"}
+                        {study.researcher?.name ? ` · ${study.researcher.name}` : ""}
+                      </CardDescription>
+                    </div>
+                    <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Overall progress</span>
+                      <span className="font-medium">{progressPercent}%</span>
+                    </div>
+                    <Progress value={progressPercent} />
+                  </div>
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle>Study X: AI vs. Human Code Readability</CardTitle>
-            <CardDescription>2 of 3 tasks complete</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Progress</span>
-              <span className="font-medium">70%</span>
-            </div>
-            <Progress value={70} />
-          </CardContent>
-          <CardFooter className="justify-end">
-            <Button size="sm">Start Task 3</Button>
-          </CardFooter>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle>Study Y: UML Diagram Clarity</CardTitle>
-            <CardDescription className="text-green-600">Completed</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Progress</span>
-              <span className="font-medium">100%</span>
-            </div>
-            <Progress value={100} />
-          </CardContent>
-          <CardFooter className="justify-end">
-            <Button size="sm" variant="outline">View History</Button>
-          </CardFooter>
-        </Card>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Competency assessment</p>
+                      <p className="text-sm text-muted-foreground">{competency.statusLabel || "Not assigned"}</p>
+                      <Progress value={clampPercent(competency.completionPercent)} className="h-2" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Artifact submissions</p>
+                      <p className="text-sm text-muted-foreground">{artifactTotals} submitted</p>
+                      {renderArtifactChips(study.artifactProgress?.modes)}
+                    </div>
+                  </div>
+                </CardContent>
+                <CardFooter className="flex flex-col gap-2 text-left md:flex-row md:items-center md:justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    {nextModeLabel ? `Next up: ${nextModeLabel}` : "All tasks completed."}
+                  </div>
+                  {study.cta?.type !== "none" && (
+                    <Button size="sm" onClick={() => handleOpenCta(study)}>
+                      {study.cta?.buttonLabel || "Open task"}
+                    </Button>
+                  )}
+                </CardFooter>
+              </Card>
+            );
+          })
+        )}
       </section>
     </div>
   );
