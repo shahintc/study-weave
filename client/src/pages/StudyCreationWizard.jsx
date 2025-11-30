@@ -116,10 +116,14 @@ function StudyCreationWizard() {
   const artifactOwnerId = useMemo(() => {
     if (user?.id) return user.id;
     if (user?.userId) return user.userId;
-    return 1;
+    return null;
   }, [user?.id]);
 
   useEffect(() => {
+    if (!artifactOwnerId) {
+      return;
+    }
+
     const fetchArtifacts = async () => {
       setIsArtifactsLoading(true);
       setArtifactsError("");
@@ -128,28 +132,13 @@ function StudyCreationWizard() {
         setArtifacts(data.artifacts || []);
       } catch (error) {
         const status = error.response?.status;
-        // Fallback: some earlier artifacts were saved under user 1
-        if (status === 404 && artifactOwnerId !== 1) {
-          try {
-            const fallback = await axios.get(`/api/artifacts/user/1`);
-            setArtifacts(fallback.data.artifacts || []);
-          } catch (fallbackErr) {
-            const fallbackStatus = fallbackErr.response?.status;
-            if (fallbackStatus === 404) {
-              setArtifacts([]);
-            } else {
-              console.error("Failed to load artifacts (fallback)", fallbackErr);
-              const message = fallbackErr.response?.data?.message || "Unable to load artifacts";
-              setArtifactsError(message);
-            }
-          }
-        } else if (status === 404) {
+        if (status === 404) {
           setArtifacts([]);
-        } else {
-          console.error("Failed to load artifacts", error);
-          const message = error.response?.data?.message || "Unable to load artifacts";
-          setArtifactsError(message);
+          return;
         }
+        console.error("Failed to load artifacts", error);
+        const message = error.response?.data?.message || "Unable to load artifacts";
+        setArtifactsError(message);
       } finally {
         setIsArtifactsLoading(false);
       }
