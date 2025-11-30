@@ -9,10 +9,12 @@ require('dotenv').config(
 const { sequelize } = require('./models'); // Import sequelize instance
 const app = express();
 const port = process.env.PORT || 5200;
+const BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || '25mb';
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: BODY_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));  // means any request whose path starts with /api/auth should be handled by routes/auth.js

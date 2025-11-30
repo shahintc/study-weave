@@ -291,6 +291,31 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
         pairedArtifact,
         isPrimary ? 'secondary' : 'primary',
       );
+    } else if (resolvedMode === 'clone' || resolvedMode === 'snapshot') {
+      // Fallback: if the researcher didn't create a StudyComparison pairing,
+      // try to find another artifact in this study so both panes are populated.
+      const fallbackPair = await StudyArtifact.findOne({
+        where: {
+          studyId,
+          id: { [Op.ne]: studyArtifactId },
+        },
+        include: [
+          {
+            model: Artifact,
+            as: 'artifact',
+            attributes: ['id', 'name', 'type', 'filePath', 'fileMimeType', 'fileOriginalName'],
+          },
+        ],
+        order: [['orderIndex', 'ASC'], ['id', 'ASC']],
+      });
+      if (fallbackPair && fallbackPair.artifact) {
+        rightPane = await buildPanePayload(fallbackPair, 'secondary');
+      }
+      if (!rightPane) {
+        return res.status(400).json({
+          message: 'This patch/snapshot task needs a paired study artifact. Please ask the researcher to link two artifacts for this stage.',
+        });
+      }
     }
 
     const comparisonMeta = comparison

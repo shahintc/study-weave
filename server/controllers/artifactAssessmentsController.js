@@ -9,7 +9,9 @@ const {
   Artifact,
   User,
   Evaluation,
+  StudyComparison,
 } = require('../models');
+const { handleArtifactSubmission } = require('../services/submissionNotifications');
 
 const VALID_ASSESSMENT_TYPES = ['bug_stage', 'solid', 'clone', 'snapshot'];
 const VALID_STATUS_VALUES = ['draft', 'submitted', 'archived'];
@@ -122,7 +124,6 @@ const buildWhereClause = (query, currentUser) => {
   if (query.status && VALID_STATUS_VALUES.includes(query.status)) {
     where.status = query.status;
   }
-
   const includeArchived = parseBoolean(query.includeArchived, false);
   if (!includeArchived) {
     where.status = where.status || { [Op.ne]: 'archived' };
@@ -153,6 +154,7 @@ const createArtifactAssessment = async (req, res) => {
       studyParticipantId,
       sourceEvaluationId = null,
       snapshotArtifactId = null,
+      comparisonId: rawComparisonId = null,
     } = req.body;
 
     if (!studyId || !studyArtifactId || !assessmentType) {
@@ -168,6 +170,15 @@ const createArtifactAssessment = async (req, res) => {
     if (status && !VALID_STATUS_VALUES.includes(status)) {
       await transaction.rollback();
       return res.status(400).json({ message: 'status is invalid.' });
+    }
+
+    let normalizedComparisonId = null;
+    if (rawComparisonId !== null && typeof rawComparisonId !== 'undefined' && rawComparisonId !== '') {
+      normalizedComparisonId = Number(rawComparisonId);
+      if (Number.isNaN(normalizedComparisonId)) {
+        await transaction.rollback();
+        return res.status(400).json({ message: 'comparisonId must be numeric when provided.' });
+      }
     }
 
     const studyArtifact = await StudyArtifact.findOne({
@@ -187,13 +198,70 @@ const createArtifactAssessment = async (req, res) => {
       evaluatorUserId: req.user.id,
     });
 
+    const duplicateWhere = {
+      studyId,
+      studyArtifactId,
+      assessmentType,
+      evaluatorUserId: req.user.id,
+      status: 'submitted',
+    };
+    if (resolvedParticipantId) {
+      duplicateWhere.studyParticipantId = resolvedParticipantId;
+    }
+    const existingSubmission = await ArtifactAssessment.findOne({ where: duplicateWhere });
+    if (existingSubmission) {
+      await transaction.rollback();
+      return res.status(409).json({
+        message: 'This artifact task was already submitted.',
+        assessment: formatAssessment(existingSubmission),
+      });
+    }
+
     const normalizedPayload = payload && typeof payload === 'object' ? payload : {};
 
-    if (sourceEvaluationId) {
-      const evaluation = await Evaluation.findByPk(sourceEvaluationId);
+    let effectiveSourceEvaluationId = sourceEvaluationId || null;
+
+    if (effectiveSourceEvaluationId) {
+      const evaluation = await Evaluation.findByPk(effectiveSourceEvaluationId);
       if (!evaluation || evaluation.studyId !== Number(studyId)) {
         await transaction.rollback();
         return res.status(400).json({ message: 'sourceEvaluationId does not belong to this study.' });
+      }
+    } else {
+      try {
+        let comparisonId = await resolveComparisonIdForSubmission({
+          studyId,
+          studyArtifactId,
+          providedComparisonId: normalizedComparisonId,
+        });
+
+        if (!comparisonId) {
+          comparisonId = await ensureComparisonForArtifact({
+            studyId,
+            studyArtifactId,
+            transaction,
+          });
+        }
+
+        if (comparisonId) {
+          const evaluation = await ensureEvaluationForAssessment({
+            studyId,
+            comparisonId,
+            participantUserId: req.user.id,
+            studyParticipantId: resolvedParticipantId,
+            payload: normalizedPayload,
+            transaction,
+          });
+          if (evaluation) {
+            effectiveSourceEvaluationId = evaluation.id;
+          }
+        }
+      } catch (comparisonError) {
+        await transaction.rollback();
+        if (comparisonError.message === 'INVALID_COMPARISON') {
+          return res.status(400).json({ message: 'comparisonId does not belong to this study.' });
+        }
+        throw comparisonError;
       }
     }
 
@@ -211,7 +279,7 @@ const createArtifactAssessment = async (req, res) => {
         studyArtifactId,
         studyParticipantId: resolvedParticipantId,
         evaluatorUserId: req.user.id,
-        sourceEvaluationId,
+        sourceEvaluationId: effectiveSourceEvaluationId,
         assessmentType,
         status,
         payload: normalizedPayload,
@@ -252,11 +320,17 @@ const createArtifactAssessment = async (req, res) => {
     return res.status(201).json({ assessment: formatAssessment(createdRecord) });
   } catch (error) {
     await transaction.rollback();
-    const statusCode = error.message === 'INVALID_PARTICIPANT' ? 400 : 500;
-    const message =
-      error.message === 'INVALID_PARTICIPANT'
-        ? 'studyParticipantId does not belong to the specified study.'
-        : 'Unable to save artifact assessment at this time.';
+    let statusCode = 500;
+    let message = 'Unable to save artifact assessment at this time.';
+
+    if (error.message === 'INVALID_PARTICIPANT') {
+      statusCode = 400;
+      message = 'studyParticipantId does not belong to the specified study.';
+    } else if (error.message === 'INVALID_COMPARISON') {
+      statusCode = 400;
+      message = 'comparisonId does not belong to the specified study.';
+    }
+
     console.error('createArtifactAssessment error:', error);
     return res.status(statusCode).json({ message });
   }
@@ -307,6 +381,100 @@ const getArtifactAssessmentById = async (req, res) => {
     return res.status(500).json({ message: 'Unable to load artifact assessment.' });
   }
 };
+
+async function resolveComparisonIdForSubmission({ studyId, studyArtifactId, providedComparisonId }) {
+  if (!studyId || !studyArtifactId) {
+    return null;
+  }
+
+  if (providedComparisonId) {
+    const comparison = await StudyComparison.findByPk(providedComparisonId, {
+      attributes: ['id', 'studyId'],
+    });
+    if (!comparison || Number(comparison.studyId) !== Number(studyId)) {
+      throw new Error('INVALID_COMPARISON');
+    }
+    return comparison.id;
+  }
+
+  const comparison = await StudyComparison.findOne({
+    where: {
+      studyId,
+      [Op.or]: [
+        { primaryArtifactId: studyArtifactId },
+        { secondaryArtifactId: studyArtifactId },
+      ],
+    },
+    attributes: ['id'],
+    order: [['id', 'ASC']],
+  });
+
+  return comparison ? comparison.id : null;
+}
+
+async function ensureComparisonForArtifact({ studyId, studyArtifactId, transaction }) {
+  // Create a minimal comparison so evaluations can be tracked in the reviewer queue
+  const comparison = await StudyComparison.create(
+    {
+      studyId,
+      primaryArtifactId: studyArtifactId,
+      secondaryArtifactId: studyArtifactId,
+      prompt: 'Autogenerated comparison',
+      criteria: {},
+      groundTruth: {},
+    },
+    { transaction },
+  );
+  return comparison.id;
+}
+
+async function ensureEvaluationForAssessment({
+  studyId,
+  comparisonId,
+  participantUserId,
+  studyParticipantId,
+  payload,
+  transaction,
+}) {
+  if (!comparisonId) {
+    return null;
+  }
+
+  const [evaluation, created] = await Evaluation.findOrCreate({
+    where: {
+      studyId,
+      comparisonId,
+      participantId: participantUserId,
+      studyParticipantId: studyParticipantId || null,
+    },
+    defaults: {
+      studyId,
+      comparisonId,
+      participantId: participantUserId,
+      studyParticipantId: studyParticipantId || null,
+      status: 'submitted',
+      reviewStatus: 'pending',
+      submittedAt: new Date(),
+      participantPayload: payload,
+    },
+    transaction,
+  });
+
+  if (!created) {
+    const nextReviewStatus = evaluation.reviewStatus === 'resolved' ? evaluation.reviewStatus : 'pending';
+    await evaluation.update(
+      {
+        status: 'submitted',
+        reviewStatus: nextReviewStatus,
+        participantPayload: payload,
+        submittedAt: evaluation.submittedAt || new Date(),
+      },
+      { transaction },
+    );
+  }
+
+  return evaluation;
+}
 
 module.exports = {
   createArtifactAssessment,

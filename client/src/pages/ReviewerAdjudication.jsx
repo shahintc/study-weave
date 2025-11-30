@@ -26,10 +26,10 @@ import {
 import { AlertCircle, CheckCircle2, Eye, RefreshCcw, Timer } from "lucide-react";
 
 const STATUS_OPTIONS = [
+  { value: "all", label: "All" },
   { value: "pending", label: "Pending" },
   { value: "in_review", label: "In review" },
   { value: "resolved", label: "Resolved" },
-  { value: "all", label: "All" },
 ];
 
 const DECISION_OPTIONS = [
@@ -46,12 +46,12 @@ export default function ReviewerAdjudication() {
   const [adjudications, setAdjudications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filters, setFilters] = useState({ status: "pending", studyId: "all" });
+  const [filters, setFilters] = useState({ status: "all", studyId: "all" });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [decisionForm, setDecisionForm] = useState({
     status: "pending",
-    decision: "",
+    decision: "__none",
     adjudicatedLabel: "",
     notes: "",
   });
@@ -138,7 +138,7 @@ export default function ReviewerAdjudication() {
     setSelected(entry);
     setDecisionForm({
       status: entry.review?.status || "pending",
-      decision: entry.review?.decision || "",
+      decision: entry.review?.decision || "__none",
       adjudicatedLabel: entry.review?.adjudicatedLabel || "",
       notes: entry.review?.notes || "",
     });
@@ -167,7 +167,7 @@ export default function ReviewerAdjudication() {
         `/api/reviewer/adjudications/${selected.id}`,
         {
           reviewStatus: decisionForm.status,
-          decision: decisionForm.decision || undefined,
+          decision: decisionForm.decision === "__none" ? undefined : decisionForm.decision,
           adjudicatedLabel: decisionForm.adjudicatedLabel || null,
           notes: decisionForm.notes || "",
         },
@@ -352,6 +352,12 @@ export default function ReviewerAdjudication() {
         <DialogContent className="max-w-3xl max-h-[95vh] overflow-y-auto">
           {selected && (
             <>
+              {selected.review?.status === "resolved" && (
+                <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                  This review is already completed. Edits are disabled.
+                </div>
+              )}
+
               <DialogHeader>
                 <DialogTitle>Adjudicate evaluation</DialogTitle>
                 <DialogDescription>
@@ -385,7 +391,11 @@ export default function ReviewerAdjudication() {
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="flex flex-col gap-2">
                     <label className="text-sm font-medium">Review status</label>
-                    <Select value={decisionForm.status} onValueChange={(value) => handleDecisionChange("status", value)}>
+                    <Select
+                      value={decisionForm.status}
+                      onValueChange={(value) => handleDecisionChange("status", value)}
+                      disabled={selected.review?.status === "resolved"}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Status" />
                       </SelectTrigger>
@@ -400,12 +410,16 @@ export default function ReviewerAdjudication() {
                   </div>
                   <div className="flex flex-col gap-2">
                     <label className="text-sm font-medium">Decision</label>
-                    <Select value={decisionForm.decision} onValueChange={(value) => handleDecisionChange("decision", value)}>
+                    <Select
+                      value={decisionForm.decision}
+                      onValueChange={(value) => handleDecisionChange("decision", value)}
+                      disabled={selected.review?.status === "resolved"}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Select decision" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">No decision</SelectItem>
+                        <SelectItem value="__none">No decision</SelectItem>
                         {DECISION_OPTIONS.map((option) => (
                           <SelectItem key={option.value} value={option.value}>
                             {option.label}
@@ -420,6 +434,7 @@ export default function ReviewerAdjudication() {
                   <Input
                     value={decisionForm.adjudicatedLabel}
                     onChange={(event) => handleDecisionChange("adjudicatedLabel", event.target.value)}
+                    disabled={selected.review?.status === "resolved"}
                     placeholder="e.g., GUI regression"
                   />
                 </div>
@@ -429,6 +444,7 @@ export default function ReviewerAdjudication() {
                     value={decisionForm.notes}
                     onChange={(event) => handleDecisionChange("notes", event.target.value)}
                     rows={4}
+                    disabled={selected.review?.status === "resolved"}
                     placeholder="Explain why you sided with the participant or LLM."
                   />
                 </div>
@@ -441,7 +457,10 @@ export default function ReviewerAdjudication() {
                 <Button variant="ghost" onClick={closeDialog} disabled={savingDecision}>
                   Cancel
                 </Button>
-                <Button onClick={handleSaveDecision} disabled={savingDecision}>
+                <Button
+                  onClick={handleSaveDecision}
+                  disabled={savingDecision || selected.review?.status === "resolved"}
+                >
                   {savingDecision ? "Saving..." : "Save decision"}
                 </Button>
               </DialogFooter>
@@ -541,6 +560,14 @@ function AnswerSummary({ answer }) {
   if (!answer) {
     return <p className="text-sm text-muted-foreground">No submission data.</p>;
   }
+
+  const payload = answer.payload || {};
+  const solidViolation = payload.solidViolation || payload.solid_violation;
+  const solidComplexity = payload.solidComplexity || payload.solid_complexity;
+  const solidFixedCode = payload.solidFixedCode || payload.solid_fixed_code;
+  const solidComment = payload.assessmentComment || payload.assessment_comment;
+  const leftData = payload.left || {};
+
   return (
     <div className="space-y-3 rounded-lg border p-4">
       <div className="grid gap-4 md:grid-cols-2">
@@ -549,6 +576,23 @@ function AnswerSummary({ answer }) {
       </div>
       <DetailField label="Summary" value={answer.summary || "—"} />
       <DetailField label="Notes" value={answer.notes || "—"} />
+      {solidViolation && (
+        <div className="rounded-md border p-3 bg-muted/40 space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground">SOLID violation details</p>
+          <DetailField label="Violation" value={solidViolation} />
+          <DetailField label="Complexity" value={solidComplexity || "—"} />
+          <DetailField label="Fixed code" value={solidFixedCode || "—"} />
+          <DetailField label="Explanation" value={solidComment || "—"} />
+          {leftData?.text && (
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-muted-foreground">Submitted code</p>
+              <pre className="whitespace-pre-wrap rounded bg-white p-2 text-xs border">
+                {leftData.text}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
       {renderPayload(answer.payload, "Participant payload")}
       {answer.metrics && renderPayload(answer.metrics, "Metrics")}
     </div>

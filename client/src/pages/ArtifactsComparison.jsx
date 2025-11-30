@@ -432,6 +432,7 @@ export default function ArtifactsComparison() {
   const [assignmentLoadError, setAssignmentLoadError] = useState("");
   const [assignmentPanes, setAssignmentPanes] = useState(null);
   const [hasLocalDraft, setHasLocalDraft] = useState(false);
+  const [submissionLocked, setSubmissionLocked] = useState(false);
 
   const activeParticipantId =
     resolvedStudyParticipantId ||
@@ -622,6 +623,10 @@ export default function ArtifactsComparison() {
     setAssignmentPanes(null);
     setAssignmentLoadError("");
     setHasLocalDraft(false);
+    setSubmissionLocked(false);
+    setActiveAssessmentId(null);
+    setAssessmentError("");
+    setAssessmentSuccess("");
   }, [studyContext.studyId, studyContext.studyArtifactId]);
 
   // 🔹 Initial Load
@@ -746,12 +751,22 @@ export default function ArtifactsComparison() {
           setMode((prev) => (prev === serverMode ? prev : serverMode));
         }
 
-        if (!assignmentHydratedRef.current && !hasLocalDraft && panes) {
+        if (panes) {
           const leftPane = normalizeAssignmentPane(panes.left, "Researcher artifact A");
           const rightPane = normalizeAssignmentPane(panes.right, "Researcher artifact B");
 
-          if (leftPane) setLeftData(leftPane);
-          if (rightPane) setRightData(rightPane);
+          const shouldHydrateLeft = !assignmentHydratedRef.current || !paneHasContent(leftData);
+          const shouldHydrateRight = !assignmentHydratedRef.current || !paneHasContent(rightData);
+
+          if (leftPane && shouldHydrateLeft) setLeftData(leftPane);
+          if (rightPane && shouldHydrateRight) setRightData(rightPane);
+
+          if (serverMode === "snapshot") {
+            setSnapshotAssets({
+              reference: leftPane || snapshotAssets.reference,
+              failure: rightPane || snapshotAssets.failure,
+            });
+          }
 
           assignmentHydratedRef.current = true;
         }
@@ -780,6 +795,10 @@ export default function ArtifactsComparison() {
     studyContext.studyParticipantId,
     resolvedStudyParticipantId,
     hasLocalDraft,
+    leftData,
+    rightData,
+    snapshotAssets.reference,
+    snapshotAssets.failure,
     normalizeAssignmentPane,
   ]);
 
@@ -916,7 +935,8 @@ export default function ArtifactsComparison() {
         params: {
           studyId: studyContext.studyId,
           studyArtifactId: studyContext.studyArtifactId,
-          studyParticipantId: studyContext.studyParticipantId || undefined,
+          studyParticipantId:
+            resolvedStudyParticipantId || studyContext.studyParticipantId || undefined,
           includeItems: false,
         },
         headers: {
@@ -934,8 +954,10 @@ export default function ArtifactsComparison() {
             setResolvedStudyParticipantId(record.studyParticipantId);
           }
           hydrateAssessmentPayload(record.payload);
+          setSubmissionLocked(record.status === "submitted");
         } else {
           setActiveAssessmentId(null);
+          setSubmissionLocked(false);
         }
       })
       .catch((error) => {
@@ -965,6 +987,7 @@ export default function ArtifactsComparison() {
     studyContext.studyArtifactId,
     studyContext.studyId,
     studyContext.studyParticipantId,
+    resolvedStudyParticipantId,
   ]);
 
   // ===== RESET =====
@@ -2163,6 +2186,13 @@ export default function ArtifactsComparison() {
     setAssessmentError("");
     setAssessmentSuccess("");
 
+    if (submissionLocked) {
+      setAssessmentError(
+        "You've already submitted this task. Researchers are reviewing your work."
+      );
+      return;
+    }
+
     const validationMessage = validateBeforeSave();
     if (validationMessage) {
       setAssessmentError(validationMessage);
@@ -2210,6 +2240,8 @@ export default function ArtifactsComparison() {
           status: "submitted",
           payload: captureAssessmentState(),
           sourceEvaluationId: studyContext.sourceEvaluationId || null,
+          comparisonId:
+            studyContext.comparisonId || assignmentMeta?.comparison?.id || null,
         },
         {
           headers: {
@@ -2227,9 +2259,25 @@ export default function ArtifactsComparison() {
         if (saved.payload) {
           hydrateAssessmentPayload(saved.payload);
         }
+        setSubmissionLocked(true);
       }
-      setAssessmentSuccess("Assessment saved successfully.");
+      setAssessmentSuccess("Assessment submitted successfully.");
     } catch (error) {
+      if (error.response?.status === 409) {
+        const existing = error.response?.data?.assessment;
+        if (existing) {
+          setActiveAssessmentId(existing.id);
+          if (existing.payload) {
+            hydrateAssessmentPayload(existing.payload);
+          }
+          setSubmissionLocked(existing.status === "submitted");
+        }
+        setAssessmentError(
+          error.response?.data?.message ||
+            "This study task has already been submitted."
+        );
+        return;
+      }
       if (error.response?.status === 401) {
         navigate("/login");
         return;
@@ -3160,11 +3208,22 @@ export default function ArtifactsComparison() {
                 size="lg"
                 className="bg-black text-white hover:bg-gray-800"
                 onClick={handleSaveAssessment}
-                disabled={assessmentSaving}
+                disabled={
+                  assessmentSaving || submissionLocked || !hasAssignmentContext
+                }
               >
-                {assessmentSaving ? "Saving..." : "Save Assessment"}
+                {submissionLocked
+                  ? "Already submitted"
+                  : assessmentSaving
+                  ? "Saving..."
+                  : "Submit assessment"}
               </Button>
             </div>
+            {submissionLocked && (
+              <p className="text-xs text-emerald-700 text-right">
+                Submitted! Researchers can now review your decision.
+              </p>
+            )}
           </CardContent>
         </Card>
 
