@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs/promises');
+const { Op } = require('sequelize');
 const router = express.Router();
 const authMiddleware = require('../middleware/auth');
 const {
@@ -9,6 +11,7 @@ const {
   CompetencyAssignment,
   ArtifactAssessment,
   User,
+  StudyComparison,
 } = require('../models');
 
 const ARTIFACT_MODE_OPTIONS = [
@@ -21,6 +24,32 @@ const ARTIFACT_MODE_OPTIONS = [
 
 const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
 const DEFAULT_ARTIFACT_MODE = 'stage1';
+const TEXT_MIME_PATTERN = /^(text\/.+|application\/(json|xml|javascript))/i;
+const TEXT_FILE_EXTENSIONS = [
+  '.txt',
+  '.patch',
+  '.diff',
+  '.md',
+  '.json',
+  '.csv',
+  '.java',
+  '.js',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.py',
+  '.c',
+  '.cpp',
+  '.cs',
+  '.go',
+  '.rs',
+  '.kt',
+  '.php',
+  '.rb',
+  '.html',
+  '.css',
+];
+const FALLBACK_MIME = 'application/octet-stream';
 
 const resolveArtifactMode = (value) => (value && ARTIFACT_MODE_SET.has(value) ? value : DEFAULT_ARTIFACT_MODE);
 
@@ -33,6 +62,62 @@ const normalizeJson = (value) => {
     return {};
   }
 };
+
+const isTextLike = (mime, fileName = '') => {
+  if (mime && TEXT_MIME_PATTERN.test(mime)) {
+    return true;
+  }
+  const lower = fileName ? fileName.toLowerCase() : '';
+  return TEXT_FILE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+};
+
+async function buildPanePayload(studyArtifactEntry, role = 'primary') {
+  if (!studyArtifactEntry) {
+    return null;
+  }
+  const entry =
+    typeof studyArtifactEntry.get === 'function'
+      ? studyArtifactEntry.get({ plain: true })
+      : studyArtifactEntry;
+
+  if (!entry || !entry.artifact) {
+    return null;
+  }
+
+  const artifact = entry.artifact;
+  let encoding = null;
+  let content = null;
+
+  if (artifact.filePath) {
+    try {
+      const buffer = await fs.readFile(artifact.filePath);
+      if (isTextLike(artifact.fileMimeType, artifact.fileOriginalName)) {
+        encoding = 'text';
+        content = buffer.toString('utf8');
+      } else {
+        encoding = 'data_url';
+        const mime = artifact.fileMimeType || FALLBACK_MIME;
+        content = `data:${mime};base64,${buffer.toString('base64')}`;
+      }
+    } catch (error) {
+      console.error(`Failed to read artifact file at ${artifact.filePath}`, error);
+    }
+  }
+
+  return {
+    role,
+    studyArtifactId: entry.id,
+    artifactId: artifact.id,
+    artifactName: artifact.name,
+    artifactType: artifact.type,
+    label: entry.label,
+    instructions: entry.instructions,
+    mimeType: artifact.fileMimeType,
+    fileOriginalName: artifact.fileOriginalName,
+    encoding,
+    content,
+  };
+}
 
 router.get('/assignments', authMiddleware, async (req, res) => {
   try {
@@ -79,6 +164,163 @@ router.get('/assignments', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Participant assignments error', error);
     return res.status(500).json({ message: 'Unable to load assignments right now.' });
+  }
+});
+
+router.get('/artifact-task', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ message: 'Authentication required.' });
+    }
+    if (req.user.role !== 'participant' && req.user.role !== 'researcher' && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only participants can open assigned artifacts.' });
+    }
+
+    const studyId = Number(req.query.studyId);
+    const studyArtifactId = Number(req.query.studyArtifactId);
+    const requestedParticipantId = req.query.studyParticipantId ? Number(req.query.studyParticipantId) : null;
+
+    if (!Number.isFinite(studyId) || !Number.isFinite(studyArtifactId)) {
+      return res.status(400).json({ message: 'studyId and studyArtifactId are required.' });
+    }
+    if (req.query.studyParticipantId && !Number.isFinite(requestedParticipantId)) {
+      return res.status(400).json({ message: 'studyParticipantId must be numeric when provided.' });
+    }
+
+    const participantWhere = { studyId };
+    if (requestedParticipantId) {
+      participantWhere.id = requestedParticipantId;
+    } else if (req.user.role === 'participant') {
+      participantWhere.participantId = req.user.id;
+    }
+
+    const participant = await StudyParticipant.findOne({ where: participantWhere });
+    if (!participant) {
+      return res.status(404).json({ message: 'No matching study assignment found for this participant.' });
+    }
+
+    const studyArtifact = await StudyArtifact.findOne({
+      where: { id: studyArtifactId, studyId },
+      include: [
+        {
+          model: Artifact,
+          as: 'artifact',
+          attributes: [
+            'id',
+            'name',
+            'type',
+            'filePath',
+            'fileMimeType',
+            'fileOriginalName',
+          ],
+        },
+      ],
+    });
+
+    if (!studyArtifact || !studyArtifact.artifact) {
+      return res.status(404).json({ message: 'Study artifact not found for this study.' });
+    }
+
+    const modeCandidates = [
+      req.query.mode,
+      participant.nextArtifactMode,
+      participant.lastCheckpoint?.mode,
+    ];
+    let resolvedMode = DEFAULT_ARTIFACT_MODE;
+    for (const candidate of modeCandidates) {
+      if (candidate) {
+        resolvedMode = resolveArtifactMode(String(candidate));
+        break;
+      }
+    }
+
+    const comparison = await StudyComparison.findOne({
+      where: {
+        studyId,
+        [Op.or]: [
+          { primaryArtifactId: studyArtifactId },
+          { secondaryArtifactId: studyArtifactId },
+        ],
+      },
+      include: [
+        {
+          model: StudyArtifact,
+          as: 'primaryArtifact',
+          include: [
+            {
+              model: Artifact,
+              as: 'artifact',
+              attributes: [
+                'id',
+                'name',
+                'type',
+                'filePath',
+                'fileMimeType',
+                'fileOriginalName',
+              ],
+            },
+          ],
+        },
+        {
+          model: StudyArtifact,
+          as: 'secondaryArtifact',
+          include: [
+            {
+              model: Artifact,
+              as: 'artifact',
+              attributes: [
+                'id',
+                'name',
+                'type',
+                'filePath',
+                'fileMimeType',
+                'fileOriginalName',
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const leftPane = await buildPanePayload(studyArtifact, 'primary');
+    let rightPane = null;
+    if (comparison) {
+      const isPrimary = Number(comparison.primaryArtifactId) === Number(studyArtifactId);
+      const pairedArtifact = isPrimary ? comparison.secondaryArtifact : comparison.primaryArtifact;
+      rightPane = await buildPanePayload(
+        pairedArtifact,
+        isPrimary ? 'secondary' : 'primary',
+      );
+    }
+
+    const comparisonMeta = comparison
+      ? {
+          id: String(comparison.id),
+          prompt: comparison.prompt,
+          criteria: normalizeJson(comparison.criteria),
+          groundTruth: normalizeJson(comparison.groundTruth),
+        }
+      : null;
+
+    return res.json({
+      assignment: {
+        studyId,
+        studyArtifactId,
+        studyParticipantId: participant.id,
+        mode: resolvedMode,
+        participantStatus: participant.participationStatus,
+        label: studyArtifact.label,
+        instructions: studyArtifact.instructions,
+        panes: {
+          left: leftPane,
+          right: rightPane,
+        },
+        comparison: comparisonMeta,
+      },
+    });
+  } catch (error) {
+    console.error('Participant artifact-task fetch error', error);
+    return res.status(500).json({ message: 'Unable to load the assigned artifact right now.' });
   }
 });
 

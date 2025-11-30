@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
+  CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -426,6 +428,17 @@ export default function ArtifactsComparison() {
   const [resolvedStudyParticipantId, setResolvedStudyParticipantId] = useState(
     studyContext.studyParticipantId || null
   );
+  const [assignmentMeta, setAssignmentMeta] = useState(null);
+  const [assignmentLoadError, setAssignmentLoadError] = useState("");
+  const [assignmentPanes, setAssignmentPanes] = useState(null);
+  const [hasLocalDraft, setHasLocalDraft] = useState(false);
+
+  const activeParticipantId =
+    resolvedStudyParticipantId ||
+    studyContext.studyParticipantId ||
+    null;
+  const missingStudyContext =
+    !studyContext.studyId || !studyContext.studyArtifactId;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -467,7 +480,7 @@ export default function ArtifactsComparison() {
   const [syncScroll, setSyncScroll] = useState(true);
   const [showBig, setShowBig] = useState(false);
 
-  const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(true);
+  const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(false);
 
   // Pane Data
   const [leftData, setLeftData] = useState({ type: "text", text: "" });
@@ -537,11 +550,39 @@ export default function ArtifactsComparison() {
   const [metadataLoadingId, setMetadataLoadingId] = useState("");
   const [metadataPane, setMetadataPane] = useState("left");
 
+  const paneHasContent = useCallback((pane) => {
+    if (!pane) return false;
+    if (pane.type === "text") {
+      return Boolean(pane.text && pane.text.trim().length);
+    }
+    if (pane.type === "image" || pane.type === "pdf") {
+      return Boolean(pane.url);
+    }
+    return false;
+  }, []);
+
+  const normalizeAssignmentPane = useCallback((pane, fallbackLabel) => {
+    if (!pane || !pane.content) {
+      return null;
+    }
+    const title =
+      pane.label || pane.artifactName || pane.fileOriginalName || fallbackLabel || "Artifact";
+    if (pane.encoding === "text" || !pane.encoding) {
+      return { type: "text", text: numberLines(pane.content), name: title };
+    }
+    if (pane.encoding === "data_url") {
+      const isPdf = /pdf/i.test(pane.mimeType || "");
+      return { type: isPdf ? "pdf" : "image", url: pane.content, name: title };
+    }
+    return null;
+  }, []);
+
   // Pending Comment State (for annotations)
   const [pendingAnnotation, setPendingAnnotation] = useState(null);
   const [pendingComment, setPendingComment] = useState("");
 
   const autosaveTimerRef = useRef(null);
+  const assignmentHydratedRef = useRef(false);
 
   // Refs
   const leftRef = useRef(null);
@@ -575,83 +616,179 @@ export default function ArtifactsComparison() {
   const radioClass =
     "relative h-4 w-4 rounded-full border border-gray-400 data-[state=checked]:border-black data-[state=checked]:ring-2 data-[state=checked]:ring-black before:content-[''] before:absolute before:inset-1 before:rounded-full before:bg-black before:opacity-0 data-[state=checked]:before:opacity-100";
 
+  useEffect(() => {
+    assignmentHydratedRef.current = false;
+    setAssignmentMeta(null);
+    setAssignmentPanes(null);
+    setAssignmentLoadError("");
+    setHasLocalDraft(false);
+  }, [studyContext.studyId, studyContext.studyArtifactId]);
+
   // 🔹 Initial Load
   useEffect(() => {
-    let isCancelled = false;
     if (typeof window !== "undefined") {
       try {
         const raw = window.localStorage.getItem(STORAGE_KEY);
         if (raw) {
           const saved = JSON.parse(raw);
-          if (saved.left) setLeftData((prev) => ({ ...prev, ...saved.left }));
-          if (saved.right) setRightData((prev) => ({ ...prev, ...saved.right }));
-          if (Array.isArray(saved.leftAnn)) setLeftAnn(saved.leftAnn);
-          if (Array.isArray(saved.rightAnn)) setRightAnn(saved.rightAnn);
-          if (typeof saved.syncScroll === "boolean")
-            setSyncScroll(saved.syncScroll);
-          if (saved.leftSummary) setLeftSummary(saved.leftSummary);
-          if (saved.rightSummary) setRightSummary(saved.rightSummary);
-          if (typeof saved.mode === "string") setMode(saved.mode);
+          const matches =
+            saved?.studyId === studyContext.studyId &&
+            saved?.studyArtifactId === studyContext.studyArtifactId;
 
-          if (typeof saved.leftCategory === "string")
-            setLeftCategory(saved.leftCategory);
-          if (typeof saved.rightCategory === "string")
-            setRightCategory(saved.rightCategory);
-          if (typeof saved.matchCorrectness === "string")
-            setMatchCorrectness(saved.matchCorrectness);
-          if (typeof saved.finalCategory === "string")
-            setFinalCategory(saved.finalCategory);
-          if (typeof saved.finalOtherCategory === "string")
-            setFinalOtherCategory(saved.finalOtherCategory);
-          if (
-            Array.isArray(saved.bugCategoryOptions) &&
-            saved.bugCategoryOptions.length
-          )
-            setBugCategoryOptions(saved.bugCategoryOptions);
+          if (!matches) {
+            window.localStorage.removeItem(STORAGE_KEY);
+          } else {
+            if (saved.left) setLeftData((prev) => ({ ...prev, ...saved.left }));
+            if (saved.right) setRightData((prev) => ({ ...prev, ...saved.right }));
+            if (Array.isArray(saved.leftAnn)) setLeftAnn(saved.leftAnn);
+            if (Array.isArray(saved.rightAnn)) setRightAnn(saved.rightAnn);
+            if (typeof saved.syncScroll === "boolean")
+              setSyncScroll(saved.syncScroll);
+            if (saved.leftSummary) setLeftSummary(saved.leftSummary);
+            if (saved.rightSummary) setRightSummary(saved.rightSummary);
+            if (typeof saved.mode === "string") setMode(saved.mode);
 
-          if (typeof saved.solidViolation === "string")
-            setSolidViolation(saved.solidViolation);
-          if (typeof saved.solidComplexity === "string")
-            setSolidComplexity(saved.solidComplexity);
-          if (typeof saved.solidFixedCode === "string")
-            setSolidFixedCode(saved.solidFixedCode);
+            if (typeof saved.leftCategory === "string")
+              setLeftCategory(saved.leftCategory);
+            if (typeof saved.rightCategory === "string")
+              setRightCategory(saved.rightCategory);
+            if (typeof saved.matchCorrectness === "string")
+              setMatchCorrectness(saved.matchCorrectness);
+            if (typeof saved.finalCategory === "string")
+              setFinalCategory(saved.finalCategory);
+            if (typeof saved.finalOtherCategory === "string")
+              setFinalOtherCategory(saved.finalOtherCategory);
+            if (
+              Array.isArray(saved.bugCategoryOptions) &&
+              saved.bugCategoryOptions.length
+            )
+              setBugCategoryOptions(saved.bugCategoryOptions);
 
-          if (typeof saved.patchAreClones === "string")
-            setPatchAreClones(saved.patchAreClones);
-          if (typeof saved.patchCloneType === "string")
-            setPatchCloneType(saved.patchCloneType);
-          if (typeof saved.patchCloneComment === "string")
-            setPatchCloneComment(saved.patchCloneComment);
+            if (typeof saved.solidViolation === "string")
+              setSolidViolation(saved.solidViolation);
+            if (typeof saved.solidComplexity === "string")
+              setSolidComplexity(saved.solidComplexity);
+            if (typeof saved.solidFixedCode === "string")
+              setSolidFixedCode(saved.solidFixedCode);
 
-          if (typeof saved.snapshotOutcome === "string")
-            setSnapshotOutcome(saved.snapshotOutcome);
-          if (typeof saved.snapshotChangeType === "string")
-            setSnapshotChangeType(saved.snapshotChangeType);
-          if (typeof saved.snapshotChangeTypeOther === "string")
-            setSnapshotChangeTypeOther(saved.snapshotChangeTypeOther);
+            if (typeof saved.patchAreClones === "string")
+              setPatchAreClones(saved.patchAreClones);
+            if (typeof saved.patchCloneType === "string")
+              setPatchCloneType(saved.patchCloneType);
+            if (typeof saved.patchCloneComment === "string")
+              setPatchCloneComment(saved.patchCloneComment);
 
-          if (typeof saved.assessmentComment === "string")
-            setAssessmentComment(saved.assessmentComment);
+            if (typeof saved.snapshotOutcome === "string")
+              setSnapshotOutcome(saved.snapshotOutcome);
+            if (typeof saved.snapshotChangeType === "string")
+              setSnapshotChangeType(saved.snapshotChangeType);
+            if (typeof saved.snapshotChangeTypeOther === "string")
+              setSnapshotChangeTypeOther(saved.snapshotChangeTypeOther);
+
+            if (typeof saved.assessmentComment === "string")
+              setAssessmentComment(saved.assessmentComment);
+
+            if (paneHasContent(saved.left) || paneHasContent(saved.right)) {
+              setHasLocalDraft(true);
+            }
+          }
         }
       } catch (err) {
         console.error("Failed to load state", err);
       }
     }
 
-    if (!isCancelled) {
-      setIsLoadingArtifacts(false);
-    }
-
     return () => {
-      isCancelled = true;
       blobUrlCache.forEach((url) => URL.revokeObjectURL(url));
       blobUrlCache.clear();
     };
-  }, []);
+  }, [paneHasContent, studyContext.studyId, studyContext.studyArtifactId]);
+
+  useEffect(() => {
+    if (!authToken || !studyContext.studyId || !studyContext.studyArtifactId) {
+      return;
+    }
+
+    let cancelled = false;
+    setAssignmentLoadError("");
+    setIsLoadingArtifacts(true);
+
+    api
+      .get("/api/participant/artifact-task", {
+        params: {
+          studyId: studyContext.studyId,
+          studyArtifactId: studyContext.studyArtifactId,
+          studyParticipantId:
+            resolvedStudyParticipantId || studyContext.studyParticipantId || undefined,
+        },
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      })
+      .then((response) => {
+        if (cancelled) return;
+        const assignment = response.data?.assignment;
+        if (!assignment) {
+          setAssignmentLoadError("No researcher assignment was found for this artifact.");
+          return;
+        }
+
+        const { panes = null, ...metadata } = assignment;
+        setAssignmentMeta(metadata);
+        setAssignmentPanes(panes);
+
+        if (assignment.studyParticipantId && assignment.studyParticipantId !== resolvedStudyParticipantId) {
+          setResolvedStudyParticipantId(assignment.studyParticipantId);
+        }
+
+        const serverMode = normalizeModeValue(assignment.mode);
+        if (serverMode) {
+          setMode((prev) => (prev === serverMode ? prev : serverMode));
+        }
+
+        if (!assignmentHydratedRef.current && !hasLocalDraft && panes) {
+          const leftPane = normalizeAssignmentPane(panes.left, "Researcher artifact A");
+          const rightPane = normalizeAssignmentPane(panes.right, "Researcher artifact B");
+
+          if (leftPane) setLeftData(leftPane);
+          if (rightPane) setRightData(rightPane);
+
+          assignmentHydratedRef.current = true;
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("Failed to load assignment artifacts", error);
+        setAssignmentLoadError(
+          error.response?.data?.message ||
+            "Unable to load the researcher-provided artifacts right now."
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingArtifacts(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authToken,
+    studyContext.studyId,
+    studyContext.studyArtifactId,
+    studyContext.studyParticipantId,
+    resolvedStudyParticipantId,
+    hasLocalDraft,
+    normalizeAssignmentPane,
+  ]);
 
   // 🔹 Autosave
   const captureAssessmentState = useCallback(
     () => ({
+      studyId: studyContext.studyId,
+      studyArtifactId: studyContext.studyArtifactId,
+      studyParticipantId: activeParticipantId,
       mode,
       left: leftData,
       right: rightData,
@@ -678,6 +815,9 @@ export default function ArtifactsComparison() {
       assessmentComment,
     }),
     [
+      studyContext.studyId,
+      studyContext.studyArtifactId,
+      activeParticipantId,
       mode,
       leftData,
       rightData,
@@ -1922,12 +2062,25 @@ export default function ArtifactsComparison() {
         ]
       : null;
 
-  const activeParticipantId =
-    resolvedStudyParticipantId ||
-    studyContext.studyParticipantId ||
-    null;
-  const missingStudyContext =
-    !studyContext.studyId || !studyContext.studyArtifactId;
+  const assignmentMode =
+    normalizeModeValue(assignmentMeta?.mode) || assignedMode || mode || null;
+
+  const blockingReasons = [];
+  if (missingStudyContext) {
+    blockingReasons.push(
+      "This page was opened without a study + artifact reference."
+    );
+  }
+  if (!activeParticipantId) {
+    blockingReasons.push(
+      "We could not link your account to an active study participant record."
+    );
+  }
+  if (assignmentLoadError) {
+    blockingReasons.push(assignmentLoadError);
+  }
+
+  const hasAssignmentContext = blockingReasons.length === 0;
 
   // ===== PATCH SIMILARITY (heatmap bar) =====
   let leftNormSet = null;
@@ -2016,7 +2169,7 @@ export default function ArtifactsComparison() {
       return;
     }
 
-    if (!assignedMode) {
+    if (!hasAssignmentContext) {
       setAssessmentError(
         "Missing assignment context. Please relaunch this artifact task from your dashboard.",
       );
@@ -2091,6 +2244,40 @@ export default function ArtifactsComparison() {
   };
 
   // ===== MAIN RENDER =====
+  if (!hasAssignmentContext) {
+    return (
+      <div className="min-h-screen bg-white px-4 py-12 flex items-center justify-center">
+        <Card className="w-full max-w-2xl border-dashed">
+          <CardHeader>
+            <CardTitle>No artifact assignment available</CardTitle>
+            <CardDescription>
+              Researchers need to send you a specific study stage before this workspace is unlocked.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm text-muted-foreground">
+            <p>
+              You landed on the artifact comparison tool without an active assignment. Return to your participant
+              dashboard and open the task from the study card once a researcher assigns you a stage.
+            </p>
+            <ul className="list-disc space-y-1 pl-5">
+              {blockingReasons.map((reason) => (
+                <li key={reason} className="text-gray-700">
+                  {reason}
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+          <CardFooter className="justify-end gap-3">
+            <Button variant="outline" onClick={() => navigate(-1)}>
+              Go back
+            </Button>
+            <Button onClick={() => navigate("/participant")}>Participant dashboard</Button>
+          </CardFooter>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-white p-6 text-gray-900 font-sans">
       <div className="max-w-[1400px] mx-auto space-y-6">
@@ -2109,13 +2296,13 @@ export default function ArtifactsComparison() {
             {/* Mode selector */}
             <div className="flex items-center gap-2 rounded-md border bg-gray-50 px-3 py-1.5">
               <span className="text-xs font-medium text-gray-700">Assigned task</span>
-              {assignedMode ? (
+              {assignmentMode ? (
                 <Badge variant="secondary" className="text-xs">
-                  {MODE_LABELS[assignedMode] || assignedMode}
+                  {MODE_LABELS[assignmentMode] || assignmentMode}
                 </Badge>
               ) : (
                 <span className="text-xs text-gray-500">
-                  Open from your dashboard to lock the correct mode
+                  Waiting for researcher instructions
                 </span>
               )}
             </div>
@@ -2176,10 +2363,17 @@ export default function ArtifactsComparison() {
           </div>
         </div>
 
-        {!assignedMode && (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
-            No assignment metadata detected. Return to your participant dashboard and relaunch this task so we
-            can load the researcher-selected mode.
+        {assignmentMeta?.instructions && (
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <p className="text-xs uppercase tracking-wide text-slate-500 mb-1">
+              Researcher instructions
+            </p>
+            {assignmentMeta.label ? (
+              <p className="font-semibold text-slate-900">{assignmentMeta.label}</p>
+            ) : null}
+            <p className="whitespace-pre-line text-sm leading-relaxed">
+              {assignmentMeta.instructions}
+            </p>
           </div>
         )}
 
