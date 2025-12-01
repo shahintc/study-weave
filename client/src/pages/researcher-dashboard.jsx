@@ -120,7 +120,7 @@ export default function ResearcherDashboard() {
     setStudiesError("");
     try {
       const { data } = await api.get("/api/researcher/studies", {
-        params: { researcherId: user.id },
+        params: { researcherId: user.id, archived: "false" },
       });
       setStudies(data.studies || []);
     } catch (error) {

@@ -76,6 +76,7 @@ function StudyCreationWizard() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [newCriterionText, setNewCriterionText] = useState("");
   const [newCriterionWeight, setNewCriterionWeight] = useState("10");
+  const [editingCriterionIndex, setEditingCriterionIndex] = useState(null);
   const [participantTarget, setParticipantTarget] = useState("20");
   const [studyMode, setStudyMode] = useState(ARTIFACT_MODE_OPTIONS[0].value);
   const [windowStart, setWindowStart] = useState("");
@@ -98,6 +99,8 @@ function StudyCreationWizard() {
   const [artifacts, setArtifacts] = useState([]);
   const [artifactsError, setArtifactsError] = useState("");
   const [isArtifactsLoading, setIsArtifactsLoading] = useState(false);
+  const getTotalWeight = () => criteria.reduce((sum, c) => sum + Number(c.weight), 0);
+  const totalCriteriaWeight = useMemo(() => getTotalWeight(), [criteria]);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -203,13 +206,41 @@ function StudyCreationWizard() {
     );
   };
 
+  const resetCriterionDialog = () => {
+    setNewCriterionText("");
+    setNewCriterionWeight("10");
+    setEditingCriterionIndex(null);
+  };
+
   const handleSaveCriterion = () => {
     if (!newCriterionText.trim()) return;
     const weightNumber = Number(newCriterionWeight) || 10;
-    setCriteria((prev) => [...prev, { label: newCriterionText.trim(), weight: weightNumber }]);
-    setNewCriterionText("");
-    setNewCriterionWeight("10");
+
+    setCriteria((prev) => {
+      if (editingCriterionIndex === null || editingCriterionIndex < 0 || editingCriterionIndex >= prev.length) {
+        return [...prev, { label: newCriterionText.trim(), weight: weightNumber }];
+      }
+
+      const updated = [...prev];
+      updated[editingCriterionIndex] = { label: newCriterionText.trim(), weight: weightNumber };
+      return updated;
+    });
+
+    resetCriterionDialog();
     setIsDialogOpen(false);
+  };
+
+  const handleEditCriterion = (index) => {
+    const item = criteria[index];
+    if (!item) return;
+    setNewCriterionText(item.label);
+    setNewCriterionWeight(String(item.weight));
+    setEditingCriterionIndex(index);
+    setIsDialogOpen(true);
+  };
+
+  const handleRemoveCriterion = (index) => {
+    setCriteria((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleCreateStudy = async () => {
@@ -333,10 +364,6 @@ function StudyCreationWizard() {
       hour: "2-digit",
       minute: "2-digit",
     });
-  };
-
-   const getTotalWeight = () => {
-    return criteria.reduce((sum, c) => sum + Number(c.weight), 0);
   };
 
   const validateCriteriaBeforeNext = () => {
@@ -577,7 +604,14 @@ function StudyCreationWizard() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label>Evaluation criteria</Label>
-                  <Button variant="ghost" size="sm" onClick={() => setIsDialogOpen(true)}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      resetCriterionDialog();
+                      setIsDialogOpen(true);
+                    }}
+                  >
                     Add new +
                   </Button>
                 </div>
@@ -586,12 +620,37 @@ function StudyCreationWizard() {
                 </p>
                 <div className="space-y-2 rounded-md border p-4">
                   {criteria.map((item, index) => (
-                    <div key={`${item.label}-${index}`} className="flex items-center justify-between text-sm">
-                      <span>{item.label}</span>
-                      <Badge variant="outline">{item.weight}%</Badge>
+                    <div
+                      key={`${item.label}-${index}`}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-2 text-sm"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="font-medium">{item.label}</span>
+                        <Badge variant="outline">{item.weight}%</Badge>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleEditCriterion(index)}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive"
+                          onClick={() => handleRemoveCriterion(index)}
+                        >
+                          Remove
+                        </Button>
+                      </div>
                     </div>
                   ))}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Total weight: {totalCriteriaWeight}% (must equal 100% before launch)
+                </p>
 
                 {/* ADDED — validation error */}
                 {error ? (
@@ -771,11 +830,23 @@ function StudyCreationWizard() {
         </CardFooter>
       </Card>
 
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+      <Dialog
+        open={isDialogOpen}
+        onOpenChange={(open) => {
+          setIsDialogOpen(open);
+          if (!open) {
+            resetCriterionDialog();
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add new evaluation criterion</DialogTitle>
-            <DialogDescription>Participants will rate this dimension during the study.</DialogDescription>
+            <DialogTitle>
+              {editingCriterionIndex === null ? "Add new evaluation criterion" : "Edit evaluation criterion"}
+            </DialogTitle>
+            <DialogDescription>
+              Participants will rate this dimension during the study. Adjust weights to keep totals at 100%.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -805,7 +876,13 @@ function StudyCreationWizard() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsDialogOpen(false);
+                resetCriterionDialog();
+              }}
+            >
               Cancel
             </Button>
             <Button onClick={handleSaveCriterion}>Save</Button>

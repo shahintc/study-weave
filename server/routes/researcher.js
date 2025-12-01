@@ -1,6 +1,7 @@
 const express = require('express');
 const { Op } = require('sequelize');
 const {
+  sequelize,
   Study,
   User,
   StudyParticipant,
@@ -9,6 +10,7 @@ const {
   Evaluation,
   ArtifactAssessment,
   CompetencyAssignment,
+  ActionLog,
 } = require('../models');
 const authMiddleware = require('../middleware/auth');
 
@@ -33,6 +35,12 @@ router.get('/studies', async (req, res) => {
     const where = {};
     if (researcherId) {
       where.researcherId = researcherId;
+    }
+    const archivedParam = req.query.archived;
+    if (typeof archivedParam !== 'undefined') {
+      const normalized = String(archivedParam).toLowerCase();
+      const isArchived = normalized === 'true' || normalized === '1' || normalized === 'yes';
+      where.isArchived = isArchived;
     }
 
     const studies = await Study.findAll({
@@ -61,6 +69,74 @@ router.get('/studies', async (req, res) => {
   } catch (error) {
     console.error('Researcher studies error', error);
     res.status(500).json({ message: 'Unable to load studies right now' });
+  }
+});
+
+router.patch('/studies/:studyId/archive', authMiddleware, async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const studyId = Number(req.params.studyId);
+    if (Number.isNaN(studyId)) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'Invalid study id provided.' });
+    }
+
+    const study = await Study.findByPk(studyId, { transaction });
+    if (!study) {
+      await transaction.rollback();
+      return res.status(404).json({ message: `Study ${studyId} was not found.` });
+    }
+
+    if (!canManageStudy(req.user, study)) {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'You are not allowed to archive this study.' });
+    }
+
+    const previousStatus = study.status;
+    study.status = 'archived';
+    study.isArchived = true;
+    await study.save({ transaction });
+    await logStudyAction('archive', req.user, study, { previousStatus, newStatus: study.status }, transaction);
+    await transaction.commit();
+
+    const formatted = await loadStudyCard(study.id);
+    return res.json({ study: formatted });
+  } catch (error) {
+    console.error('Archive study error', error);
+    await transaction.rollback();
+    return res.status(500).json({ message: 'Unable to archive this study right now.' });
+  }
+});
+
+router.delete('/studies/:studyId', authMiddleware, async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const studyId = Number(req.params.studyId);
+    if (Number.isNaN(studyId)) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'Invalid study id provided.' });
+    }
+
+    const study = await Study.findByPk(studyId, { transaction });
+    if (!study) {
+      await transaction.rollback();
+      return res.status(404).json({ message: `Study ${studyId} was not found.` });
+    }
+
+    if (!canManageStudy(req.user, study)) {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'You are not allowed to delete this study.' });
+    }
+
+    const snapshot = { title: study.title, status: study.status };
+    await logStudyAction('delete', req.user, study, snapshot, transaction);
+    await Study.destroy({ where: { id: studyId }, transaction });
+    await transaction.commit();
+    return res.json({ message: `Study "${snapshot.title}" was deleted.` });
+  } catch (error) {
+    console.error('Delete study error', error);
+    await transaction.rollback();
+    return res.status(500).json({ message: 'Unable to delete this study right now.' });
   }
 });
 
@@ -459,6 +535,51 @@ function buildNextAssignmentPayload(participant, artifactLookup, defaultMode) {
     artifactLabel: artifact?.label || null,
     updatedAt: participant.updatedAt ? new Date(participant.updatedAt).toISOString() : null,
   };
+}
+
+async function loadStudyCard(studyId) {
+  const study = await Study.findByPk(studyId, {
+    include: [
+      { model: User, as: 'researcher', attributes: ['id', 'name', 'email'] },
+      {
+        model: StudyParticipant,
+        as: 'participants',
+        include: [{ model: User, as: 'participant', attributes: ['id', 'name'] }],
+      },
+      {
+        model: StudyArtifact,
+        as: 'studyArtifacts',
+        include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name'] }],
+      },
+    ],
+  });
+
+  if (!study) {
+    return null;
+  }
+
+  const ratingMap = await loadStudyRatings([study.id]);
+  return formatStudyCard(study, ratingMap);
+}
+
+async function logStudyAction(action, user, study, details = {}, transaction = null) {
+  try {
+    await ActionLog.create(
+      {
+        userId: user?.id || null,
+        studyId: study?.id || null,
+        action,
+        details: {
+          studyTitle: study?.title || null,
+          status: study?.status || null,
+          ...details,
+        },
+      },
+      { transaction },
+    );
+  } catch (error) {
+    console.error('Action log write failed', error);
+  }
 }
 
 function canManageStudy(user, study) {
