@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTwoFilesPatch } from "diff";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -77,6 +76,7 @@ const SERVER_MODE_TO_UI = {
 };
 
 const SUPPORTED_UI_MODES = new Set(["stage1", "stage2", "solid", "patch", "snapshot"]);
+const SYNC_SWAP_MODES = new Set(["stage2", "patch", "snapshot"]);
 
 const MODE_LABELS = {
   stage1: "Stage 1: Participant Bug Labeling",
@@ -597,9 +597,6 @@ export default function ArtifactsComparison() {
 
   const leftDraftRef = useRef("");
   const rightDraftRef = useRef("");
-
-  const leftFileRef = useRef(null);
-  const rightFileRef = useRef(null);
   const snapshotDiffInputRef = useRef(null);
   const patchPairInputRef = useRef(null);
 
@@ -611,9 +608,6 @@ export default function ArtifactsComparison() {
   const leftDrawingState = useRef({ drawing: false, x: 0, y: 0 });
   const rightDrawingState = useRef({ drawing: false, x: 0, y: 0 });
 
-  const ACCEPT =
-    ".png,.jpg,.jpeg,.pdf,.txt,.json,.patch,.diff," +
-    ".java,.js,.jsx,.ts,.tsx,.py,.c,.h,.cpp,.cs,.go,.rs,.kt,.php,.rb,.html,.css,.md";
   const radioClass =
     "relative h-4 w-4 rounded-full border border-gray-400 data-[state=checked]:border-black data-[state=checked]:ring-2 data-[state=checked]:ring-black before:content-[''] before:absolute before:inset-1 before:rounded-full before:bg-black before:opacity-0 data-[state=checked]:before:opacity-100";
 
@@ -1055,6 +1049,7 @@ export default function ArtifactsComparison() {
 
   // ===== SYNC SCROLL =====
   useEffect(() => {
+    if (!SYNC_SWAP_MODES.has(mode)) return;
     const lRef = showBig ? leftBigRef.current : leftRef.current;
     const rRef = showBig ? rightBigRef.current : rightRef.current;
     if (!lRef || !rRef) return;
@@ -1088,7 +1083,7 @@ export default function ArtifactsComparison() {
       lRef.removeEventListener("scroll", onLeftScroll);
       rRef.removeEventListener("scroll", onRightScroll);
     };
-  }, [syncScroll, showBig]);
+  }, [syncScroll, showBig, mode]);
 
   // ===== EDIT TOGGLE =====
   const toggleEdit = (side) => {
@@ -1134,170 +1129,6 @@ export default function ArtifactsComparison() {
     setSnapshotChangeType("");
     setSnapshotChangeTypeOther("");
     setAssessmentComment("");
-  };
-
-  const handleFileChange = async (e, side) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-
-    const name = file.name;
-    const lower = name.toLowerCase();
-    const textExts = [
-      ".txt",
-      ".patch",
-      ".diff",
-      ".java",
-      ".js",
-      ".jsx",
-      ".ts",
-      ".tsx",
-      ".py",
-      ".c",
-      ".h",
-      ".cpp",
-      ".cs",
-      ".go",
-      ".rs",
-      ".kt",
-      ".php",
-      ".rb",
-      ".html",
-      ".css",
-      ".md",
-    ];
-
-    const isTxt = textExts.some((ext) => lower.endsWith(ext));
-    const isImg = /\.(png|jpg|jpeg)$/i.test(name);
-    const isPdf = lower.endsWith(".pdf");
-    const isJson = lower.endsWith(".json");
-
-    if (!(isTxt || isImg || isPdf || isJson)) {
-      alert(
-        "Unsupported file type. Please upload .txt, .json, .pdf, image, .patch or .diff."
-      );
-      return;
-    }
-
-    const setData = side === "left" ? setLeftData : setRightData;
-    if (side === "left") {
-      setLeftAnn([]);
-      setLeftZoom(1);
-    } else {
-      setRightAnn([]);
-      setRightZoom(1);
-    }
-
-    const assignPane = (payload) => {
-      setData(payload);
-      if (mode === "snapshot") {
-        const role = side === "left" ? "reference" : "failure";
-        setSnapshotAssets((prev) => ({ ...prev, [role]: payload }));
-      }
-    };
-
-    const resetModeState = () => {
-      if (mode === "stage1" || mode === "stage2") {
-        resetBugLabelingState();
-      } else if (mode === "solid") {
-        resetSolidInputs();
-      } else if (mode === "snapshot") {
-        resetSnapshotDecisions();
-      }
-    };
-
-    if (isJson) {
-      try {
-        const raw = await file.text();
-        const parsed = JSON.parse(raw);
-
-        const metadataList = parseDefectsMetadata(parsed);
-        if (metadataList.length) {
-          setMetadataEntries(metadataList);
-          setSelectedMetadataId(metadataList[0].id);
-          setMetadataPane(side);
-          setMetadataLoadingId(metadataList[0].id);
-          try {
-            const resp = await fetch(metadataList[0].url);
-            if (!resp.ok) throw new Error("Unable to fetch bug report.");
-            const text = await resp.text();
-            assignPane({
-              type: "text",
-              text: numberLines(text),
-              name: metadataList[0].title || metadataList[0].id,
-            });
-            resetBugLabelingState();
-          } catch (err) {
-            console.error("Failed to load metadata bug", err);
-            alert(
-              "Failed to download bug report from metadata file. Please check the console for more details."
-            );
-          } finally {
-            setMetadataLoadingId("");
-          }
-          return;
-        }
-
-        setMetadataEntries([]);
-        setSelectedMetadataId("");
-        setMetadataLoadingId("");
-
-        const solidList = normalizeSolidRecords(parsed);
-        if (solidList.length) {
-          setSolidRecords(solidList);
-          setSolidDatasetName(name);
-          setSolidRecordIndex(0);
-          setShowSolidGroundTruth(false);
-          const first = solidList[0];
-          assignPane({
-            type: "text",
-            text: numberLines(first.input || ""),
-            name: first.__id,
-          });
-          resetSolidInputs();
-          return;
-        }
-
-        if (solidRecords.length) {
-          setSolidRecords([]);
-          setSolidDatasetName("");
-          setSolidRecordIndex(0);
-          setShowSolidGroundTruth(false);
-        }
-
-        if (
-          Array.isArray(parsed.categories) &&
-          parsed.categories.every((c) => typeof c === "string")
-        ) {
-          setBugCategoryOptions(parsed.categories);
-        }
-
-        const pretty = formatBugReportText(parsed);
-        assignPane({ type: "text", text: numberLines(pretty), name });
-        resetModeState();
-        return;
-      } catch (err) {
-        console.error(err);
-        alert("Invalid JSON file.");
-      }
-      return;
-    }
-
-    if (isTxt) {
-      const text = await file.text();
-      assignPane({ type: "text", text: numberLines(text), name });
-      resetModeState();
-      return;
-    }
-
-    try {
-      const base64Url = await fileToBase64(file);
-      assignPane({ type: isImg ? "image" : "pdf", url: base64Url, name });
-      resetModeState();
-    } catch (err) {
-      console.error(err);
-      alert("Error reading file.");
-    }
   };
 
   const handleMetadataSelection = async (bugId, paneOverride) => {
@@ -1700,6 +1531,7 @@ export default function ArtifactsComparison() {
     const editing = isLeft ? leftEditing : rightEditing;
     const isDraw = isLeft ? leftDraw : rightDraw;
     const patchMode = mode === "patch";
+    const canAnnotateImage = data.type === "image";
 
     return (
       <div className="flex items-center justify-between px-3 py-2 border-b bg-white min-h-[46px]">
@@ -1769,6 +1601,10 @@ export default function ArtifactsComparison() {
               >
                 +
               </Button>
+            </>
+          )}
+          {canAnnotateImage && (
+            <>
               <div className="w-px h-4 bg-gray-300 mx-1"></div>
               <Button
                 variant={isDraw ? "secondary" : "ghost"}
@@ -1791,35 +1627,6 @@ export default function ArtifactsComparison() {
             </>
           )}
           <div className="w-px h-4 bg-gray-300 mx-1"></div>
-          <input
-            type="file"
-            className="hidden"
-            ref={isLeft ? leftFileRef : rightFileRef}
-            accept={ACCEPT}
-            onChange={(e) => handleFileChange(e, side)}
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() =>
-              (isLeft ? leftFileRef : rightFileRef).current?.click()
-            }
-            title="Upload"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" x2="12" y1="3" y2="15" />
-            </svg>
-          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -2091,6 +1898,10 @@ export default function ArtifactsComparison() {
 
   const assignmentMode =
     normalizeModeValue(assignmentMeta?.mode) || assignedMode || mode || null;
+  const assignedTaskDisplay =
+    assignmentMeta?.label?.trim() ||
+    (assignmentMode ? MODE_LABELS[assignmentMode] || assignmentMode : "");
+  const allowSyncAndSwap = SYNC_SWAP_MODES.has(mode);
 
   const blockingReasons = [];
   if (missingStudyContext) {
@@ -2335,63 +2146,67 @@ export default function ArtifactsComparison() {
       <div className="max-w-[1400px] mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div className="flex flex-col gap-1">
-            <h1 className="text-xl font-bold">
-              Bug & Code Labeling / Patch Tool
-            </h1>
-            <p className="text-xs text-gray-500">
-              Upload bug reports, SOLID-violation code snippets, patches, or
-              UI snapshots and assign labels, complexity, clone types, or
-              failure vs change decisions.
-            </p>
+            <span className="text-xs uppercase tracking-wide text-gray-500">
+              Assigned task
+            </span>
+            {assignedTaskDisplay ? (
+              <h1 className="text-xl font-bold leading-tight">
+                {assignedTaskDisplay}
+              </h1>
+            ) : (
+              <h1 className="text-xl font-bold text-gray-400">
+                Waiting for researcher instructions
+              </h1>
+            )}
+            {!assignmentMeta?.label && assignmentMode && assignedTaskDisplay && (
+              <p className="text-xs text-gray-500">
+                {MODE_LABELS[assignmentMode] || assignmentMode}
+              </p>
+            )}
+            {!assignedTaskDisplay && (
+              <p className="text-xs text-gray-500">
+                Launch this workspace from your study dashboard once a stage is assigned.
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-3">
-            {/* Mode selector */}
-            <div className="flex items-center gap-2 rounded-md border bg-gray-50 px-3 py-1.5">
-              <span className="text-xs font-medium text-gray-700">Assigned task</span>
-              {assignmentMode ? (
-                <Badge variant="secondary" className="text-xs">
-                  {MODE_LABELS[assignmentMode] || assignmentMode}
-                </Badge>
-              ) : (
-                <span className="text-xs text-gray-500">
-                  Waiting for researcher instructions
-                </span>
-              )}
-            </div>
-
-            <div className="flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-md border">
-              <Checkbox
-                id="sync-mode"
-                checked={syncScroll}
-                onCheckedChange={(checked) => setSyncScroll(!!checked)}
-              />
-              <label
-                htmlFor="sync-mode"
-                className="text-sm font-medium cursor-pointer select-none"
-              >
-                Sync Scroll
-              </label>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const tD = leftData;
-                setLeftData(rightData);
-                setRightData(tD);
-                const tA = leftAnn;
-                setLeftAnn(rightAnn);
-                setRightAnn(tA);
-                const tS = leftSummary;
-                setLeftSummary(rightSummary);
-                setRightSummary(tS);
-                const tC = leftCategory;
-                setLeftCategory(rightCategory);
-                setRightCategory(tC);
-              }}
-            >
-              Swap Sides
-            </Button>
+            {allowSyncAndSwap && (
+              <>
+                <div className="flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-md border">
+                  <Checkbox
+                    id="sync-mode"
+                    checked={syncScroll}
+                    onCheckedChange={(checked) => setSyncScroll(!!checked)}
+                  />
+                  <label
+                    htmlFor="sync-mode"
+                    className="text-sm font-medium cursor-pointer select-none"
+                  >
+                    Sync Scroll
+                  </label>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const tD = leftData;
+                    setLeftData(rightData);
+                    setRightData(tD);
+                    const tA = leftAnn;
+                    setLeftAnn(rightAnn);
+                    setRightAnn(tA);
+                    const tS = leftSummary;
+                    setLeftSummary(rightSummary);
+                    setRightSummary(tS);
+                    const tC = leftCategory;
+                    setLeftCategory(rightCategory);
+                    setRightCategory(tC);
+                  }}
+                >
+                  Swap Sides
+                </Button>
+              </>
+            )}
             <Button
               variant="outline"
               size="icon"
