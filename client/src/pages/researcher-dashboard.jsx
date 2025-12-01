@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import api from "@/api/axios";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Badge, badgeVariants } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import {
@@ -30,6 +30,7 @@ import {
   Download,
   RefreshCcw,
   Share2,
+  Copy, Check,
 } from "lucide-react";
 import { toPng } from "html-to-image";
 import jsPDF from "jspdf";
@@ -105,6 +106,9 @@ export default function ResearcherDashboard() {
   const [participantError, setParticipantError] = useState("");
   const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
   const [assignmentDrafts, setAssignmentDrafts] = useState({});
+  // --- Start: Rewritten Copy Logic ---
+  const [copyStatus, setCopyStatus] = useState({ studyId: null, state: 'idle' }); // 'idle', 'copied', 'error'
+  const [copiedLink, setCopiedLink] = useState(null);
   const [assignmentSaving, setAssignmentSaving] = useState({});
   const analyticsRef = useRef(null);
 
@@ -349,6 +353,28 @@ export default function ResearcherDashboard() {
     }
   }, [monitorDialogOpen]);
 
+  const handleCopyLink = (studyId) => {
+    const publicUrl = `${window.location.origin}/study/public/${studyId}`;
+
+    // navigator.clipboard is only available in secure contexts (https:// or localhost)
+    if (!navigator.clipboard?.writeText) {
+      setCopyStatus({ studyId, state: 'error' });
+      setTimeout(() => setCopyStatus({ studyId: null, state: 'idle' }), 3000);
+      return;
+    }
+
+    navigator.clipboard.writeText(publicUrl).then(
+      () => { // Success
+        setCopyStatus({ studyId, state: 'copied' });
+        setTimeout(() => setCopyStatus({ studyId: null, state: 'idle' }), 2000);
+      },
+      () => { // Failure
+        setCopyStatus({ studyId, state: 'error' });
+        setTimeout(() => setCopyStatus({ studyId: null, state: 'idle' }), 3000);
+      }
+    );
+  };
+
   const openMonitor = (studyId) => {
     setMonitoringStudyId(studyId);
     setMonitorFilters(createDefaultFilters());
@@ -482,6 +508,11 @@ export default function ResearcherDashboard() {
                       >
                         {study.status}
                       </Badge>
+                      {study.isPublic && (
+                        <Badge className={badgeVariants({ variant: "default" }) + " bg-blue-600 text-white"}>
+                          Public
+                        </Badge>
+                      )}
                     </div>
                     <p className="text-sm text-muted-foreground">{study.description}</p>
                     <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
@@ -522,6 +553,17 @@ export default function ResearcherDashboard() {
                   </div>
 
                   <div className="flex flex-wrap items-center justify-end gap-2">
+                  {study.isPublic && (() => {
+                      const isCurrent = copyStatus.studyId === study.id;
+                      const isCopied = isCurrent && copyStatus.state === 'copied';
+                      const isError = isCurrent && copyStatus.state === 'error';
+                      return (
+                        <Button variant="outline" size="sm" onClick={() => handleCopyLink(study.id)} disabled={isCopied}>
+                          {isCopied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+                          {isCopied ? "Copied!" : isError ? "Copy Failed" : "Copy Invite Link"}
+                        </Button>
+                      );
+                    })()}
                     <Button variant="ghost" size="sm">
                       <Settings2 className="mr-2 h-4 w-4" />
                       Edit setup

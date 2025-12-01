@@ -258,6 +258,7 @@ function formatStudyCard(studyInstance, ratingMap) {
     title: study.title,
     description: study.description,
     status: metadata.statusLabel || mapStatusToLabel(study.status),
+    isPublic: study.isPublic,
     health: metadata.health || inferHealth(study.status),
     progress: avgProgress,
     progressDelta: metadata.progressDelta ?? 0,
