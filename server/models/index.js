@@ -12,6 +12,7 @@ const StudyComparison = require('../sequelize-models/studyComparison');
 const Evaluation = require('../sequelize-models/evaluation');
 const ArtifactAssessment = require('../sequelize-models/artifactAssessment');
 const ArtifactAssessmentItem = require('../sequelize-models/artifactAssessmentItem');
+const ActionLog = require('../sequelize-models/actionLog');
 
 // User / Role
 Role.hasMany(User, { foreignKey: 'roleId', as: 'users' });
@@ -108,6 +109,13 @@ ArtifactAssessment.belongsTo(Artifact, { foreignKey: 'snapshotArtifactId', as: '
 ArtifactAssessment.hasMany(ArtifactAssessmentItem, { foreignKey: 'assessmentId', as: 'items' });
 ArtifactAssessmentItem.belongsTo(ArtifactAssessment, { foreignKey: 'assessmentId', as: 'assessment' });
 
+// Action logs
+User.hasMany(ActionLog, { foreignKey: 'userId', as: 'actionLogs' });
+ActionLog.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+Study.hasMany(ActionLog, { foreignKey: 'studyId', as: 'actionLogs' });
+ActionLog.belongsTo(Study, { foreignKey: 'studyId', as: 'study' });
+
 const models = {
   sequelize,
   User,
@@ -123,6 +131,7 @@ const models = {
   Evaluation,
   ArtifactAssessment,
   ArtifactAssessmentItem,
+  ActionLog,
 };
 
 module.exports = models;

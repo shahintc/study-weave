@@ -21,6 +21,7 @@ import ParticipantsListPage from "./pages/ParticipantsListPage";
 import AdminRoleManagementPage from "./pages/AdminRoleManagementPage";
 import CompetencyEvaluationReview from "./pages/CompetencyEvaluationReview";
 import ReviewerAdjudication from "./pages/ReviewerAdjudication";
+import StudiesPage from "./pages/StudiesPage";
 
 ReactDOM.createRoot(document.getElementById("root")).render(
   <BrowserRouter>
@@ -47,8 +48,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <Route path="reviewer" element={<ReviewerAdjudication />} />
           <Route path="study-creation-wizard" element={<StudyCreationWizard />} /> 
           <Route path="participants-list" element={<ParticipantsListPage />} />
-          {/* Alias for older links */}
-          <Route path="studies" element={<StudyCreationWizard />} />
+          <Route path="studies" element={<StudiesPage archived={false} />} />
+          <Route path="archived-studies" element={<StudiesPage archived />} />
+          <Route path="studies/new" element={<StudyCreationWizard />} />
         </Route>
 
         {/* Participant area (nested) */}

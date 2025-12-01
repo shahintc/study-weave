@@ -41,6 +41,8 @@ export default function ResearcherLayout() {
 
   const nav = [
     { to: "/researcher", label: "Dashboard" },
+    { to: "/researcher/studies", label: "Studies" },
+    { to: "/researcher/archived-studies", label: "Archived" },
     { to: "/researcher/artifacts", label: "Artifacts" },
     { to: "/researcher/assess", label: "Assess" },
     { to: "/researcher/competency-review", label: "Competency Review" },
@@ -60,7 +62,11 @@ export default function ResearcherLayout() {
           <Button
             key={item.to}
             asChild
-            variant={location.pathname === item.to ? "secondary" : "ghost"}
+            variant={
+              location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
+                ? "secondary"
+                : "ghost"
+            }
             className="rounded-full"
           >
             <Link to={item.to}>{item.label}</Link>
