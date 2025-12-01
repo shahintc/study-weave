@@ -54,6 +54,12 @@ const Study = sequelize.define(
       defaultValue: false,
       field: 'is_archived',
     },
+    isPublic: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'is_public',
+    },
     metadata: {
       type: DataTypes.JSONB,
       allowNull: true,

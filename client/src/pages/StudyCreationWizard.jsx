@@ -32,6 +32,7 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
+import { StudyCreationSuccessDialog } from "./StudyCreationSuccessDialog";
 
 const WIZARD_STEPS = [
   { id: 0, label: "Study details", helper: "Title, description, window" },
@@ -69,6 +70,7 @@ function StudyCreationWizard() {
   const [description, setDescription] = useState(
     "Participants compare human and AI generated artifacts and rate readiness.",
   );
+  const [isPublic, setIsPublic] = useState(false);
   const [isBlinded, setIsBlinded] = useState(false);
   const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -90,6 +92,8 @@ function StudyCreationWizard() {
   const [participantsError, setParticipantsError] = useState("");
   const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
   const [selectedParticipants, setSelectedParticipants] = useState([]);
+  const [isSuccessDialogOpen, setIsSuccessDialogOpen] = useState(false);
+  const [newlyCreatedStudy, setNewlyCreatedStudy] = useState(null);
   const [expandedParticipants, setExpandedParticipants] = useState([]);
   const [artifacts, setArtifacts] = useState([]);
   const [artifactsError, setArtifactsError] = useState("");
@@ -219,6 +223,7 @@ function StudyCreationWizard() {
       description,
       criteria,
       researcherId: user.id,
+      isPublic,
       isBlinded,
       timelineStart: windowStart || null,
       timelineEnd: windowEnd || null,
@@ -234,6 +239,7 @@ function StudyCreationWizard() {
         autoInvite,
         selectedArtifacts,
         selectedParticipants,
+        isPublic,
         isBlinded,
         defaultArtifactMode: studyMode,
       },
@@ -241,9 +247,9 @@ function StudyCreationWizard() {
 
     try {
       const response = await axios.post("/api/studies", payload);
-      const newStudy = response.data?.study || response.data;
-      alert(`Study Created Successfully! (ID: ${newStudy?.id ?? "unknown"})`);
-      navigate("/researcher/participants-list");
+      const newStudy = response.data?.study;
+      setNewlyCreatedStudy(newStudy);
+      setIsSuccessDialogOpen(true);
     } catch (err) {
       console.error("Failed to create study:", err);
       setError(err.response?.data?.message || "Failed to create study. Please try again.");
@@ -504,6 +510,17 @@ function StudyCreationWizard() {
                     Blinded evaluation (hide artifact origin)
                   </Label>
                 </div>
+              </div>
+              <div className="space-y-2 rounded-md border p-4">
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="public-study" checked={isPublic} onCheckedChange={setIsPublic} />
+                  <Label htmlFor="public-study" className="font-normal">
+                    Make this a public study for guest participants
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground pl-6">
+                  Guests can access this study via a public link without creating an account.
+                </p>
               </div>
             </>
           ) : null}
@@ -795,6 +812,12 @@ function StudyCreationWizard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <StudyCreationSuccessDialog
+        isOpen={isSuccessDialogOpen}
+        onClose={() => setIsSuccessDialogOpen(false)}
+        study={newlyCreatedStudy}
+      />
     </div>
   );
 }

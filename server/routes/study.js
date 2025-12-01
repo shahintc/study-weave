@@ -47,6 +47,7 @@ router.post('/', async (req, res) => {
       description,
       criteria,
       researcherId,
+      isPublic = false,
       isBlinded = false,
       timelineStart,
       timelineEnd,
@@ -69,6 +70,10 @@ router.post('/', async (req, res) => {
       ...metadata,
     };
 
+    if (typeof preparedMetadata.isPublic === 'undefined') {
+      preparedMetadata.isPublic = Boolean(isPublic);
+    }
+
     if (typeof preparedMetadata.isBlinded === 'undefined') {
       preparedMetadata.isBlinded = Boolean(isBlinded);
     }
@@ -84,6 +89,7 @@ router.post('/', async (req, res) => {
       description,
       criteria: Array.isArray(criteria) ? criteria : [],
       status: 'draft',
+      isPublic: Boolean(isPublic),
       researcherId,
       timelineStart: normalizeDate(timelineStart),
       timelineEnd: normalizeDate(timelineEnd),
