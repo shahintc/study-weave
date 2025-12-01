@@ -379,6 +379,38 @@ export default function ReviewerAdjudication() {
 
               <Separator className="my-4" />
 
+              <section className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-muted-foreground">AI comparison (coming soon)</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Request an automated evaluation to compare against the participant’s submission.
+                    </p>
+                  </div>
+                  <Button variant="outline" size="sm" disabled>
+                    Queue AI evaluation
+                  </Button>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border p-3 bg-muted/40">
+                    <p className="text-xs font-semibold text-muted-foreground mb-1">Participant</p>
+                    <p className="text-sm">
+                      {selected.participant?.name || "Participant"} · {formatDateTime(selected.submittedAt)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">Reviewed above</p>
+                  </div>
+                  <div className="rounded-lg border p-3 border-dashed">
+                    <p className="text-xs font-semibold text-muted-foreground mb-1">AI evaluation</p>
+                    <p className="text-sm text-muted-foreground">Not requested yet.</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      When enabled, AI results and diffs will appear here for side-by-side adjudication.
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              <Separator className="my-4" />
+
               <section className="space-y-4">
                 <h3 className="text-sm font-semibold text-muted-foreground">LLM / ground truth</h3>
                 <GroundTruthSummary groundTruth={selected.groundTruth} />
@@ -566,7 +598,15 @@ function AnswerSummary({ answer }) {
   const solidComplexity = payload.solidComplexity || payload.solid_complexity;
   const solidFixedCode = payload.solidFixedCode || payload.solid_fixed_code;
   const solidComment = payload.assessmentComment || payload.assessment_comment;
-  const leftData = payload.left || {};
+  const leftData = payload.left || null;
+  const rightData = payload.right || null;
+  const snapshotDiff = payload.snapshotDiffData || payload.snapshot_diff_data || null;
+  const payloadWithoutArtifacts = { ...payload };
+  delete payloadWithoutArtifacts.left;
+  delete payloadWithoutArtifacts.right;
+  delete payloadWithoutArtifacts.leftAnn;
+  delete payloadWithoutArtifacts.rightAnn;
+  delete payloadWithoutArtifacts.snapshotDiffData;
 
   return (
     <div className="space-y-3 rounded-lg border p-4">
@@ -583,18 +623,72 @@ function AnswerSummary({ answer }) {
           <DetailField label="Complexity" value={solidComplexity || "—"} />
           <DetailField label="Fixed code" value={solidFixedCode || "—"} />
           <DetailField label="Explanation" value={solidComment || "—"} />
-          {leftData?.text && (
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-muted-foreground">Submitted code</p>
-              <pre className="whitespace-pre-wrap rounded bg-white p-2 text-xs border">
-                {leftData.text}
-              </pre>
-            </div>
-          )}
         </div>
       )}
-      {renderPayload(answer.payload, "Participant payload")}
+
+      {(leftData || rightData) && (
+        <div className="grid gap-3 md:grid-cols-2">
+          <PanePreview title="Artifact A" pane={leftData} />
+          <PanePreview title="Artifact B" pane={rightData} />
+        </div>
+      )}
+
+      {snapshotDiff && (
+        <div className="grid gap-3">
+          <PanePreview title="Participant diff upload" pane={snapshotDiff} />
+        </div>
+      )}
+
+      {renderPayload(payloadWithoutArtifacts, "Participant payload")}
       {answer.metrics && renderPayload(answer.metrics, "Metrics")}
+    </div>
+  );
+}
+
+function PanePreview({ pane, title }) {
+  if (!pane) {
+    return (
+      <div className="rounded-lg border p-3">
+        <p className="text-xs font-semibold text-muted-foreground">{title}</p>
+        <p className="text-sm text-muted-foreground">Not provided</p>
+      </div>
+    );
+  }
+
+  const kind = (pane.type || "").toLowerCase();
+  const label = pane.name || title;
+
+  if (kind === "image") {
+    return (
+      <div className="rounded-lg border p-3 space-y-2">
+        <p className="text-xs font-semibold text-muted-foreground">{title}</p>
+        <p className="text-sm font-medium">{label}</p>
+        <img src={pane.url} alt={label} className="max-h-80 w-full object-contain border rounded" />
+      </div>
+    );
+  }
+
+  if (kind === "pdf") {
+    return (
+      <div className="rounded-lg border p-3 space-y-2">
+        <p className="text-xs font-semibold text-muted-foreground">{title}</p>
+        <p className="text-sm font-medium">{label}</p>
+        <object data={pane.url} type="application/pdf" className="w-full h-80 border rounded">
+          <a href={pane.url} target="_blank" rel="noreferrer" className="text-sm text-blue-600 underline">
+            Open PDF
+          </a>
+        </object>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border p-3 space-y-2">
+      <p className="text-xs font-semibold text-muted-foreground">{title}</p>
+      <p className="text-sm font-medium">{label}</p>
+      <pre className="whitespace-pre-wrap rounded bg-white p-2 text-xs border max-h-80 overflow-auto">
+        {pane.text || "—"}
+      </pre>
     </div>
   );
 }

@@ -762,9 +762,14 @@ export default function ArtifactsComparison() {
           if (rightPane && shouldHydrateRight) setRightData(rightPane);
 
           if (serverMode === "snapshot") {
-            setSnapshotAssets({
-              reference: leftPane || snapshotAssets.reference,
-              failure: rightPane || snapshotAssets.failure,
+            setSnapshotAssets((prev) => {
+              const nextRef = leftPane || prev.reference;
+              const nextFail = rightPane || prev.failure;
+              // Avoid unnecessary state churn that would retrigger this effect
+              const sameRef = prev.reference?.url === nextRef?.url && prev.reference?.text === nextRef?.text;
+              const sameFail = prev.failure?.url === nextFail?.url && prev.failure?.text === nextFail?.text;
+              if (sameRef && sameFail) return prev;
+              return { reference: nextRef, failure: nextFail };
             });
           }
 
@@ -795,10 +800,6 @@ export default function ArtifactsComparison() {
     studyContext.studyParticipantId,
     resolvedStudyParticipantId,
     hasLocalDraft,
-    leftData,
-    rightData,
-    snapshotAssets.reference,
-    snapshotAssets.failure,
     normalizeAssignmentPane,
   ]);
 
@@ -831,6 +832,7 @@ export default function ArtifactsComparison() {
       snapshotOutcome,
       snapshotChangeType,
       snapshotChangeTypeOther,
+      snapshotDiffData,
       assessmentComment,
     }),
     [
@@ -860,6 +862,7 @@ export default function ArtifactsComparison() {
       snapshotOutcome,
       snapshotChangeType,
       snapshotChangeTypeOther,
+      snapshotDiffData,
       assessmentComment,
     ]
   );
@@ -892,6 +895,7 @@ export default function ArtifactsComparison() {
     if (typeof payload.snapshotChangeType === "string") setSnapshotChangeType(payload.snapshotChangeType);
     if (typeof payload.snapshotChangeTypeOther === "string")
       setSnapshotChangeTypeOther(payload.snapshotChangeTypeOther);
+    if (payload.snapshotDiffData) setSnapshotDiffData(payload.snapshotDiffData);
     if (typeof payload.assessmentComment === "string") setAssessmentComment(payload.assessmentComment);
     },
     [assignedMode],
