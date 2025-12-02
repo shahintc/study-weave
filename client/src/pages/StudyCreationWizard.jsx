@@ -382,6 +382,11 @@ function StudyCreationWizard() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    if (!start || !end) {
+      setError("Both window start and window end are required.");
+      return false;
+    }
+
     if (start && start < today) {
       setError("Window start cannot be before today's date.");
       return false;
