@@ -94,7 +94,10 @@ export default function ParticipantDashboard() {
   }, [user, fetchAssignments]);
 
   const actionableStudies = useMemo(
-    () => studies.filter((study) => study?.cta && study.cta.type !== "none"),
+    () =>
+      studies.filter(
+        (study) => study?.cta && study.cta.type !== "none" && !study.cta.disabled,
+      ),
     [studies],
   );
   const quickActions = actionableStudies.slice(0, 3);
@@ -104,6 +107,10 @@ export default function ParticipantDashboard() {
     (study) => {
       const cta = study?.cta;
       if (!cta || cta.type === "none") {
+        return;
+      }
+      if (cta.disabled) {
+        setError(cta.reason || "This study is no longer available.");
         return;
       }
       if (cta.type === "competency") {
@@ -271,12 +278,21 @@ export default function ParticipantDashboard() {
             const competency = study.competency || {};
             const nextModeLabel = study.nextAssignment?.modeLabel || null;
             const artifactTotals = study.artifactProgress?.totals?.submitted || 0;
+            const isClosed = Boolean(study.isPastDeadline);
             return (
               <Card key={study.studyParticipantId}>
                 <CardHeader className="pb-3">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div>
-                      <CardTitle>{study.title}</CardTitle>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <CardTitle>{study.title}</CardTitle>
+                        <Badge
+                          variant="outline"
+                          className={isClosed ? "border-destructive/60 text-destructive" : "border-emerald-300 text-emerald-700"}
+                        >
+                          {isClosed ? "Closed" : "Active"}
+                        </Badge>
+                      </div>
                       <CardDescription>
                         {study.studyWindow ? study.studyWindow : "Active study"}
                         {study.researcher?.name ? ` · ${study.researcher.name}` : ""}
@@ -312,9 +328,21 @@ export default function ParticipantDashboard() {
                     {nextModeLabel ? `Next up: ${nextModeLabel}` : "All tasks completed."}
                   </div>
                   {study.cta?.type !== "none" && (
-                    <Button size="sm" onClick={() => handleOpenCta(study)}>
-                      {study.cta?.buttonLabel || "Open task"}
-                    </Button>
+                    <div className="flex flex-col items-start gap-1 md:items-end">
+                      <Button
+                        size="sm"
+                        onClick={() => handleOpenCta(study)}
+                        disabled={study.cta?.disabled}
+                        title={study.cta?.disabled ? study.cta.reason || "Deadline passed." : undefined}
+                      >
+                        {study.cta?.buttonLabel || "Open task"}
+                      </Button>
+                      {study.cta?.disabled ? (
+                        <p className="text-xs text-destructive">
+                          {study.cta.reason || "The deadline has passed. You cannot start this study."}
+                        </p>
+                      ) : null}
+                    </div>
                   )}
                 </CardFooter>
               </Card>
