@@ -25,7 +25,7 @@ import {
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 
-export function GenerateArtifactModal({ isOpen, setIsOpen, onGenerateSuccess, currentUserId }) {
+export function GenerateArtifactModal({ isOpen, setIsOpen, onGenerateSuccess, currentUserId, collectionId }) {
   const [error, setError] = useState('');
   const [artifactName, setArtifactName] = useState('');
   const [topic, setTopic] = useState('');
@@ -122,11 +122,25 @@ export function GenerateArtifactModal({ isOpen, setIsOpen, onGenerateSuccess, cu
 
     try {
       // POST to the same endpoint as DetailedUploadModal
-      await api.post('/api/artifacts', formData, {
+      const response = await api.post('/api/artifacts', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
+
+      const newArtifactId = response.data.artifact.id;
+
+      // If a collectionId is provided, associate the new artifact with the collection
+      if (collectionId && newArtifactId) {
+        try {
+          await api.post(`/api/artifact-collections/${collectionId}/artifacts/${newArtifactId}`, { userId: currentUserId });
+          console.log(`Artifact ${newArtifactId} successfully added to collection ${collectionId}`);
+        } catch (collectionError) {
+          console.error(`Failed to add artifact ${newArtifactId} to collection ${collectionId}:`, collectionError);
+          // Optionally, handle this error more gracefully, e.g., by informing the user that the artifact was uploaded but not added to the collection.
+          setError(`Artifact generated and saved, but failed to add to collection: ${collectionError.response?.data?.message || collectionError.message}`);
+        }
+      }
 
       onGenerateSuccess(); // Notify parent to refresh artifacts
       handleClose(); // Close and reset the modal
