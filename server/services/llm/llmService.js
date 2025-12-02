@@ -64,7 +64,15 @@ export async function generateContentRouteHandler(req, res){
             const filesToUpload = await contentProvider.getContent(id);
             console.log(`Found ${filesToUpload.length} files from content provider.`);
 
+            const seen = new Set();
             for (const file of filesToUpload) {
+                const dedupeKey = `${file.filepath}|${file.mimeType}`;
+                if (seen.has(dedupeKey)) {
+                    console.log(`Skipping duplicate upload for ${file.filepath}`);
+                    continue;
+                }
+                seen.add(dedupeKey);
+
                 console.log(`Attempting to upload file: ${file.filepath}`);
                 try {
                     const uploaded = await ai.files.upload({
@@ -91,10 +99,10 @@ export async function generateContentRouteHandler(req, res){
          res.json({ response: llmResponse });
      } catch (error) {
          console.error(error.message);
-         res.status(500).json({
-             error: "Error processing LLM request."
-         });
-     } finally {
+        res.status(500).json({
+            error: "Error processing LLM request."
+        });
+    } finally {
         // Delete uploaded files after the request is processed, regardless of success or failure
         for (const uploadedFile of uploadedFiles) {
             const fileName =
@@ -106,11 +114,7 @@ export async function generateContentRouteHandler(req, res){
             }
             try {
                 console.log(`Attempting to delete uploaded file: ${fileName}`);
-                
-                // --- FIX APPLIED HERE ---
-                // Changed 'client.files.delete' to 'ai.files.delete' to match initialization at top of file
-                await ai.files.delete({ name: fileName }); 
-                
+                await ai.files.delete({ name: fileName });
                 console.log(`Successfully deleted file: ${fileName}`);
             } catch (deleteError) {
                 console.error(`Error deleting uploaded file ${fileName}:`, deleteError);

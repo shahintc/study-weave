@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, CheckCircle2, Eye, RefreshCcw, Timer } from "lucide-react";
+import { AlertCircle, CheckCircle2, Eye, RefreshCcw, Timer, Sparkles, Loader2 } from "lucide-react";
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All" },
@@ -38,6 +38,102 @@ const DECISION_OPTIONS = [
   { value: "inconclusive", label: "Inconclusive" },
   { value: "needs_followup", label: "Needs follow-up" },
 ];
+
+const STAGE_LABELS = {
+  stage1: "Stage 1: Bug labeling",
+  stage2: "Stage 2: Adjudication",
+  solid: "SOLID review",
+  patch: "Patch/Clone check",
+  snapshot: "Snapshot intent",
+};
+
+const getStageLabel = (mode) => STAGE_LABELS[mode] || mode || "—";
+
+const normalizeCriteriaRatings = (payload) => {
+  if (!payload || typeof payload !== "object") return [];
+  const candidates = [
+    payload.criteriaRatings,
+    payload.criteria_scores,
+    payload.criteriaScores,
+    payload.criteria,
+  ].find((arr) => Array.isArray(arr) && arr.length);
+
+  if (candidates) {
+    return candidates
+      .map((item, idx) => {
+        const label =
+          item?.label ||
+          item?.name ||
+          item?.title ||
+          item?.criterion ||
+          item?.criteria ||
+          `Criterion ${idx + 1}`;
+        const weight =
+          typeof item?.weight !== "undefined"
+            ? item.weight
+            : typeof item?.weightPercent !== "undefined"
+              ? item.weightPercent
+              : null;
+        const rating =
+          typeof item?.rating !== "undefined"
+            ? item.rating
+            : typeof item?.score !== "undefined"
+              ? item.score
+              : typeof item?.value !== "undefined"
+                ? item.value
+                : null;
+        return { label, weight, rating };
+      })
+      .filter((item) => item.label);
+  }
+
+  // Support object-based maps from participant payload
+  const starMap = payload.evaluationStarRatings && typeof payload.evaluationStarRatings === "object"
+    ? payload.evaluationStarRatings
+    : null;
+  const weightedMap = payload.evaluationRatings && typeof payload.evaluationRatings === "object"
+    ? payload.evaluationRatings
+    : null;
+
+  if (starMap) {
+    return Object.entries(starMap).map(([label, rawRating]) => {
+      const rating = Number(rawRating);
+      let weight = null;
+      if (weightedMap && weightedMap[label] != null && Number.isFinite(Number(weightedMap[label])) && Number.isFinite(rating) && rating !== 0) {
+        const pct = Number(weightedMap[label]);
+        // pct = weight% * rating / 5  => weight% = pct * 5 / rating
+        weight = Number(((pct * 5) / rating).toFixed(2));
+      }
+      return { label, rating, weight };
+    });
+  }
+
+  return [];
+};
+
+const summarizeCriteriaRatings = (criteria = []) => {
+  if (!criteria.length) {
+    return { weighted: null, weightTotal: 0, items: [] };
+  }
+  const weightSum = criteria.reduce(
+    (sum, c) => sum + (Number(c.weight) || 0),
+    0,
+  );
+  let weightedScore = 0;
+  criteria.forEach((c) => {
+    const rating = Number(c.rating);
+    if (!Number.isFinite(rating)) return;
+    const weight = Number(c.weight) || 0;
+    if (weightSum > 0) {
+      weightedScore += rating * (weight / 100);
+    }
+  });
+  return {
+    weighted: weightSum > 0 ? Number(weightedScore.toFixed(2)) : null,
+    weightTotal: weightSum,
+    items: criteria,
+  };
+};
 
 export default function ReviewerAdjudication() {
   const navigate = useNavigate();
@@ -57,6 +153,106 @@ export default function ReviewerAdjudication() {
   });
   const [formError, setFormError] = useState("");
   const [savingDecision, setSavingDecision] = useState(false);
+  const [aiSummary, setAiSummary] = useState("");
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
+  const [aiSummaryError, setAiSummaryError] = useState("");
+  const [artifactSummaries, setArtifactSummaries] = useState({
+    primary: { text: "", loading: false, error: "" },
+    secondary: { text: "", loading: false, error: "" },
+  });
+
+  const buildReviewSummaryPrompt = useCallback((entry) => {
+    if (!entry) return "";
+
+    const describePane = (pane, label) => {
+      if (!pane) return `${label}: missing.`;
+      const kind = (pane.type || "").toLowerCase();
+      const name = pane.name || label;
+      if (kind === "text") {
+        const text = pane.text || "";
+        const trimmed = text.length > 1200 ? `${text.slice(0, 1200)}... [truncated]` : text;
+        return `${label} (${name}, text):\n${trimmed}`;
+      }
+      if (kind === "image" || kind === "pdf") {
+        return `${label} (${name}, ${kind}) was uploaded.`;
+      }
+      return `${label} (${name}, ${kind || "unknown"}).`;
+    };
+
+    const lines = [];
+    lines.push(
+      `Study: ${entry.study?.title || "Study"} (id: ${entry.study?.id || "n/a"})`,
+    );
+    lines.push(
+      `Participant: ${entry.participant?.name || "Participant"} (${entry.participant?.email || "n/a"}); submitted at ${formatDateTime(entry.submittedAt)}.`,
+    );
+    lines.push(
+      `Review status: ${entry.review?.status || "pending"}; decision: ${entry.review?.decision || "none"}; adjudicated label: ${entry.review?.adjudicatedLabel || "n/a"}.`,
+    );
+    if (entry.comparison) {
+      lines.push(
+        `Artifacts compared: Primary ${entry.comparison.primary?.artifactName || entry.comparison.primary?.label || "N/A"} vs Secondary ${entry.comparison.secondary?.artifactName || entry.comparison.secondary?.label || "N/A"}. Prompt: ${entry.comparison.prompt || "none"}.`,
+      );
+    }
+    const answer = entry.participantAnswer || {};
+    const payload = answer.payload || {};
+    const mode = payload.mode || answer.mode || null;
+    const metrics = answer.metrics || {};
+    const preference = answer.preference || payload.preference || "n/a";
+    const rating = (answer.rating ?? payload.rating ?? "n/a");
+    const summary = answer.summary || payload.summary || "";
+    const notes = answer.notes || payload.notes || payload.assessmentComment || "";
+    const snapshotDiff = payload.snapshotDiffData
+      ? `Participant uploaded a diff artifact (${payload.snapshotDiffData.name || payload.snapshotDiffData.type || "diff"}).`
+      : "";
+    lines.push(
+      `Participant preference: ${preference}; rating: ${rating}. Summary: ${summary || "—"}. Notes: ${notes || "—"}. ${snapshotDiff}`,
+    );
+    lines.push(`Stage: ${getStageLabel(mode)}`);
+    // Include stage-specific answers
+    if (mode === "stage1") {
+      lines.push(`Bug category: ${payload.leftCategory || "—"}`);
+      if (payload.assessmentComment) lines.push(`Notes: ${payload.assessmentComment}`);
+    } else if (mode === "stage2") {
+      lines.push(`Participant A label: ${payload.leftCategory || "—"}`);
+      lines.push(`Participant B/AI label: ${payload.rightCategory || "—"}`);
+      lines.push(`Labels match? ${payload.matchCorrectness || "—"}`);
+      const finalCat =
+        payload.finalCategory === "other"
+          ? payload.finalOtherCategory || "Other (unspecified)"
+          : payload.finalCategory || "—";
+      lines.push(`Final category: ${finalCat}`);
+      if (payload.assessmentComment) lines.push(`Notes: ${payload.assessmentComment}`);
+    } else if (mode === "solid") {
+      lines.push(`Violation: ${payload.solidViolation || payload.solid_violation || "—"}`);
+      lines.push(`Complexity: ${payload.solidComplexity || payload.solid_complexity || "—"}`);
+      lines.push(`Refactor: ${payload.solidFixedCode || payload.solid_fixed_code || "—"}`);
+      if (payload.assessmentComment) lines.push(`Notes: ${payload.assessmentComment}`);
+    } else if (mode === "patch") {
+      lines.push(`Are patches clones? ${payload.patchAreClones || "—"}`);
+      if (payload.patchAreClones === "yes") {
+        lines.push(`Clone type: ${payload.patchCloneType || "—"}`);
+      }
+      if (payload.patchCloneComment) lines.push(`Notes: ${payload.patchCloneComment}`);
+    } else if (mode === "snapshot") {
+      lines.push(`Outcome: ${payload.snapshotOutcome || "—"}`);
+      const changeType =
+        payload.snapshotChangeType === "other"
+          ? payload.snapshotChangeTypeOther || "Other (unspecified)"
+          : payload.snapshotChangeType || "—";
+      lines.push(`Change type: ${changeType}`);
+      if (payload.assessmentComment) lines.push(`Notes: ${payload.assessmentComment}`);
+    }
+    // Include participant-provided panes for LLM context
+    lines.push(describePane(payload.left, "Artifact A (pane)"));
+    lines.push(describePane(payload.right, "Artifact B (pane)"));
+    if (Object.keys(metrics).length) {
+      lines.push(`Metrics: ${JSON.stringify(metrics)}`);
+    }
+    lines.push(`Raw payload keys: ${Object.keys(payload).join(", ") || "none"}`);
+    lines.push("Produce 2-3 crisp bullets covering submission quality, risks, and next steps.");
+    return lines.join("\n");
+  }, []);
 
   useEffect(() => {
     const rawUser = localStorage.getItem("user");
@@ -143,6 +339,13 @@ export default function ReviewerAdjudication() {
       notes: entry.review?.notes || "",
     });
     setFormError("");
+    setAiSummary("");
+    setAiSummaryError("");
+    setAiSummaryLoading(false);
+    setArtifactSummaries({
+      primary: { text: "", loading: false, error: "" },
+      secondary: { text: "", loading: false, error: "" },
+    });
     setDialogOpen(true);
   };
 
@@ -154,6 +357,75 @@ export default function ReviewerAdjudication() {
 
   const handleDecisionChange = (field, value) => {
     setDecisionForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleGenerateAiSummary = async () => {
+    if (!selected) {
+      return;
+    }
+    setAiSummaryLoading(true);
+    setAiSummaryError("");
+    try {
+      const prompt = buildReviewSummaryPrompt(selected);
+      const { data } = await api.post("/api/llm", {
+        key: "REVIEW_SUMMARY",
+        prompt,
+        id: selected.id, // pass evaluation id so backend can attach artifacts
+      });
+      setAiSummary(data?.response || "No summary returned.");
+    } catch (err) {
+      console.error("AI summary error", err);
+      const message = err.response?.data?.error || "Unable to generate AI summary right now.";
+      setAiSummaryError(message);
+    } finally {
+      setAiSummaryLoading(false);
+    }
+  };
+
+  const handleArtifactSummary = async (key, artifactMeta) => {
+    if (!selected) return;
+    if (!artifactMeta?.artifactId) {
+      setArtifactSummaries((prev) => ({
+        ...prev,
+        [key]: { ...prev[key], error: "Artifact id missing for summary." },
+      }));
+      return;
+    }
+    setArtifactSummaries((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], loading: true, error: "" },
+    }));
+
+    const participantMode =
+      selected.participantAnswer?.payload?.mode || selected.participantAnswer?.mode || null;
+    const stageLabel = getStageLabel(participantMode);
+    const artifactLabel = artifactMeta.artifactName || artifactMeta.label || `Artifact ${key}`;
+
+    try {
+      const prompt = [
+        `Summarize the attached artifact "${artifactLabel}" for study review.`,
+        `Stage: ${stageLabel}.`,
+        "Provide 2-3 crisp bullets describing what the artifact contains and any notable issues or risks.",
+      ].join(" ");
+
+      const { data } = await api.post("/api/llm", {
+        key: "ARTIFACT_SUMMARY",
+        prompt,
+        id: artifactMeta.artifactId,
+      });
+
+      setArtifactSummaries((prev) => ({
+        ...prev,
+        [key]: { text: data?.response || "No summary returned.", loading: false, error: "" },
+      }));
+    } catch (err) {
+      console.error("Artifact summary error", err);
+      const message = err.response?.data?.error || "Unable to summarize this artifact right now.";
+      setArtifactSummaries((prev) => ({
+        ...prev,
+        [key]: { ...prev[key], loading: false, error: message },
+      }));
+    }
   };
 
   const handleSaveDecision = async () => {
@@ -370,11 +642,66 @@ export default function ReviewerAdjudication() {
                 <ComparisonSummary comparison={selected.comparison} />
               </section>
 
+              <section className="space-y-3">
+                <h3 className="text-sm font-semibold text-muted-foreground">Artifact AI summaries</h3>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <ArtifactSummaryCard
+                    title="Primary artifact"
+                    artifact={selected.comparison?.primary}
+                    summary={artifactSummaries.primary}
+                    onGenerate={() => handleArtifactSummary("primary", selected.comparison?.primary)}
+                  />
+                  <ArtifactSummaryCard
+                    title="Secondary artifact"
+                    artifact={selected.comparison?.secondary}
+                    summary={artifactSummaries.secondary}
+                    onGenerate={() => handleArtifactSummary("secondary", selected.comparison?.secondary)}
+                  />
+                </div>
+              </section>
+
               <Separator className="my-4" />
 
               <section className="space-y-4">
                 <h3 className="text-sm font-semibold text-muted-foreground">Participant answer</h3>
                 <AnswerSummary answer={selected.participantAnswer} />
+              </section>
+
+              <Separator className="my-4" />
+
+              <section className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-muted-foreground">AI summary</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Generate a concise summary of this submission for quick review notes.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleGenerateAiSummary}
+                    disabled={aiSummaryLoading}
+                  >
+                    {aiSummaryLoading ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="mr-2 h-4 w-4" />
+                    )}
+                    {aiSummaryLoading ? "Generating..." : "Generate AI summary"}
+                  </Button>
+                </div>
+                {aiSummaryError && (
+                  <p className="text-xs text-red-600">{aiSummaryError}</p>
+                )}
+                {aiSummary ? (
+                  <div className="rounded-md border p-3 bg-muted/40 text-sm whitespace-pre-wrap">
+                    {aiSummary}
+                  </div>
+                ) : !aiSummaryLoading ? (
+                  <p className="text-xs text-muted-foreground">No AI summary yet.</p>
+                ) : null}
+
               </section>
 
               <Separator className="my-4" />
@@ -594,6 +921,7 @@ function AnswerSummary({ answer }) {
   }
 
   const payload = answer.payload || {};
+  const mode = payload.mode || answer.mode || null;
   const solidViolation = payload.solidViolation || payload.solid_violation;
   const solidComplexity = payload.solidComplexity || payload.solid_complexity;
   const solidFixedCode = payload.solidFixedCode || payload.solid_fixed_code;
@@ -601,12 +929,49 @@ function AnswerSummary({ answer }) {
   const leftData = payload.left || null;
   const rightData = payload.right || null;
   const snapshotDiff = payload.snapshotDiffData || payload.snapshot_diff_data || null;
-  const payloadWithoutArtifacts = { ...payload };
-  delete payloadWithoutArtifacts.left;
-  delete payloadWithoutArtifacts.right;
-  delete payloadWithoutArtifacts.leftAnn;
-  delete payloadWithoutArtifacts.rightAnn;
-  delete payloadWithoutArtifacts.snapshotDiffData;
+  const criteriaRatings = normalizeCriteriaRatings(payload);
+  const criteriaSummary = summarizeCriteriaRatings(criteriaRatings);
+
+  const qa = [];
+  if (mode === "stage1") {
+    qa.push({ q: "Bug category", a: payload.leftCategory || "—" });
+    if (payload.assessmentComment) qa.push({ q: "Notes", a: payload.assessmentComment });
+  } else if (mode === "stage2") {
+    qa.push({ q: "Participant A label", a: payload.leftCategory || "—" });
+    qa.push({ q: "Participant B/AI label", a: payload.rightCategory || "—" });
+    qa.push({ q: "Labels match?", a: payload.matchCorrectness || "—" });
+    qa.push({
+      q: "Final category",
+      a:
+        payload.finalCategory === "other"
+          ? payload.finalOtherCategory || "Other (unspecified)"
+          : payload.finalCategory || "—",
+    });
+    if (payload.assessmentComment) qa.push({ q: "Notes", a: payload.assessmentComment });
+  } else if (mode === "solid") {
+    qa.push({ q: "Violation", a: solidViolation || "—" });
+    qa.push({ q: "Complexity", a: solidComplexity || "—" });
+    qa.push({ q: "Refactor", a: solidFixedCode || "—" });
+    if (solidComment) qa.push({ q: "Notes", a: solidComment });
+  } else if (mode === "patch") {
+    qa.push({ q: "Are patches clones?", a: payload.patchAreClones || "—" });
+    if (payload.patchAreClones === "yes") {
+      qa.push({ q: "Clone type", a: payload.patchCloneType || "—" });
+    }
+    if (payload.patchCloneComment) qa.push({ q: "Notes", a: payload.patchCloneComment });
+  } else if (mode === "snapshot") {
+    qa.push({ q: "Outcome", a: payload.snapshotOutcome || "—" });
+    qa.push({
+      q: "Change type",
+      a:
+        payload.snapshotChangeType === "other"
+          ? payload.snapshotChangeTypeOther || "Other (unspecified)"
+          : payload.snapshotChangeType || "—",
+    });
+    if (payload.assessmentComment) qa.push({ q: "Notes", a: payload.assessmentComment });
+  } else {
+    if (payload.assessmentComment) qa.push({ q: "Notes", a: payload.assessmentComment });
+  }
 
   return (
     <div className="space-y-3 rounded-lg border p-4">
@@ -616,6 +981,50 @@ function AnswerSummary({ answer }) {
       </div>
       <DetailField label="Summary" value={answer.summary || "—"} />
       <DetailField label="Notes" value={answer.notes || "—"} />
+      <DetailField label="Stage" value={getStageLabel(mode)} />
+      {qa.length > 0 && (
+        <div className="rounded-md border p-3 bg-muted/40 space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground">Participant responses</p>
+          <div className="space-y-1">
+            {qa.map((item, idx) => (
+              <div key={`${item.q}-${idx}`} className="flex justify-between text-sm gap-2">
+                <span className="text-muted-foreground">{item.q}</span>
+                <span className="text-right font-medium">{item.a || "—"}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {criteriaRatings.length > 0 && (
+        <div className="rounded-md border p-3 bg-muted/40 space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-muted-foreground">Criteria ratings</p>
+            {criteriaSummary.weighted !== null && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-muted-foreground">Weighted score</span>
+                <StarRow value={criteriaSummary.weighted} />
+                <span className="text-muted-foreground">
+                  {criteriaSummary.weighted.toFixed(2)} / 5
+                  {criteriaSummary.weightTotal ? ` (weights total ${criteriaSummary.weightTotal}%)` : ""}
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            {criteriaRatings.map((item, idx) => (
+              <div key={`${item.label}-${idx}`} className="flex items-center justify-between gap-3 text-sm">
+                <div className="flex flex-col">
+                  <span className="font-medium">{item.label}</span>
+                  {item.weight != null && (
+                    <span className="text-xs text-muted-foreground">Weight: {item.weight}%</span>
+                  )}
+                </div>
+                <StarRow value={item.rating} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {solidViolation && (
         <div className="rounded-md border p-3 bg-muted/40 space-y-2">
           <p className="text-xs font-semibold text-muted-foreground">SOLID violation details</p>
@@ -639,8 +1048,34 @@ function AnswerSummary({ answer }) {
         </div>
       )}
 
-      {renderPayload(payloadWithoutArtifacts, "Participant payload")}
       {answer.metrics && renderPayload(answer.metrics, "Metrics")}
+    </div>
+  );
+}
+
+function ArtifactSummaryCard({ title, artifact, summary, onGenerate }) {
+  const name = artifact?.artifactName || artifact?.label || title;
+  const type = artifact?.artifactType || "—";
+  const hasId = Boolean(artifact?.artifactId);
+
+  return (
+    <div className="rounded-lg border p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold text-muted-foreground">{title}</p>
+          <p className="text-sm font-medium">{name}</p>
+          <p className="text-xs text-muted-foreground capitalize">Type: {type}</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onGenerate} disabled={!hasId || summary.loading}>
+          {summary.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 mr-1" />}
+          {summary.loading ? "Summarizing..." : "AI summary"}
+        </Button>
+      </div>
+      {summary.error && <p className="text-xs text-red-600">{summary.error}</p>}
+      <p className="text-xs text-muted-foreground whitespace-pre-wrap">
+        {summary.text || "No summary yet."}
+      </p>
+      {!hasId && <p className="text-[11px] text-amber-700">Artifact id missing; cannot summarize.</p>}
     </div>
   );
 }
@@ -740,4 +1175,18 @@ function formatValue(value) {
     return JSON.stringify(value);
   }
   return String(value);
+}
+
+function StarRow({ value }) {
+  const rating = Number(value);
+  const safe = Number.isFinite(rating) ? Math.max(0, Math.min(5, rating)) : 0;
+  return (
+    <div className="flex items-center gap-0.5 text-amber-500">
+      {[1, 2, 3, 4, 5].map((star) => (
+        <span key={star} className={star <= safe ? "text-amber-500" : "text-gray-300"}>
+          ★
+        </span>
+      ))}
+    </div>
+  );
 }

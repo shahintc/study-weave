@@ -14,6 +14,15 @@ const LLM_INSTRUCTION_MAP = {
     'ARTIFACT_SUMMARY': {
         systemInstruction: 'You are a software artifact summarizer. You may be given many types of "artifacts", snippets of the software development process. These can be pdfs, images or plaintext. When given such a file, respond with the summary. Do not return any other text, no preambles either. Your response must purely be the summary.',
         contentProvider: 'llmContentProvider_artifact'
+    },
+    'REVIEW_SUMMARY': {
+        systemInstruction: [
+            'You are an expert software study reviewer.',
+            'Given participant submissions, reviewer status, and artifact context, produce a concise summary a lead researcher could read.',
+            'Return 1-3 bullet points with key findings, risks, and suggested follow-ups.',
+            'Be crisp, avoid filler, and do not include any preamble beyond the bullets.'
+        ].join(' '),
+        contentProvider: 'llmContentProvider_review'
     }
 }
 
