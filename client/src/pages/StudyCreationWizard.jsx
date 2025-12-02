@@ -356,7 +356,7 @@ function StudyCreationWizard() {
     return "bg-muted text-foreground";
   };
 
-  const formatDateTime = (value, fallback = "—") => {
+  const formatDateTime = (value, fallback = "N/A") => {
     if (!value) return fallback;
     return new Date(value).toLocaleDateString("en-US", {
       month: "short",
@@ -364,6 +364,35 @@ function StudyCreationWizard() {
       hour: "2-digit",
       minute: "2-digit",
     });
+  };
+
+  const normalizeDateOnly = (value) => {
+    if (!value) return null;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+    parsed.setHours(0, 0, 0, 0);
+    return parsed;
+  };
+
+  const validateWindowBeforeNext = () => {
+    const start = normalizeDateOnly(windowStart);
+    const end = normalizeDateOnly(windowEnd);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (start && start < today) {
+      setError("Window start cannot be before today's date.");
+      return false;
+    }
+
+    if (start && end && end < start) {
+      setError("Window end cannot be before the start date.");
+      return false;
+    }
+
+    return true;
   };
 
   const validateCriteriaBeforeNext = () => {
@@ -379,9 +408,15 @@ function StudyCreationWizard() {
     return true;
   };
 
-  const goBack = () => setCurrentStep((prev) => Math.max(0, prev - 1));
+  const goBack = () => {
+    setError(null);
+    setCurrentStep((prev) => Math.max(0, prev - 1));
+  };
   const goNext = () => {
     setError(null);
+    if (currentStep === 0) {
+      if (!validateWindowBeforeNext()) return;
+    }
     if (currentStep === 1) {
       if (!validateCriteriaBeforeNext()) return;
     }
@@ -549,6 +584,9 @@ function StudyCreationWizard() {
                   Guests can access this study via a public link without creating an account.
                 </p>
               </div>
+              {error && (
+                <p className="text-sm text-destructive">{error}</p>
+              )}
             </>
           ) : null}
 

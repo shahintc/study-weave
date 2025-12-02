@@ -187,6 +187,15 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
       return res.status(400).json({ message: 'studyParticipantId must be numeric when provided.' });
     }
 
+    const study = await Study.findByPk(studyId);
+    if (!study) {
+      return res.status(404).json({ message: 'Study not found.' });
+    }
+
+    if (computeDeadlinePassed(study.timelineEnd)) {
+      return res.status(403).json({ message: 'Study deadline has passed. You cannot start this task.' });
+    }
+
     const participantWhere = { studyId };
     if (requestedParticipantId) {
       participantWhere.id = requestedParticipantId;
@@ -358,12 +367,14 @@ function formatEnrollment(entry) {
   const competency = summarizeCompetencyProgress(plain.sourceAssignment);
   const artifactProgress = summarizeArtifactProgress(plain.artifactAssessments || []);
   const nextAssignment = buildNextAssignmentPayload(plain, lookup.map, defaultMode);
+  const isPastDeadline = computeDeadlinePassed(study.timelineEnd);
   const cta = buildCallToAction({
     participationStatus: plain.participationStatus,
     competency,
     nextAssignment,
     studyParticipantId: plain.id,
     studyId: study.id,
+    isPastDeadline,
   });
 
   return {
@@ -378,6 +389,7 @@ function formatEnrollment(entry) {
     artifactProgress,
     nextAssignment,
     cta,
+    isPastDeadline,
     lastUpdatedAt: plain.updatedAt ? new Date(plain.updatedAt).toISOString() : null,
     studyWindow: buildStudyWindow(study.timelineStart, study.timelineEnd),
     defaultArtifactMode: defaultMode,
@@ -468,7 +480,25 @@ function buildNextAssignmentPayload(participant, artifactLookup, defaultMode) {
   };
 }
 
-function buildCallToAction({ participationStatus, competency, nextAssignment, studyParticipantId, studyId }) {
+function buildCallToAction({
+  participationStatus,
+  competency,
+  nextAssignment,
+  studyParticipantId,
+  studyId,
+  isPastDeadline,
+}) {
+  if (isPastDeadline) {
+    return {
+      type: 'artifact',
+      buttonLabel: 'Deadline passed',
+      disabled: true,
+      reason: 'The study deadline has passed. You can no longer start this task.',
+      studyParticipantId: studyParticipantId ? String(studyParticipantId) : null,
+      studyId: studyId ? String(studyId) : null,
+    };
+  }
+
   if (competency.assignmentId && competency.requiresAction) {
     return {
       type: 'competency',
@@ -582,6 +612,20 @@ function buildStudyWindow(start, end) {
     return `Starts ${fmt.format(new Date(start))}`;
   }
   return `Ends ${fmt.format(new Date(end))}`;
+}
+
+function computeDeadlinePassed(timelineEnd) {
+  if (!timelineEnd) {
+    return false;
+  }
+  const endDate = new Date(timelineEnd);
+  if (Number.isNaN(endDate.getTime())) {
+    return false;
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  endDate.setHours(0, 0, 0, 0);
+  return endDate < today;
 }
 
 module.exports = router;
