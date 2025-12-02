@@ -2,6 +2,7 @@ const sequelize = require('../sequelize');
 const User = require('../sequelize-models/user');
 const Artifact = require('../sequelize-models/artifact');
 const Tag = require('../sequelize-models/tag');
+const ArtifactCollection = require('../sequelize-models/artifactCollection'); // New
 const Role = require('../sequelize-models/role');
 const CompetencyAssessment = require('../sequelize-models/competencyAssessment');
 const CompetencyAssignment = require('../sequelize-models/competencyAssignment');
@@ -25,6 +26,14 @@ Artifact.belongsTo(User, { foreignKey: 'userId', as: 'uploader' });
 // Many-to-many association between Artifact and Tag
 Artifact.belongsToMany(Tag, { through: 'ArtifactTag', foreignKey: 'artifactId', as: 'tags' });
 Tag.belongsToMany(Artifact, { through: 'ArtifactTag', foreignKey: 'tagId', as: 'artifacts' });
+
+// User / ArtifactCollection
+User.hasMany(ArtifactCollection, { foreignKey: 'userId', as: 'artifactCollections' });
+ArtifactCollection.belongsTo(User, { foreignKey: 'userId', as: 'creator' });
+
+// Many-to-many association between ArtifactCollection and Artifact
+ArtifactCollection.belongsToMany(Artifact, { through: 'CollectionArtifact', foreignKey: 'collectionId', as: 'artifacts' });
+Artifact.belongsToMany(ArtifactCollection, { through: 'CollectionArtifact', foreignKey: 'artifactId', as: 'artifactCollections' });
 
 // Competency assessments
 User.hasMany(CompetencyAssessment, { foreignKey: 'researcherId', as: 'authoredAssessments' });
@@ -121,6 +130,7 @@ const models = {
   User,
   Artifact,
   Tag,
+  ArtifactCollection, // New
   Role,
   CompetencyAssessment,
   CompetencyAssignment,

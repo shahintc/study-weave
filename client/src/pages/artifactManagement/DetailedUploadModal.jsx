@@ -38,7 +38,7 @@ const ALLOWED_FILE_TYPES = ['text/plain', 'image/png', 'application/pdf']; // Mi
 
 // const API_BASE_URL = 'http://localhost:5200'; // Backend URL - No longer needed with Axios instance
 
-export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess, currentUserId }) {
+export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess, currentUserId, collectionId }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [error, setError] = useState('');
@@ -169,6 +169,20 @@ export function DetailedUploadModal({ isOpen, setIsOpen, onUploadSuccess, curren
       });
 
       console.log('Artifact uploaded successfully:', response.data);
+
+      const newArtifactId = response.data.artifact.id;
+
+      // If a collectionId is provided, associate the new artifact with the collection
+      if (collectionId && newArtifactId) {
+        try {
+          await api.post(`/api/artifact-collections/${collectionId}/artifacts/${newArtifactId}`, { userId: currentUserId });
+          console.log(`Artifact ${newArtifactId} successfully added to collection ${collectionId}`);
+        } catch (collectionError) {
+          console.error(`Failed to add artifact ${newArtifactId} to collection ${collectionId}:`, collectionError);
+          // Optionally, handle this error more gracefully, e.g., by informing the user that the artifact was uploaded but not added to the collection.
+          setError(`Artifact uploaded, but failed to add to collection: ${collectionError.response?.data?.message || collectionError.message}`);
+        }
+      }
 
       // Clear state and call success callback
       setSelectedFile(null);
