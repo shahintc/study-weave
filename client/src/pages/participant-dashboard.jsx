@@ -75,6 +75,18 @@ export default function ParticipantDashboard() {
       });
       setStudies(data.studies || []);
       setNotifications(data.notifications || []);
+      try {
+        window.localStorage.setItem(
+          "participantNotificationsCount",
+          String((data.notifications || []).length),
+        );
+        window.localStorage.setItem(
+          "participantNotificationsList",
+          JSON.stringify(data.notifications || []),
+        );
+      } catch (e) {
+        // ignore storage failures
+      }
     } catch (err) {
       if (err.response?.status === 401) {
         navigate("/login");
@@ -197,38 +209,6 @@ export default function ParticipantDashboard() {
       )}
 
       <section className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Notifications</CardTitle>
-            <CardDescription>Recent activity</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {loading ? (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading notifications…
-              </div>
-            ) : notifications.length ? (
-              notifications.map((item) => {
-                const Icon = item.type === "info" ? CheckCircle2 : AlertTriangle;
-                const colorClass = item.type === "info" ? "text-green-600" : "text-yellow-600";
-                return (
-                  <div key={item.id} className="flex items-start gap-3">
-                    <Icon className={`mt-0.5 h-4 w-4 ${colorClass}`} />
-                    <div>
-                      <p className="text-sm">{item.message}</p>
-                      {item.studyId && (
-                        <p className="text-xs text-muted-foreground">Study #{item.studyId}</p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <p className="text-sm text-muted-foreground">You're all caught up. We'll notify you when new tasks are ready.</p>
-            )}
-          </CardContent>
-        </Card>
-
         <Card>
           <CardHeader>
             <CardTitle>Quick Actions</CardTitle>

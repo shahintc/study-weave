@@ -369,6 +369,7 @@ function formatEnrollment(entry) {
   const artifactProgress = summarizeArtifactProgress(plain.artifactAssessments || []);
   const nextAssignment = buildNextAssignmentPayload(plain, lookup.map, defaultMode);
   const isPastDeadline = computeDeadlinePassed(study.timelineEnd);
+  const hasStartedFlag = hasStarted(study.timelineStart);
   const cta = buildCallToAction({
     participationStatus: plain.participationStatus,
     competency,
@@ -376,6 +377,8 @@ function formatEnrollment(entry) {
     studyParticipantId: plain.id,
     studyId: study.id,
     isPastDeadline,
+    hasStarted: hasStartedFlag,
+    timelineStart: study.timelineStart,
   });
 
   return {
@@ -391,6 +394,9 @@ function formatEnrollment(entry) {
     nextAssignment,
     cta,
     isPastDeadline,
+    hasStarted: hasStartedFlag,
+    timelineStart: study.timelineStart ? new Date(study.timelineStart).toISOString() : null,
+    timelineEnd: study.timelineEnd ? new Date(study.timelineEnd).toISOString() : null,
     lastUpdatedAt: plain.updatedAt ? new Date(plain.updatedAt).toISOString() : null,
     studyWindow: buildStudyWindow(study.timelineStart, study.timelineEnd),
     defaultArtifactMode: defaultMode,
@@ -488,6 +494,8 @@ function buildCallToAction({
   studyParticipantId,
   studyId,
   isPastDeadline,
+  hasStarted = true,
+  timelineStart = null,
 }) {
   if (isPastDeadline) {
     return {
@@ -495,6 +503,18 @@ function buildCallToAction({
       buttonLabel: 'Deadline passed',
       disabled: true,
       reason: 'The study deadline has passed. You can no longer start this task.',
+      studyParticipantId: studyParticipantId ? String(studyParticipantId) : null,
+      studyId: studyId ? String(studyId) : null,
+    };
+  }
+
+  if (!hasStarted) {
+    const waitDays = daysUntil(timelineStart);
+    return {
+      type: 'artifact',
+      buttonLabel: 'Starts soon',
+      disabled: true,
+      reason: `Starts on ${formatDateShort(timelineStart)}. Please wait ${waitDays} day(s).`,
       studyParticipantId: studyParticipantId ? String(studyParticipantId) : null,
       studyId: studyId ? String(studyId) : null,
     };
@@ -574,31 +594,75 @@ function safeJsonParse(value) {
 function buildNotifications(studies = []) {
   const items = [];
   studies.forEach((study) => {
-    if (study.cta?.type === 'competency') {
+    const startReached = hasStarted(study.timelineStart);
+    items.push({
+      id: `${study.studyParticipantId}-assigned`,
+      type: 'assignment',
+      message: `You were assigned to ${study.title}.`,
+      studyId: study.studyId,
+    });
+
+    if (isToday(study.timelineStart)) {
       items.push({
-        id: `${study.studyParticipantId}-competency`,
-        type: 'competency',
-        message: `Complete the competency assessment for ${study.title}.`,
-        studyId: study.studyId,
-      });
-    } else if (study.cta?.type === 'artifact') {
-      const label = study.nextAssignment.modeLabel || 'your next artifact task';
-      items.push({
-        id: `${study.studyParticipantId}-artifact`,
-        type: 'artifact',
-        message: `Start ${label} for ${study.title}.`,
-        studyId: study.studyId,
-      });
-    } else if (study.participationStatus === 'completed') {
-      items.push({
-        id: `${study.studyParticipantId}-completed`,
+        id: `${study.studyParticipantId}-start`,
         type: 'info',
-        message: `You have completed ${study.title}. Thank you!`,
+        message: `${study.title} starts today. You can begin your tasks.`,
         studyId: study.studyId,
       });
     }
+
+    if (isToday(study.timelineEnd)) {
+      items.push({
+        id: `${study.studyParticipantId}-end`,
+        type: 'warning',
+        message: `${study.title} ends today. Last chance to submit your work.`,
+        studyId: study.studyId,
+      });
+    }
+
+    // Suppress other notification types; only keep assignment/start/end per request.
   });
   return items;
+}
+
+function isToday(dateValue) {
+  if (!dateValue) return false;
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return false;
+  const today = new Date();
+  return (
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  );
+}
+
+function hasStarted(dateValue) {
+  if (!dateValue) return true;
+  const start = new Date(dateValue);
+  if (Number.isNaN(start.getTime())) return true;
+  const today = new Date();
+  start.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  return today >= start;
+}
+
+function daysUntil(dateValue) {
+  if (!dateValue) return 0;
+  const start = new Date(dateValue);
+  if (Number.isNaN(start.getTime())) return 0;
+  const today = new Date();
+  start.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  const diff = start.getTime() - today.getTime();
+  return diff > 0 ? Math.ceil(diff / (1000 * 60 * 60 * 24)) : 0;
+}
+
+function formatDateShort(value) {
+  if (!value) return 'unknown';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'unknown';
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function buildStudyWindow(start, end) {
