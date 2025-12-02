@@ -1,7 +1,14 @@
 import { GoogleGenAI } from '@google/genai';
 import { getInstruction } from '../../config/llmSystemInstructions.mjs';
 
-const ai = new GoogleGenAI({});
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+if (!GEMINI_API_KEY) {
+    console.warn('GEMINI_API_KEY is not configured. LLM features will fail until it is set.');
+}
+
+// 1. You initialized the client as "ai" here
+const ai = new GoogleGenAI(GEMINI_API_KEY ? { apiKey: GEMINI_API_KEY } : {});
 const model = process.env.GEMINI_LLM_NAME;
 
 export async function generateContent(prompt, systemInstruction='', uploadedFiles=[]) {
@@ -28,6 +35,9 @@ export async function generateContentRouteHandler(req, res){
 
     if (!prompt) {
         return res.status(400).json({ error: 'No prompt supplied' });
+    }
+    if (!GEMINI_API_KEY) {
+        return res.status(500).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
     }
 
     const llmConfig = getInstruction(key);
@@ -87,12 +97,23 @@ export async function generateContentRouteHandler(req, res){
      } finally {
         // Delete uploaded files after the request is processed, regardless of success or failure
         for (const uploadedFile of uploadedFiles) {
+            const fileName =
+                (uploadedFile && (uploadedFile.name || uploadedFile.uri || uploadedFile.file?.name)) ||
+                null;
+            if (!fileName) {
+                console.warn('Uploaded file response missing name/uri; skipping delete.');
+                continue;
+            }
             try {
-                console.log(`Attempting to delete uploaded file: ${uploadedFile.name}`);
-                await ai.files.delete(uploadedFile.name);
-                console.log(`Successfully deleted file: ${uploadedFile.name}`);
+                console.log(`Attempting to delete uploaded file: ${fileName}`);
+                
+                // --- FIX APPLIED HERE ---
+                // Changed 'client.files.delete' to 'ai.files.delete' to match initialization at top of file
+                await ai.files.delete({ name: fileName }); 
+                
+                console.log(`Successfully deleted file: ${fileName}`);
             } catch (deleteError) {
-                console.error(`Error deleting uploaded file ${uploadedFile.name}:`, deleteError);
+                console.error(`Error deleting uploaded file ${fileName}:`, deleteError);
             }
         }
      }

@@ -611,12 +611,20 @@ export default function ArtifactsComparison() {
     }
     const title =
       pane.label || pane.artifactName || pane.fileOriginalName || fallbackLabel || "Artifact";
+    const metadata = {
+      name: title,
+      artifactId: pane.artifactId || null,
+      artifactType: pane.artifactType || null,
+      studyArtifactId: pane.studyArtifactId || null,
+      mimeType: pane.mimeType || null,
+      fileOriginalName: pane.fileOriginalName || null,
+    };
     if (pane.encoding === "text" || !pane.encoding) {
-      return { type: "text", text: numberLines(pane.content), name: title };
+      return { ...metadata, type: "text", text: numberLines(pane.content) };
     }
     if (pane.encoding === "data_url") {
       const isPdf = /pdf/i.test(pane.mimeType || "");
-      return { type: isPdf ? "pdf" : "image", url: pane.content, name: title };
+      return { ...metadata, type: isPdf ? "pdf" : "image", url: pane.content };
     }
     return null;
   }, []);
@@ -1541,17 +1549,53 @@ export default function ArtifactsComparison() {
     const setter = side === "left" ? setLeftSummary : setRightSummary;
     const statusSetter =
       side === "left" ? setLeftSummaryStatus : setRightSummaryStatus;
-    const filename =
-      (side === "left" ? leftData.name : rightData.name) || "Artifact";
+    const paneData = side === "left" ? leftData : rightData;
+
+    if (!paneData?.artifactId) {
+      setter("AI summary is only available for researcher-provided artifacts.");
+      return;
+    }
+
     statusSetter("loading");
-    setTimeout(() => {
+    try {
+      const artifactLabel = paneData.name || "this artifact";
+      const artifactKind =
+        paneData.artifactType ||
+        (paneData.type === "text"
+          ? "text"
+          : paneData.type === "pdf"
+          ? "PDF"
+          : paneData.type === "image"
+          ? "image"
+          : "artifact");
+      const prompt = `Provide a concise summary (max 2 sentences) describing the ${artifactKind} titled "${artifactLabel}" and highlight what reviewers should pay attention to.`;
+      const response = await api.post("/api/llm", {
+        key: "ARTIFACT_SUMMARY",
+        id: paneData.artifactId,
+        prompt,
+      });
+
+      const raw = response?.data?.response;
+      const summaryText = Array.isArray(raw)
+        ? raw.join(" ").trim()
+        : typeof raw === "string"
+        ? raw.trim()
+        : "";
       setter(
-        `AI Summary: This artifact is of type ${
-          side === "left" ? leftData.type : rightData.type
-        } and contains ${filename}.`
+        summaryText ||
+          "AI summary unavailable right now. Please try again in a moment."
       );
+    } catch (error) {
+      console.error("Failed to generate AI summary", error);
+      const message =
+        error.response?.data?.error ||
+        error.response?.data?.message ||
+        error.message ||
+        "Unknown error";
+      setter(`AI summary failed: ${message}`);
+    } finally {
       statusSetter("idle");
-    }, 1500);
+    }
   };
 
   // ===== SUB-COMPONENTS =====
