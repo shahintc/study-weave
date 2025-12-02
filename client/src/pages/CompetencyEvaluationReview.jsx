@@ -19,15 +19,14 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { AlertCircle, Check, X, Eye } from "lucide-react";
+import { AlertCircle, Check, X, Eye, Download } from "lucide-react";
 
 export default function CompetencyEvaluationReview() {
   const [assessments, setAssessments] = useState([]);
   const [assignmentStatuses, setAssignmentStatuses] = useState([]);
   const [selectedAssignment, setSelectedAssignment] = useState(null);
-  const [reviewerNotes, setReviewerNotes] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [loadingStates, setLoadingStates] = useState({});
   const [loading, setLoading] = useState(true);
@@ -35,6 +34,10 @@ export default function CompetencyEvaluationReview() {
 
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const researcherId = user.id;
+  // New state for all assessments
+  const [allAssessments, setAllAssessments] = useState([]);
+  // State for reviewer notes is now managed inside the dialog
+  const [dialogReviewerNotes, setDialogReviewerNotes] = useState("");
 
   const loadAssignments = useCallback(async () => {
     if (!researcherId) {
@@ -42,11 +45,14 @@ export default function CompetencyEvaluationReview() {
     }
     try {
       setLoading(true);
-      const [submittedRes, statusRes] = await Promise.all([
+      const [submittedRes, statusRes, allAssessmentsRes] = await Promise.all([
         axios.get("/api/competency/assignments/submitted", {
           params: { researcherId },
         }),
         axios.get("/api/competency/assignments/researcher", {
+          params: { researcherId },
+        }),
+        axios.get("/api/competency/assessments/researcher", {
           params: { researcherId },
         }),
       ]);
@@ -58,12 +64,16 @@ export default function CompetencyEvaluationReview() {
       const statusAssignments = statusRes.data.assignments || [];
       setAssignmentStatuses(statusAssignments);
 
+      const allAssessmentsData = allAssessmentsRes.data.assessments || [];
+      setAllAssessments(allAssessmentsData);
+
       setError(null);
     } catch (err) {
       console.error("Error loading competency assignments:", err);
       setError("Failed to load competency assignments. Please try again.");
       setAssessments([]);
       setAssignmentStatuses([]);
+      setAllAssessments([]);
     } finally {
       setLoading(false);
     }
@@ -97,7 +107,7 @@ export default function CompetencyEvaluationReview() {
 
   const handleViewEvaluation = (assignment) => {
     setSelectedAssignment(assignment);
-    setReviewerNotes("");
+    setDialogReviewerNotes(assignment.reviewerNotes || "");
     setIsDialogOpen(true);
   };
 
@@ -115,12 +125,11 @@ export default function CompetencyEvaluationReview() {
 
       await axios.patch(`/api/competency/assignments/${assignmentId}/decision`, {
         decision,
-        reviewerNotes,
+        reviewerNotes: dialogReviewerNotes,
       });
 
       await loadAssignments();
       setIsDialogOpen(false);
-      setReviewerNotes("");
       alert(
         decision === "approved"
           ? "Participant approved. Decision stored."
@@ -137,6 +146,16 @@ export default function CompetencyEvaluationReview() {
         [assignmentId]: undefined,
       }));
     }
+  };
+
+  const handleExport = (assessmentId, format) => {
+    // Construct an absolute URL to the backend server.
+    // This avoids the browser trying to fetch from the frontend dev server's address.
+    const backendPort = import.meta.env.VITE_API_PORT || 5200;
+    const backendUrl = `${window.location.protocol}//${window.location.hostname}:${backendPort}`;
+    const reportUrl = `${backendUrl}/api/competency/assessments/${assessmentId}/report?format=${format}`;
+    // Open in a new tab to trigger download without leaving the page
+    window.open(reportUrl, "_blank");
   };
 
   const handleApproveEvaluation = () => recordDecision("approved");
@@ -230,6 +249,53 @@ export default function CompetencyEvaluationReview() {
           Track every competency quiz you have shared and review submissions as they arrive.
         </p>
       </div>
+
+      {/* NEW SECTION: All Competency Assessments */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Competency Assessments</CardTitle>
+          <CardDescription>
+            Manage and generate performance reports for all competency quizzes you have created.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {allAssessments.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              You have not created any competency assessments yet.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {allAssessments.map((assessment) => (
+                <div
+                  key={assessment.id}
+                  className="flex flex-col gap-3 rounded-lg border p-3 md:flex-row md:items-center md:justify-between"
+                >
+                  <div>
+                    <p className="font-medium">{assessment.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Created on {formatDateTime(assessment.createdAt)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleExport(assessment.id, "csv")}
+                    >
+                      <Download className="mr-2 h-4 w-4" /> Export CSV
+                    </Button>
+                    <Button size="sm" onClick={() => handleExport(assessment.id, "pdf")}>
+                      <Download className="mr-2 h-4 w-4" /> Export PDF
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Separator />
 
       <Card>
         <CardHeader>
@@ -424,14 +490,14 @@ export default function CompetencyEvaluationReview() {
               <div className="space-y-2">
                 <label htmlFor="notes" className="text-sm font-semibold">
                   Reviewer Notes (Optional)
-                </label>
-                <Textarea
+                </label> 
+                <Input
                   id="notes"
                   placeholder="Add notes about this participant's evaluation, reasons for acceptance/rejection, or potential study fit..."
-                  value={reviewerNotes}
-                  onChange={(e) => setReviewerNotes(e.target.value)}
-                  rows={4}
-                />
+                  value={dialogReviewerNotes}
+                  onChange={(e) => setDialogReviewerNotes(e.target.value)}
+                  className="text-sm"
+                /> 
               </div>
             </div>
           )}
