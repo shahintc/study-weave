@@ -507,6 +507,20 @@ export default function ArtifactsComparison() {
     }
   }, [studyContext.studyParticipantId]);
 
+  useEffect(() => {
+    // Mark this study as visited so the dashboard can show "In progress"
+    if (typeof window === "undefined") return;
+    if (!studyContext.studyId) return;
+    try {
+      window.localStorage.setItem(
+        `studyVisit:${studyContext.studyId}`,
+        new Date().toISOString()
+      );
+    } catch (err) {
+      console.warn("Unable to persist study visit flag", err);
+    }
+  }, [studyContext.studyId]);
+
   // ===== GLOBAL MODES =====
   // stage1: participant labels a single bug report
   // stage2: reviewer compares two labels (participant vs participant/AI)
@@ -1082,65 +1096,6 @@ export default function ArtifactsComparison() {
     studyContext.studyParticipantId,
     resolvedStudyParticipantId,
   ]);
-
-  // ===== RESET =====
-  const handleReset = () => {
-    if (!confirm("Are you sure you want to reset everything?")) return;
-    setLeftData({ type: "text", text: "" });
-    setRightData({ type: "text", text: "" });
-    setLeftAnn([]);
-    setRightAnn([]);
-    setLeftSummary("");
-    setRightSummary("");
-    setLeftZoom(1);
-    setRightZoom(1);
-    setLeftCategory("");
-    setRightCategory("");
-    setMatchCorrectness("");
-    setFinalCategory("");
-    setFinalOtherCategory("");
-    setSolidViolation("");
-    setSolidComplexity("");
-    setSolidFixedCode("");
-    setPatchAreClones("");
-    setPatchCloneType("");
-    setPatchCloneComment("");
-    setSnapshotOutcome("");
-    setSnapshotChangeType("");
-    setSnapshotChangeTypeOther("");
-    setSnapshotAssets({ reference: null, failure: null });
-    setSnapshotDiffData(null);
-    setAssessmentComment("");
-    setBugCategoryOptions(BUG_CATEGORIES);
-    setSolidRecords([]);
-    setSolidRecordIndex(0);
-    setSolidDatasetName("");
-    setShowSolidGroundTruth(false);
-    setMetadataEntries([]);
-    setSelectedMetadataId("");
-    setMetadataLoadingId("");
-    setMetadataPane("left");
-    setPatchPairLabel("");
-    setAssessmentError("");
-    setAssessmentSuccess("");
-    setActiveAssessmentId(null);
-
-    [
-      leftCanvasRef,
-      rightCanvasRef,
-      leftBigCanvasRef,
-      rightBigCanvasRef,
-    ].forEach((ref) => {
-      if (ref.current)
-        ref.current
-          .getContext("2d")
-          ?.clearRect(0, 0, ref.current.width, ref.current.height);
-    });
-
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(STORAGE_KEY);
-    }
-  };
 
   // ===== SYNC SCROLL =====
   useEffect(() => {
@@ -2033,6 +1988,19 @@ export default function ArtifactsComparison() {
     assignmentMeta?.label?.trim() ||
     (assignmentMode ? MODE_LABELS[assignmentMode] || assignmentMode : "");
   const allowSyncAndSwap = SYNC_SWAP_MODES.has(mode);
+  const studyProgressStatus = useMemo(() => {
+    if (submissionLocked) return "completed";
+    if (hasLocalDraft || activeAssessmentId || assignmentHydratedRef.current) {
+      return "in_progress";
+    }
+    return "not_started";
+  }, [submissionLocked, hasLocalDraft, activeAssessmentId]);
+  const studyProgressLabel =
+    studyProgressStatus === "completed"
+      ? "Completed"
+      : studyProgressStatus === "in_progress"
+      ? "In progress"
+      : "Not started";
 
   const blockingReasons = [];
   if (missingStudyContext) {
@@ -2310,6 +2278,17 @@ export default function ArtifactsComparison() {
               </p>
             )}
           </div>
+          <span
+            className={`text-xs px-2 py-1 rounded-full border ${
+              studyProgressStatus === "completed"
+                ? "border-emerald-200 text-emerald-700 bg-emerald-50"
+                : studyProgressStatus === "in_progress"
+                ? "border-amber-200 text-amber-700 bg-amber-50"
+                : "border-slate-200 text-slate-600 bg-slate-50"
+            }`}
+          >
+            {studyProgressLabel}
+          </span>
           <div className="flex items-center gap-3">
             {allowSyncAndSwap && (
               <>
@@ -3227,14 +3206,11 @@ export default function ArtifactsComparison() {
               </div>
             )}
 
-            <div className="pt-4 flex justify-between">
-              <Button
-                variant="outline"
-                className="text-red-600 border-red-200 hover:bg-red-50"
-                onClick={handleReset}
-              >
-                Reset Task
-              </Button>
+            <div className="pt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800">
+                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" aria-hidden="true" />
+                Auto-save is on
+              </span>
               <Button
                 size="lg"
                 className="bg-black text-white hover:bg-gray-800"

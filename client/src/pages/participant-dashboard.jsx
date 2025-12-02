@@ -16,9 +16,30 @@ const ARTIFACT_MODE_LABELS = {
 };
 
 const PARTICIPATION_STATUS_META = {
-  not_started: { label: "Not started", variant: "secondary" },
-  in_progress: { label: "In progress", variant: "default" },
-  completed: { label: "Completed", variant: "outline" },
+  not_started: {
+    label: "Not started",
+    className: "border border-slate-200 bg-slate-50 text-slate-700",
+  },
+  in_progress: {
+    label: "In progress",
+    className: "border border-amber-200 bg-amber-50 text-amber-800",
+  },
+  completed: {
+    label: "Completed",
+    className: "border border-emerald-200 bg-emerald-50 text-emerald-800",
+  },
+};
+
+const deriveCardStatus = (study, visitedSet) => {
+  const submitted = Number(study?.artifactProgress?.totals?.submitted || 0) > 0;
+  const progress = clampPercent(study?.progressPercent || 0);
+  if (submitted || progress >= 100) return "completed";
+  if (progress > 0) return "in_progress";
+  // If the participant has opened this study at least once, mark in progress
+  if (visitedSet?.has(String(study.studyId)) || visitedSet?.has(String(study.id))) {
+    return "in_progress";
+  }
+  return "not_started";
 };
 
 const clampPercent = (value) => {
@@ -32,7 +53,7 @@ const clampPercent = (value) => {
 const getParticipationStatusMeta = (status) =>
   PARTICIPATION_STATUS_META[status] || {
     label: status ? status.replace(/_/g, " ") : "Unknown",
-    variant: "outline",
+    className: "border border-slate-200 bg-slate-50 text-slate-700",
   };
 
 export default function ParticipantDashboard() {
@@ -42,6 +63,18 @@ export default function ParticipantDashboard() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [visitedStudies, setVisitedStudies] = useState(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      const keys = Object.keys(window.localStorage);
+      const visited = keys
+        .filter((key) => key.startsWith("studyVisit:"))
+        .map((key) => key.split(":")[1]);
+      return new Set(visited);
+    } catch {
+      return new Set();
+    }
+  });
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -253,7 +286,8 @@ export default function ParticipantDashboard() {
           </Card>
         ) : (
           studies.map((study) => {
-            const statusMeta = getParticipationStatusMeta(study.participationStatus);
+            const cardStatus = deriveCardStatus(study, visitedStudies);
+            const statusMeta = getParticipationStatusMeta(cardStatus);
             const progressPercent = clampPercent(study.progressPercent);
             const competency = study.competency || {};
             const nextModeLabel = study.nextAssignment?.modeLabel || null;
@@ -278,7 +312,9 @@ export default function ParticipantDashboard() {
                         {study.researcher?.name ? ` · ${study.researcher.name}` : ""}
                       </CardDescription>
                     </div>
-                    <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
+                    <span className={`text-xs px-2 py-1 rounded-full ${statusMeta.className}`}>
+                      {statusMeta.label}
+                    </span>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
