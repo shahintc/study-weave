@@ -36,6 +36,8 @@ import { toPng } from "html-to-image";
 import jsPDF from "jspdf";
 import BarChart from "@/components/charts/BarChart";
 import LineChart from "@/components/charts/LineChart";
+import DashboardControls from "@/components/dashboard/DashboardControls";
+import { useDashboardPreferences } from "@/hooks/useDashboardPreferences";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -88,6 +90,32 @@ const formatDateLabel = (value) => {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 };
 
+const normalizeStudyId = (study) => String(study?.id || study?.studyId || "");
+
+const parseDateSafe = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date;
+};
+
+const matchesDateRange = (study, from, to) => {
+  if (!from && !to) return true;
+  const candidate =
+    parseDateSafe(study?.updatedAt) ||
+    parseDateSafe(study?.createdAt) ||
+    parseDateSafe(study?.lastActivityAt) ||
+    parseDateSafe(study?.submittedAt);
+  if (!candidate) return true;
+  const fromDate = from ? parseDateSafe(from) : null;
+  const toDate = to ? parseDateSafe(to) : null;
+  if (fromDate && candidate < fromDate) return false;
+  if (toDate && candidate > toDate) return false;
+  return true;
+};
+
 export default function ResearcherDashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -108,9 +136,30 @@ export default function ResearcherDashboard() {
   const [assignmentDrafts, setAssignmentDrafts] = useState({});
   // --- Start: Rewritten Copy Logic ---
   const [copyStatus, setCopyStatus] = useState({ studyId: null, state: 'idle' }); // 'idle', 'copied', 'error'
-  const [copiedLink, setCopiedLink] = useState(null);
   const [assignmentSaving, setAssignmentSaving] = useState({});
   const analyticsRef = useRef(null);
+  const defaultPreferences = useMemo(
+    () => ({
+      filters: { study: "all", criteria: "", from: "", to: "" },
+      layout: ["cta", "highlights", "activeStudies"],
+    }),
+    [],
+  );
+  const {
+    filters: dashboardFilters,
+    layout,
+    updateFilters,
+    updateLayout,
+    resetPreferences,
+    savePreferences,
+    savingPreferences,
+    lastSavedAt,
+    saveError,
+  } = useDashboardPreferences(
+    user ? `researcher:${user.id}` : "researcher:guest",
+    defaultPreferences,
+    authToken,
+  );
 
   const loadStudies = useCallback(async () => {
     if (!user?.id) {
@@ -161,8 +210,69 @@ export default function ResearcherDashboard() {
     return studies.find((study) => String(study.id) === String(monitoringStudyId)) || null;
   }, [studies, monitoringStudyId]);
 
+  const hasActiveDashboardFilters = useMemo(
+    () =>
+      (dashboardFilters.study && dashboardFilters.study !== "all") ||
+      Boolean(dashboardFilters.criteria?.trim()) ||
+      Boolean(dashboardFilters.from) ||
+      Boolean(dashboardFilters.to),
+    [dashboardFilters],
+  );
+
+  const matchesDashboardFilters = useCallback(
+    (study) => {
+      if (!study) return false;
+      const normalizedId = normalizeStudyId(study);
+      if (
+        dashboardFilters.study &&
+        dashboardFilters.study !== "all" &&
+        normalizedId !== String(dashboardFilters.study)
+      ) {
+        return false;
+      }
+      if (dashboardFilters.criteria && dashboardFilters.criteria.trim()) {
+        const haystack = [
+          study.title,
+          study.description,
+          study.criteriaSummary,
+          study.nextMilestone,
+          JSON.stringify(study.criteria || study.criteriaWeights || {}),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(dashboardFilters.criteria.trim().toLowerCase())) {
+          return false;
+        }
+      }
+      if (!matchesDateRange(study, dashboardFilters.from, dashboardFilters.to)) {
+        return false;
+      }
+      return true;
+    },
+    [dashboardFilters],
+  );
+
+  const filteredStudies = useMemo(
+    () => studies.filter((study) => matchesDashboardFilters(study)),
+    [studies, matchesDashboardFilters],
+  );
+
+  const studyFilterOptions = useMemo(
+    () =>
+      studies.map((study) => ({
+        value: normalizeStudyId(study),
+        label: study.title || `Study ${normalizeStudyId(study)}`,
+      })),
+    [studies],
+  );
+
+  const noStudiesAfterFilter =
+    !isStudiesLoading && filteredStudies.length === 0 && studies.length > 0;
+  const noStudiesAtAll = !isStudiesLoading && studies.length === 0;
+
   const dashboardHighlights = useMemo(() => {
-    if (!studies.length) {
+    if (!filteredStudies.length) {
       return [
         { label: "Active studies", value: 0, helper: "Syncing data...", icon: Activity },
         { label: "Participants engaged", value: 0, helper: "Invite participants to begin", icon: Users },
@@ -170,20 +280,21 @@ export default function ResearcherDashboard() {
       ];
     }
 
-    const totalParticipants = studies.reduce((sum, study) => sum + (study.participants || 0), 0);
-    const participantTargetTotal = studies.reduce(
+    const totalParticipants = filteredStudies.reduce((sum, study) => sum + (study.participants || 0), 0);
+    const participantTargetTotal = filteredStudies.reduce(
       (sum, study) => sum + (study.participantTarget || 0),
       0,
     );
     const avgRating =
-      studies.length > 0
+      filteredStudies.length > 0
         ? (
-            studies.reduce((sum, study) => sum + Number(study.avgRating || 0), 0) / studies.length
+            filteredStudies.reduce((sum, study) => sum + Number(study.avgRating || 0), 0) /
+            filteredStudies.length
           ).toFixed(1)
         : "0.0";
 
     return [
-      { label: "Active studies", value: studies.length, helper: "+ new insights", icon: Activity },
+      { label: "Active studies", value: filteredStudies.length, helper: "+ new insights", icon: Activity },
       {
         label: "Participants engaged",
         value: totalParticipants,
@@ -192,7 +303,7 @@ export default function ResearcherDashboard() {
       },
       { label: "Avg artifact rating", value: avgRating, helper: "Latest submissions", icon: LineChartIcon },
     ];
-  }, [studies]);
+  }, [filteredStudies]);
 
   const participantOptions = useMemo(() => {
     if (analytics?.participantFilters?.length) {
@@ -381,7 +492,7 @@ export default function ResearcherDashboard() {
     setMonitorDialogOpen(true);
   };
 
-  const handleFilterChange = (key, value) => {
+  const handleMonitorFilterChange = (key, value) => {
     setMonitorFilters((prev) => ({ ...prev, [key]: value }));
   };
 
@@ -412,174 +523,215 @@ export default function ResearcherDashboard() {
     }
   }, [selectedStudy]);
 
-  return (
-    <div className="space-y-6">
-      {/* Researcher Dashboard CTA */}
-      <section>
-        <Card>
-          <CardHeader>
-            <CardTitle>Researcher Dashboard</CardTitle>
-            <CardDescription>
-              Welcome, {user?.name || "Researcher"} • {user?.email || ""}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Start a new participant study</p>
-            
-            {/* --- THIS IS THE ONLY UPDATED PART --- */}
-            {/* We wrap the buttons in a div to keep them grouped */}
-            <div className="flex gap-2">
-              
-              {/* This button now links to your new page */}
-              <Button variant="outline" onClick={() => navigate("participants-list")}>
-                Show Participants
-              </Button>
+  const clearDashboardFilters = useCallback(() => {
+    updateFilters(defaultPreferences.filters);
+  }, [defaultPreferences.filters, updateFilters]);
 
-              {/* This button now links to your wizard page (using relative path) */}
-              <Button onClick={() => navigate("study-creation-wizard")}>
-                <Plus className="mr-2 h-4 w-4" />
-                Create New Study
-              </Button>
-            </div>
-            {/* --- END OF UPDATED PART --- */}
-
-          </CardContent>
-        </Card>
-      </section>
-
-      {/* Highlights */}
-      <section className="grid gap-4 md:grid-cols-3">
-        {dashboardHighlights.map((tile) => {
-          const Icon = tile.icon;
-          return (
-            <Card key={tile.label}>
-              <CardContent className="flex items-center justify-between gap-4 p-6">
-                <div>
-                  <p className="text-sm text-muted-foreground">{tile.label}</p>
-                  <p className="text-2xl font-semibold">{tile.value}</p>
-                  <p className="text-xs text-muted-foreground">{tile.helper}</p>
-                </div>
-                <div className="rounded-full bg-primary/10 p-3 text-primary">
-                  <Icon className="h-5 w-5" />
+  const renderWidget = (widgetId) => {
+    switch (widgetId) {
+      case "cta":
+        return (
+          <section>
+            <Card>
+              <CardHeader>
+                <CardTitle>Researcher Dashboard</CardTitle>
+                <CardDescription>
+                  Welcome, {user?.name || "Researcher"} • {user?.email || ""}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Start a new participant study</p>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => navigate("participants-list")}>
+                    Show Participants
+                  </Button>
+                  <Button onClick={() => navigate("study-creation-wizard")}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Create New Study
+                  </Button>
                 </div>
               </CardContent>
             </Card>
-          );
-        })}
-      </section>
-
-      {/* Active Studies */}
-      <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-lg font-semibold">My Active Studies</h2>
-            <p className="text-sm text-muted-foreground">Monitor participants, artifact quality, and readiness at a glance.</p>
-          </div>
-        </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Active pipelines</CardTitle>
-            <CardDescription>Progress, quality, and handoffs per study.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {isStudiesLoading ? (
-              <p className="text-sm text-muted-foreground">Loading studies...</p>
-            ) : studiesError ? (
-              <p className="text-sm text-destructive">{studiesError}</p>
-            ) : !studies.length ? (
-              <p className="text-sm text-muted-foreground">No studies yet. Create one to get started.</p>
-            ) : (
-              studies.map((study) => (
-                <div
-                  key={study.id}
-                  className="grid gap-4 border-b pb-6 last:border-none last:pb-0 lg:grid-cols-[2fr,1.2fr,1fr,auto]"
-                >
-                  <div className="space-y-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-semibold">{study.title}</h3>
-                      <Badge
-                        variant="outline"
-                        className={
-                          study.health === "attention"
-                            ? "border-amber-200 text-amber-600"
-                            : "border-emerald-200 text-emerald-600"
-                        }
-                      >
-                        {study.status}
-                      </Badge>
-                      {study.isPublic && (
-                        <Badge className={badgeVariants({ variant: "default" }) + " bg-blue-600 text-white"}>
-                          Public
-                        </Badge>
-                      )}
+          </section>
+        );
+      case "highlights":
+        return (
+          <section className="grid gap-4 md:grid-cols-3">
+            {dashboardHighlights.map((tile) => {
+              const Icon = tile.icon;
+              return (
+                <Card key={tile.label}>
+                  <CardContent className="flex items-center justify-between gap-4 p-6">
+                    <div>
+                      <p className="text-sm text-muted-foreground">{tile.label}</p>
+                      <p className="text-2xl font-semibold">{tile.value}</p>
+                      <p className="text-xs text-muted-foreground">{tile.helper}</p>
                     </div>
-                    <p className="text-sm text-muted-foreground">{study.description}</p>
-                    <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <CalendarDays className="h-3.5 w-3.5" />
-                        {study.window}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Users className="h-3.5 w-3.5" />
-                        {study.participants}/{study.participantTarget} participants
-                      </span>
-                      <span>{study.nextMilestone}</span>
+                    <div className="rounded-full bg-primary/10 p-3 text-primary">
+                      <Icon className="h-5 w-5" />
                     </div>
-                  </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </section>
+        );
+      case "activeStudies":
+        return (
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">My Active Studies</h2>
+                <p className="text-sm text-muted-foreground">
+                  Monitor participants, artifact quality, and readiness at a glance.
+                </p>
+              </div>
+              {hasActiveDashboardFilters ? (
+                <Badge variant="outline" className="text-xs">
+                  Filters on
+                </Badge>
+              ) : null}
+            </div>
 
-                  <div>
-                    <p className="text-sm text-muted-foreground">Progress</p>
-                    <div className="flex items-center gap-2">
-                      <span className="text-2xl font-semibold">{study.progress}%</span>
-                      <Badge
-                        variant="outline"
-                        className={
-                          study.progressDelta >= 0
-                            ? "border-emerald-200 text-emerald-600"
-                            : "border-rose-200 text-rose-600"
-                        }
-                      >
-                        {study.progressDelta > 0 ? `+${study.progressDelta}%` : `${study.progressDelta}%`}
-                      </Badge>
-                    </div>
-                    <Progress value={study.progress} className="mt-2" />
+            <Card>
+              <CardHeader>
+                <CardTitle>Active pipelines</CardTitle>
+                <CardDescription>Progress, quality, and handoffs per study.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {isStudiesLoading ? (
+                  <p className="text-sm text-muted-foreground">Loading studies...</p>
+                ) : studiesError ? (
+                  <p className="text-sm text-destructive">{studiesError}</p>
+                ) : noStudiesAtAll ? (
+                  <p className="text-sm text-muted-foreground">No studies yet. Create one to get started.</p>
+                ) : noStudiesAfterFilter ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                    <span>No studies match these filters.</span>
+                    <Button variant="outline" size="sm" onClick={clearDashboardFilters}>
+                      Reset filters
+                    </Button>
                   </div>
+                ) : (
+                  filteredStudies.map((study) => (
+                    <div
+                      key={normalizeStudyId(study)}
+                      className="grid gap-4 border-b pb-6 last:border-none last:pb-0 lg:grid-cols-[2fr,1.2fr,1fr,auto]"
+                    >
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-semibold">{study.title}</h3>
+                          <Badge
+                            variant="outline"
+                            className={
+                              study.health === "attention"
+                                ? "border-amber-200 text-amber-600"
+                                : "border-emerald-200 text-emerald-600"
+                            }
+                          >
+                            {study.status}
+                          </Badge>
+                          {study.isPublic && (
+                            <Badge className={badgeVariants({ variant: "default" }) + " bg-blue-600 text-white"}>
+                              Public
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-sm text-muted-foreground">{study.description}</p>
+                        <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1">
+                            <CalendarDays className="h-3.5 w-3.5" />
+                            {study.window}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Users className="h-3.5 w-3.5" />
+                            {study.participants}/{study.participantTarget} participants
+                          </span>
+                          <span>{study.nextMilestone}</span>
+                        </div>
+                      </div>
 
-                  <div>
-                    <p className="text-sm text-muted-foreground">Quality signal</p>
-                    <p className="text-2xl font-semibold">{Number(study.avgRating ?? 0).toFixed(1)}</p>
-                    <p className="text-xs text-muted-foreground">Avg participant rating</p>
-                  </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Progress</p>
+                        <div className="flex items-center gap-2">
+                          <span className="text-2xl font-semibold">{study.progress}%</span>
+                          <Badge
+                            variant="outline"
+                            className={
+                              study.progressDelta >= 0
+                                ? "border-emerald-200 text-emerald-600"
+                                : "border-rose-200 text-rose-600"
+                            }
+                          >
+                            {study.progressDelta > 0 ? `+${study.progressDelta}%` : `${study.progressDelta}%`}
+                          </Badge>
+                        </div>
+                        <Progress value={study.progress} className="mt-2" />
+                      </div>
 
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                  {study.isPublic && (() => {
-                      const isCurrent = copyStatus.studyId === study.id;
-                      const isCopied = isCurrent && copyStatus.state === 'copied';
-                      const isError = isCurrent && copyStatus.state === 'error';
-                      return (
-                        <Button variant="outline" size="sm" onClick={() => handleCopyLink(study.id)} disabled={isCopied}>
-                          {isCopied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
-                          {isCopied ? "Copied!" : isError ? "Copy Failed" : "Copy Invite Link"}
+                      <div>
+                        <p className="text-sm text-muted-foreground">Quality signal</p>
+                        <p className="text-2xl font-semibold">{Number(study.avgRating ?? 0).toFixed(1)}</p>
+                        <p className="text-xs text-muted-foreground">Avg participant rating</p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        {study.isPublic && (() => {
+                            const isCurrent = copyStatus.studyId === study.id;
+                            const isCopied = isCurrent && copyStatus.state === 'copied';
+                            const isError = isCurrent && copyStatus.state === 'error';
+                            return (
+                              <Button variant="outline" size="sm" onClick={() => handleCopyLink(study.id)} disabled={isCopied}>
+                                {isCopied ? <Check className="mr-2 h-4 w-4" /> : <Copy className="mr-2 h-4 w-4" />}
+                                {isCopied ? "Copied!" : isError ? "Copy Failed" : "Copy Invite Link"}
+                              </Button>
+                            );
+                          })()}
+                        <Button variant="ghost" size="sm">
+                          <Settings2 className="mr-2 h-4 w-4" />
+                          Edit setup
                         </Button>
-                      );
-                    })()}
-                    <Button variant="ghost" size="sm">
-                      <Settings2 className="mr-2 h-4 w-4" />
-                      Edit setup
-                    </Button>
-                    <Button size="sm" onClick={() => openMonitor(study.id)}>
-                      <LineChartIcon className="mr-2 h-4 w-4" />
-                      Monitor
-                    </Button>
-                  </div>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
+                        <Button size="sm" onClick={() => openMonitor(study.id)}>
+                          <LineChartIcon className="mr-2 h-4 w-4" />
+                          Monitor
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
+          </section>
+        );
+      default:
+        return null;
+    }
+  };
 
-      </section>
+  return (
+    <div className="space-y-6">
+      <DashboardControls
+        filters={dashboardFilters}
+        onFiltersChange={updateFilters}
+        studyOptions={studyFilterOptions}
+        layout={layout}
+        onLayoutChange={updateLayout}
+        widgetLabels={{
+          cta: "Hero actions",
+          highlights: "Highlights",
+          activeStudies: "Active studies",
+        }}
+        onReset={resetPreferences}
+        onSave={savePreferences}
+        saving={savingPreferences}
+        lastSavedAt={lastSavedAt}
+        saveError={saveError}
+        criteriaPlaceholder="Search description, milestones, or criteria"
+      />
+
+      {layout.map((widgetId) => (
+        <React.Fragment key={widgetId}>{renderWidget(widgetId)}</React.Fragment>
+      ))}
 
       <Dialog open={monitorDialogOpen} onOpenChange={setMonitorDialogOpen}>
         <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
@@ -593,7 +745,7 @@ export default function ResearcherDashboard() {
               analytics={analytics}
               filters={monitorFilters}
               participantOptions={participantOptions}
-              onFilterChange={handleFilterChange}
+              onFilterChange={handleMonitorFilterChange}
               isLoading={isAnalyticsLoading}
               error={analyticsError}
               onRefresh={() => fetchAnalytics(monitoringStudyId, monitorFilters)}

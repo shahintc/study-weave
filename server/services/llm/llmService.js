@@ -89,8 +89,6 @@ export async function generateContentRouteHandler(req, res){
 
         let llmResponse = await generateContent(prompt, systemInstruction, uploadedFiles);
 
-         console.log(llmResponse)
-
          if (parser && parser.parse) {
              console.log(`${key}: Calling parser`);
              llmResponse = parser.parse(llmResponse);

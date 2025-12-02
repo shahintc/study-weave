@@ -6,6 +6,8 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
+import DashboardControls from "@/components/dashboard/DashboardControls";
+import { useDashboardPreferences } from "@/hooks/useDashboardPreferences";
 
 const ARTIFACT_MODE_LABELS = {
   stage1: "Stage 1 bug labeling",
@@ -56,9 +58,35 @@ const getParticipationStatusMeta = (status) =>
     className: "border border-slate-200 bg-slate-50 text-slate-700",
   };
 
+const normalizeStudyId = (study) =>
+  String(study?.studyId || study?.id || study?.studyParticipantId || "");
+
+const parseDateSafe = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+};
+
+const matchesDateRange = (study, from, to) => {
+  if (!from && !to) return true;
+  const candidate =
+    parseDateSafe(study?.updatedAt) ||
+    parseDateSafe(study?.createdAt) ||
+    parseDateSafe(study?.assignedAt) ||
+    parseDateSafe(study?.submittedAt);
+  if (!candidate) return true;
+  const fromDate = from ? parseDateSafe(from) : null;
+  const toDate = to ? parseDateSafe(to) : null;
+  if (fromDate && candidate < fromDate) return false;
+  if (toDate && candidate > toDate) return false;
+  return true;
+};
+
 export default function ParticipantDashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
+  const [authToken, setAuthToken] = useState(null);
   const [studies, setStudies] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -75,10 +103,33 @@ export default function ParticipantDashboard() {
       return new Set();
     }
   });
+  const defaultPreferences = useMemo(
+    () => ({
+      filters: { study: "all", criteria: "", from: "", to: "" },
+      layout: ["welcome", "quickActions", "assignments"],
+    }),
+    [],
+  );
+  const {
+    filters,
+    layout,
+    updateFilters,
+    updateLayout,
+    resetPreferences,
+    savePreferences,
+    savingPreferences,
+    lastSavedAt,
+    saveError,
+  } = useDashboardPreferences(
+    user ? `participant:${user.id}` : "participant:guest",
+    defaultPreferences,
+    authToken,
+  );
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
-    if (!raw) {
+    const token = localStorage.getItem("token");
+    if (!raw || !token) {
       navigate("/login");
       return;
     }
@@ -88,6 +139,7 @@ export default function ParticipantDashboard() {
         navigate("/researcher");
         return;
       }
+      setAuthToken(token);
       setUser(parsed);
     } catch {
       navigate("/login");
@@ -95,7 +147,7 @@ export default function ParticipantDashboard() {
   }, [navigate]);
 
   const fetchAssignments = useCallback(async () => {
-    const token = localStorage.getItem("token");
+    const token = authToken || localStorage.getItem("token");
     if (!token) {
       navigate("/login");
       return;
@@ -129,24 +181,80 @@ export default function ParticipantDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [navigate]);
+  }, [authToken, navigate]);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || !authToken) {
       return;
     }
     fetchAssignments();
-  }, [user, fetchAssignments]);
+  }, [user, authToken, fetchAssignments]);
+
+  const hasActiveFilters = useMemo(
+    () =>
+      (filters.study && filters.study !== "all") ||
+      Boolean(filters.criteria?.trim()) ||
+      Boolean(filters.from) ||
+      Boolean(filters.to),
+    [filters],
+  );
+
+  const matchesFilters = useCallback(
+    (study) => {
+      if (!study) return false;
+      const normalizedId = normalizeStudyId(study);
+      if (filters.study && filters.study !== "all" && normalizedId !== String(filters.study)) {
+        return false;
+      }
+      if (filters.criteria && filters.criteria.trim()) {
+        const haystack = [
+          study.title,
+          study.description,
+          study.criteriaSummary,
+          study.nextAssignment?.modeLabel,
+          study.criteriaLabel,
+          JSON.stringify(study.criteria || study.criteriaLabels || study.criteriaWeights || {}),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(filters.criteria.trim().toLowerCase())) {
+          return false;
+        }
+      }
+      if (!matchesDateRange(study, filters.from, filters.to)) {
+        return false;
+      }
+      return true;
+    },
+    [filters],
+  );
+
+  const filteredStudies = useMemo(
+    () => studies.filter((study) => matchesFilters(study)),
+    [studies, matchesFilters],
+  );
+
+  const studyOptions = useMemo(
+    () =>
+      studies.map((study) => ({
+        value: normalizeStudyId(study),
+        label: study.title || `Study ${normalizeStudyId(study)}`,
+      })),
+    [studies],
+  );
 
   const actionableStudies = useMemo(
     () =>
-      studies.filter(
+      filteredStudies.filter(
         (study) => study?.cta && study.cta.type !== "none" && !study.cta.disabled,
       ),
-    [studies],
+    [filteredStudies],
   );
   const quickActions = actionableStudies.slice(0, 3);
-  const noStudiesYet = !loading && studies.length === 0;
+  const noStudiesAssigned = !loading && studies.length === 0;
+  const noStudiesAfterFilter =
+    !loading && filteredStudies.length === 0 && studies.length > 0;
 
   const handleOpenCta = useCallback(
     (study) => {
@@ -199,6 +307,10 @@ export default function ParticipantDashboard() {
     }
   };
 
+  const clearFilters = useCallback(() => {
+    updateFilters(defaultPreferences.filters);
+  }, [defaultPreferences.filters, updateFilters]);
+
   const renderArtifactChips = (modeMap = {}) => {
     const entries = Object.entries(modeMap).filter(([, meta]) => meta.completed > 0);
     if (!entries.length) {
@@ -215,25 +327,206 @@ export default function ParticipantDashboard() {
     );
   };
 
+  const renderWidget = (widgetId) => {
+    switch (widgetId) {
+      case "welcome":
+        return (
+          <section className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold">Welcome back, {user?.name || "Participant"}!</h2>
+              <p className="text-sm text-muted-foreground">
+                Track your competency assessments and artifact assignments in one place.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading}>
+              {loading ? (
+                <span className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Refreshing
+                </span>
+              ) : (
+                "Refresh"
+              )}
+            </Button>
+          </section>
+        );
+      case "quickActions":
+        return (
+          <section className="grid gap-6 md:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Quick Actions</CardTitle>
+                <CardDescription>Jump back into your work</CardDescription>
+              </CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                {quickActions.length ? (
+                  quickActions.map((study) => (
+                    <Button
+                      key={`${study.studyParticipantId || study.id}-${study.cta.type}`}
+                      size="sm"
+                      variant="secondary"
+                      className="gap-1"
+                      onClick={() => handleOpenCta(study)}
+                    >
+                      {study.cta.buttonLabel}
+                      <span className="text-xs text-muted-foreground">· {study.title}</span>
+                    </Button>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {hasActiveFilters
+                      ? "No actions match your filters."
+                      : "No pending actions. Check back soon."}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </section>
+        );
+      case "assignments":
+        return (
+          <section className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold">My Assigned Studies</h2>
+              {hasActiveFilters ? (
+                <Badge variant="outline" className="text-xs">
+                  Filters on
+                </Badge>
+              ) : null}
+            </div>
+            {loading ? (
+              <Card>
+                <CardContent className="flex items-center gap-3 py-6">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Loading your assignments…</span>
+                </CardContent>
+              </Card>
+            ) : noStudiesAssigned ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>No studies assigned yet</CardTitle>
+                  <CardDescription>We'll email you as soon as a researcher assigns you to a study.</CardDescription>
+                </CardHeader>
+              </Card>
+            ) : noStudiesAfterFilter ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>No studies match these filters</CardTitle>
+                  <CardDescription>Adjust the study, criteria, or date range to see your work.</CardDescription>
+                </CardHeader>
+                <CardFooter>
+                  <Button variant="outline" size="sm" onClick={clearFilters}>
+                    Reset filters
+                  </Button>
+                </CardFooter>
+              </Card>
+            ) : (
+              filteredStudies.map((study) => {
+                const cardStatus = deriveCardStatus(study, visitedStudies);
+                const statusMeta = getParticipationStatusMeta(cardStatus);
+                const progressPercent = clampPercent(study.progressPercent);
+                const competency = study.competency || {};
+                const nextModeLabel = study.nextAssignment?.modeLabel || null;
+                const artifactTotals = study.artifactProgress?.totals?.submitted || 0;
+                const isClosed = Boolean(study.isPastDeadline);
+                return (
+                  <Card key={normalizeStudyId(study) || study.studyParticipantId}>
+                    <CardHeader className="pb-3">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <CardTitle>{study.title}</CardTitle>
+                            <Badge
+                              variant="outline"
+                              className={isClosed ? "border-destructive/60 text-destructive" : "border-emerald-300 text-emerald-700"}
+                            >
+                              {isClosed ? "Closed" : "Active"}
+                            </Badge>
+                          </div>
+                          <CardDescription>
+                            {study.studyWindow ? study.studyWindow : "Active study"}
+                            {study.researcher?.name ? ` · ${study.researcher.name}` : ""}
+                          </CardDescription>
+                        </div>
+                        <span className={`text-xs px-2 py-1 rounded-full ${statusMeta.className}`}>
+                          {statusMeta.label}
+                        </span>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">Overall progress</span>
+                          <span className="font-medium">{progressPercent}%</span>
+                        </div>
+                        <Progress value={progressPercent} />
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium">Competency assessment</p>
+                          <p className="text-sm text-muted-foreground">{competency.statusLabel || "Not assigned"}</p>
+                          <Progress value={clampPercent(competency.completionPercent)} className="h-2" />
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium">Artifact submissions</p>
+                          <p className="text-sm text-muted-foreground">{artifactTotals} submitted</p>
+                          {renderArtifactChips(study.artifactProgress?.modes)}
+                        </div>
+                      </div>
+                    </CardContent>
+                    <CardFooter className="flex flex-col gap-2 text-left md:flex-row md:items-center md:justify-between">
+                      <div className="text-sm text-muted-foreground">
+                        {nextModeLabel ? `Next up: ${nextModeLabel}` : "All tasks completed."}
+                      </div>
+                      {study.cta?.type !== "none" && (
+                        <div className="flex flex-col items-start gap-1 md:items-end">
+                          <Button
+                            size="sm"
+                            onClick={() => handleOpenCta(study)}
+                            disabled={study.cta?.disabled}
+                            title={study.cta?.disabled ? study.cta.reason || "Deadline passed." : undefined}
+                          >
+                            {study.cta?.buttonLabel || "Open task"}
+                          </Button>
+                          {study.cta?.disabled ? (
+                            <p className="text-xs text-destructive">
+                              {study.cta.reason || "The deadline has passed. You cannot start this study."}
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
+                    </CardFooter>
+                  </Card>
+                );
+              })
+            )}
+          </section>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <section className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="text-xl font-semibold">Welcome back, {user?.name || "Participant"}!</h2>
-          <p className="text-sm text-muted-foreground">
-            Track your competency assessments and artifact assignments in one place.
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading}>
-          {loading ? (
-            <span className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Refreshing
-            </span>
-          ) : (
-            "Refresh"
-          )}
-        </Button>
-      </section>
+      <DashboardControls
+        filters={filters}
+        onFiltersChange={updateFilters}
+        studyOptions={studyOptions}
+        layout={layout}
+        onLayoutChange={updateLayout}
+        widgetLabels={{
+          welcome: "Welcome header",
+          quickActions: "Quick actions",
+          assignments: "Assigned studies",
+        }}
+        onReset={resetPreferences}
+        onSave={savePreferences}
+        saving={savingPreferences}
+        lastSavedAt={lastSavedAt}
+        saveError={saveError}
+        criteriaPlaceholder="Search criteria, modes, or labels"
+      />
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -241,131 +534,9 @@ export default function ParticipantDashboard() {
         </div>
       )}
 
-      <section className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
-            <CardDescription>Jump back into your work</CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            {quickActions.length ? (
-              quickActions.map((study) => (
-                <Button
-                  key={`${study.studyParticipantId}-${study.cta.type}`}
-                  size="sm"
-                  variant="secondary"
-                  className="gap-1"
-                  onClick={() => handleOpenCta(study)}
-                >
-                  {study.cta.buttonLabel}
-                  <span className="text-xs text-muted-foreground">· {study.title}</span>
-                </Button>
-              ))
-            ) : (
-              <p className="text-sm text-muted-foreground">No pending actions. Check back soon.</p>
-            )}
-          </CardContent>
-        </Card>
-      </section>
-
-      <section className="space-y-4">
-        <h2 className="text-lg font-semibold">My Assigned Studies</h2>
-        {loading ? (
-          <Card>
-            <CardContent className="flex items-center gap-3 py-6">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              <span className="text-sm text-muted-foreground">Loading your assignments…</span>
-            </CardContent>
-          </Card>
-        ) : noStudiesYet ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>No studies assigned yet</CardTitle>
-              <CardDescription>We'll email you as soon as a researcher assigns you to a study.</CardDescription>
-            </CardHeader>
-          </Card>
-        ) : (
-          studies.map((study) => {
-            const cardStatus = deriveCardStatus(study, visitedStudies);
-            const statusMeta = getParticipationStatusMeta(cardStatus);
-            const progressPercent = clampPercent(study.progressPercent);
-            const competency = study.competency || {};
-            const nextModeLabel = study.nextAssignment?.modeLabel || null;
-            const artifactTotals = study.artifactProgress?.totals?.submitted || 0;
-            const isClosed = Boolean(study.isPastDeadline);
-            return (
-              <Card key={study.studyParticipantId}>
-                <CardHeader className="pb-3">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <CardTitle>{study.title}</CardTitle>
-                        <Badge
-                          variant="outline"
-                          className={isClosed ? "border-destructive/60 text-destructive" : "border-emerald-300 text-emerald-700"}
-                        >
-                          {isClosed ? "Closed" : "Active"}
-                        </Badge>
-                      </div>
-                      <CardDescription>
-                        {study.studyWindow ? study.studyWindow : "Active study"}
-                        {study.researcher?.name ? ` · ${study.researcher.name}` : ""}
-                      </CardDescription>
-                    </div>
-                    <span className={`text-xs px-2 py-1 rounded-full ${statusMeta.className}`}>
-                      {statusMeta.label}
-                    </span>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Overall progress</span>
-                      <span className="font-medium">{progressPercent}%</span>
-                    </div>
-                    <Progress value={progressPercent} />
-                  </div>
-
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">Competency assessment</p>
-                      <p className="text-sm text-muted-foreground">{competency.statusLabel || "Not assigned"}</p>
-                      <Progress value={clampPercent(competency.completionPercent)} className="h-2" />
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-sm font-medium">Artifact submissions</p>
-                      <p className="text-sm text-muted-foreground">{artifactTotals} submitted</p>
-                      {renderArtifactChips(study.artifactProgress?.modes)}
-                    </div>
-                  </div>
-                </CardContent>
-                <CardFooter className="flex flex-col gap-2 text-left md:flex-row md:items-center md:justify-between">
-                  <div className="text-sm text-muted-foreground">
-                    {nextModeLabel ? `Next up: ${nextModeLabel}` : "All tasks completed."}
-                  </div>
-                  {study.cta?.type !== "none" && (
-                    <div className="flex flex-col items-start gap-1 md:items-end">
-                      <Button
-                        size="sm"
-                        onClick={() => handleOpenCta(study)}
-                        disabled={study.cta?.disabled}
-                        title={study.cta?.disabled ? study.cta.reason || "Deadline passed." : undefined}
-                      >
-                        {study.cta?.buttonLabel || "Open task"}
-                      </Button>
-                      {study.cta?.disabled ? (
-                        <p className="text-xs text-destructive">
-                          {study.cta.reason || "The deadline has passed. You cannot start this study."}
-                        </p>
-                      ) : null}
-                    </div>
-                  )}
-                </CardFooter>
-              </Card>
-            );
-          })
-        )}
-      </section>
+      {layout.map((widgetId) => (
+        <React.Fragment key={widgetId}>{renderWidget(widgetId)}</React.Fragment>
+      ))}
     </div>
   );
 }
