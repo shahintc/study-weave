@@ -447,6 +447,7 @@ export default function ResearcherDashboard() {
           setArtifactToManage(null); // Clear artifact after deleting
           fetchArtifacts(); // Refresh the artifact list
         }}
+        currentUserId={currentUserId}
       />
 
       <CreateCollectionModal
