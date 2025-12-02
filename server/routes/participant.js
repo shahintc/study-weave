@@ -345,6 +345,7 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
         participantStatus: participant.participationStatus,
         label: studyArtifact.label,
         instructions: studyArtifact.instructions,
+        evaluationCriteria: normalizeCriteria(study.criteria),
         panes: {
           left: leftPane,
           right: rightPane,
@@ -626,6 +627,20 @@ function computeDeadlinePassed(timelineEnd) {
   today.setHours(0, 0, 0, 0);
   endDate.setHours(0, 0, 0, 0);
   return endDate < today;
+}
+
+function normalizeCriteria(criteria) {
+  if (!criteria) return [];
+  const list = Array.isArray(criteria) ? criteria : [];
+  return list
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const label = item.label || item.name || item.title;
+      const weight = Number(item.weight);
+      if (!label || Number.isNaN(weight)) return null;
+      return { label, weight };
+    })
+    .filter(Boolean);
 }
 
 module.exports = router;

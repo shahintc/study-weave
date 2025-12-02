@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import api from "@/api/axios";
+import { Star } from "lucide-react";
 
 /** Bug categories (Defects4J/GHRB taxonomy) */
 const BUG_CATEGORIES = [
@@ -415,6 +416,13 @@ export default function ArtifactsComparison() {
     return state.participant || state.studyParticipant || null;
   }, [location.state]);
 
+  const handleCriteriaRating = useCallback((label, value) => {
+    setCriteriaRatings((prev) => ({
+      ...prev,
+      [label]: value,
+    }));
+  }, []);
+
   const [authToken, setAuthToken] = useState(() => {
     if (typeof window === "undefined") return null;
     return window.localStorage.getItem("token");
@@ -428,6 +436,10 @@ export default function ArtifactsComparison() {
   const [resolvedStudyParticipantId, setResolvedStudyParticipantId] = useState(
     studyContext.studyParticipantId || null
   );
+  const [evaluationCriteria, setEvaluationCriteria] = useState([]);
+  const [criteriaRatings, setCriteriaRatings] = useState({});
+  const [criteriaHover, setCriteriaHover] = useState({});
+  const pendingCriteriaScoresRef = useRef(null);
   const [assignmentMeta, setAssignmentMeta] = useState(null);
   const [assignmentLoadError, setAssignmentLoadError] = useState("");
   const [assignmentPanes, setAssignmentPanes] = useState(null);
@@ -440,6 +452,37 @@ export default function ArtifactsComparison() {
     null;
   const missingStudyContext =
     !studyContext.studyId || !studyContext.studyArtifactId;
+
+  const computeCriteriaScores = useCallback(
+    (criteriaList = evaluationCriteria, starMap = criteriaRatings) => {
+      const scores = {};
+      criteriaList.forEach((criterion) => {
+        const weight = Number(criterion.weight);
+        if (Number.isNaN(weight)) return;
+        const stars = Number(starMap[criterion.label] || 0);
+        const pct = Number(((weight * stars) / 5).toFixed(2));
+        scores[criterion.label] = pct;
+      });
+      return scores;
+    },
+    [criteriaRatings, evaluationCriteria],
+  );
+
+  const computeStarsFromScores = useCallback(
+    (scores = {}, criteriaList = evaluationCriteria) => {
+      const stars = {};
+      criteriaList.forEach((criterion) => {
+        const weight = Number(criterion.weight);
+        if (!weight) return;
+        const score = Number(scores[criterion.label]);
+        if (Number.isNaN(score)) return;
+        const derived = Math.round((score / weight) * 5);
+        stars[criterion.label] = Math.min(5, Math.max(0, derived));
+      });
+      return stars;
+    },
+    [evaluationCriteria],
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -687,6 +730,13 @@ export default function ArtifactsComparison() {
             if (typeof saved.assessmentComment === "string")
               setAssessmentComment(saved.assessmentComment);
 
+            if (saved.evaluationRatings && typeof saved.evaluationRatings === "object") {
+              pendingCriteriaScoresRef.current = saved.evaluationRatings;
+            }
+            if (saved.evaluationStarRatings && typeof saved.evaluationStarRatings === "object") {
+              setCriteriaRatings(saved.evaluationStarRatings);
+            }
+
             if (paneHasContent(saved.left) || paneHasContent(saved.right)) {
               setHasLocalDraft(true);
             }
@@ -735,6 +785,34 @@ export default function ArtifactsComparison() {
         const { panes = null, ...metadata } = assignment;
         setAssignmentMeta(metadata);
         setAssignmentPanes(panes);
+        if (Array.isArray(assignment.evaluationCriteria)) {
+          setEvaluationCriteria(
+            assignment.evaluationCriteria.map((c) => ({
+              label: c.label,
+              weight: Number(c.weight) || 0,
+            })),
+          );
+          setCriteriaRatings((prev) => {
+            let next = { ...prev };
+            if (pendingCriteriaScoresRef.current) {
+              next = computeStarsFromScores(pendingCriteriaScoresRef.current, assignment.evaluationCriteria);
+              pendingCriteriaScoresRef.current = null;
+            }
+            assignment.evaluationCriteria.forEach((c) => {
+              if (typeof next[c.label] !== "number") {
+                next[c.label] = 0;
+              }
+            });
+            Object.keys(next).forEach((key) => {
+              const exists = assignment.evaluationCriteria.some((c) => c.label === key);
+              if (!exists) delete next[key];
+            });
+            return next;
+          });
+        } else {
+          setEvaluationCriteria([]);
+          setCriteriaRatings({});
+        }
 
         if (assignment.studyParticipantId && assignment.studyParticipantId !== resolvedStudyParticipantId) {
           setResolvedStudyParticipantId(assignment.studyParticipantId);
@@ -828,6 +906,8 @@ export default function ArtifactsComparison() {
       snapshotChangeTypeOther,
       snapshotDiffData,
       assessmentComment,
+      evaluationRatings: computeCriteriaScores(),
+      evaluationStarRatings: criteriaRatings,
     }),
     [
       studyContext.studyId,
@@ -858,14 +938,16 @@ export default function ArtifactsComparison() {
       snapshotChangeTypeOther,
       snapshotDiffData,
       assessmentComment,
+      criteriaRatings,
+      computeCriteriaScores,
     ]
   );
 
   const hydrateAssessmentPayload = useCallback(
     (payload = {}) => {
-    if (!payload || typeof payload !== "object") return;
-    if (payload.left) setLeftData(payload.left);
-    if (payload.right) setRightData(payload.right);
+      if (!payload || typeof payload !== "object") return;
+      if (payload.left) setLeftData(payload.left);
+      if (payload.right) setRightData(payload.right);
     if (Array.isArray(payload.leftAnn)) setLeftAnn(payload.leftAnn);
     if (Array.isArray(payload.rightAnn)) setRightAnn(payload.rightAnn);
     if (typeof payload.syncScroll === "boolean") setSyncScroll(payload.syncScroll);
@@ -891,6 +973,11 @@ export default function ArtifactsComparison() {
       setSnapshotChangeTypeOther(payload.snapshotChangeTypeOther);
     if (payload.snapshotDiffData) setSnapshotDiffData(payload.snapshotDiffData);
     if (typeof payload.assessmentComment === "string") setAssessmentComment(payload.assessmentComment);
+    if (payload.evaluationStarRatings && typeof payload.evaluationStarRatings === "object") {
+      setCriteriaRatings(payload.evaluationStarRatings);
+    } else if (payload.evaluationRatings && typeof payload.evaluationRatings === "object") {
+      pendingCriteriaScoresRef.current = payload.evaluationRatings;
+    }
     },
     [assignedMode],
   );
@@ -2008,6 +2095,16 @@ export default function ArtifactsComparison() {
       return;
     }
 
+    const words = (assessmentComment || "").trim().split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      setAssessmentError("A comment is required to submit.");
+      return;
+    }
+    if (words.length < 20) {
+      setAssessmentError("Please provide at least 20 words in the comment.");
+      return;
+    }
+
     const validationMessage = validateBeforeSave();
     if (validationMessage) {
       setAssessmentError(validationMessage);
@@ -2276,11 +2373,6 @@ export default function ArtifactsComparison() {
           {assessmentLoading && (
             <div className="border border-blue-200 bg-blue-50 text-blue-900 text-sm px-3 py-2 rounded">
               Loading your previous submission…
-            </div>
-          )}
-          {assessmentError && (
-            <div className="border border-red-200 bg-red-50 text-red-900 text-sm px-3 py-2 rounded">
-              {assessmentError}
             </div>
           )}
           {assessmentSuccess && (
@@ -2666,6 +2758,9 @@ export default function ArtifactsComparison() {
                     rows={3}
                     placeholder="E.g., 'The description mentions UI layout breaking after resize, so I chose GUI.'"
                   />
+                  {assessmentError && (
+                    <p className="text-xs text-destructive">{assessmentError}</p>
+                  )}
                 </div>
               </>
             ) : mode === "solid" ? (
@@ -2736,17 +2831,20 @@ export default function ArtifactsComparison() {
                   <Label htmlFor="overall-comment-solid">
                     Explanation (why this violation and level?)
                   </Label>
-                  <Textarea
-                    id="overall-comment-solid"
-                    value={assessmentComment}
-                    onChange={(e) => setAssessmentComment(e.target.value)}
-                    rows={3}
-                    placeholder="E.g., 'Class handles both persistence and business logic, so SRP is violated; refactoring requires splitting responsibilities, so I marked it MEDIUM.'"
-                  />
-                </div>
+                <Textarea
+                  id="overall-comment-solid"
+                  value={assessmentComment}
+                  onChange={(e) => setAssessmentComment(e.target.value)}
+                  rows={3}
+                  placeholder="E.g., 'Class handles both persistence and business logic, so SRP is violated; refactoring requires splitting responsibilities, so I marked it MEDIUM.'"
+                />
+                {assessmentError && (
+                  <p className="text-xs text-destructive">{assessmentError}</p>
+                )}
+              </div>
 
-                {showSolidGroundTruth && currentSolidRecord && (
-                  <div className="border rounded-md bg-amber-100/60 p-3 text-xs text-amber-900 space-y-2">
+              {showSolidGroundTruth && currentSolidRecord && (
+                <div className="border rounded-md bg-amber-100/60 p-3 text-xs text-amber-900 space-y-2">
                     <p className="font-semibold text-amber-900">
                       Ground truth (for reviewers only)
                     </p>
@@ -2837,14 +2935,17 @@ export default function ArtifactsComparison() {
                   <Label htmlFor="snapshot-comment">
                     Notes (brief explanation of your choice)
                   </Label>
-                  <Textarea
-                    id="snapshot-comment"
-                    value={assessmentComment}
-                    onChange={(e) => setAssessmentComment(e.target.value)}
-                    rows={3}
-                    placeholder="E.g., 'Layout change matches updated design specs, text and icons align with new style guide, so this is an intended UI change.'"
-                  />
-                </div>
+                <Textarea
+                  id="snapshot-comment"
+                  value={assessmentComment}
+                  onChange={(e) => setAssessmentComment(e.target.value)}
+                  rows={3}
+                  placeholder="E.g., 'Layout change matches updated design specs, text and icons align with new style guide, so this is an intended UI change.'"
+                />
+                {assessmentError && (
+                  <p className="text-xs text-destructive">{assessmentError}</p>
+                )}
+              </div>
               </>
             ) : (
               <>
@@ -3011,8 +3112,75 @@ export default function ArtifactsComparison() {
                     rows={3}
                     placeholder="E.g., 'Although both labeled it as Performance, the description mentions incorrect configuration of environment variables, so I chose Configuration.'"
                   />
+                  {assessmentError && (
+                    <p className="text-xs text-destructive">{assessmentError}</p>
+                  )}
                 </div>
               </>
+            )}
+
+            {evaluationCriteria.length > 0 && (
+              <div className="space-y-3 border-t border-dashed pt-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold">Evaluation criteria</p>
+                  <p className="text-xs text-muted-foreground">Rate each (1–5 stars)</p>
+                </div>
+                <div className="space-y-2">
+                  {evaluationCriteria.map((criterion) => {
+                    const currentValue =
+                      criteriaHover[criterion.label] ??
+                      criteriaRatings[criterion.label] ??
+                      0;
+                    return (
+                      <div
+                        key={criterion.label}
+                        className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium">{criterion.label}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Weight: {criterion.weight}% (5 stars = full weight)
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {[1, 2, 3, 4, 5].map((value) => (
+                            <button
+                              key={value}
+                              type="button"
+                              className="p-1"
+                              onMouseEnter={() =>
+                                setCriteriaHover((prev) => ({
+                                  ...prev,
+                                  [criterion.label]: value,
+                                }))
+                              }
+                              onMouseLeave={() =>
+                                setCriteriaHover((prev) => {
+                                  const next = { ...prev };
+                                  delete next[criterion.label];
+                                  return next;
+                                })
+                              }
+                              onClick={() => handleCriteriaRating(criterion.label, value)}
+                            >
+                              <Star
+                                className={
+                                  value <= currentValue
+                                    ? "h-5 w-5 fill-amber-400 text-amber-400"
+                                    : "h-5 w-5 text-gray-300"
+                                }
+                              />
+                            </button>
+                          ))}
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            {currentValue || 0}/5
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             )}
 
             <div className="pt-4 flex justify-between">
