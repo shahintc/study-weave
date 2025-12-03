@@ -22,7 +22,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuestionImportModal } from "./QuestionImportModal";
 import { QuizGenerationModal } from "./QuizGenerationModal";
+import { AssessmentPreviewModal } from "./AssessmentPreviewModal";
 
 
 // --- ZOD SCHEMA (Assessment Builder) ---
@@ -169,7 +171,9 @@ function OptionsFieldArray({ questionIndex, control, errors }) {
 export default function AssessmentCreationPage() {
     const [isSaving, setIsSaving] = useState(false);
     const [isQuizModalOpen, setIsQuizModalOpen] = useState(false);
+    const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
     const [participantSearch, setParticipantSearch] = useState("");
     const [participants, setParticipants] = useState([]);
     const [participantsError, setParticipantsError] = useState("");
@@ -193,7 +197,7 @@ export default function AssessmentCreationPage() {
         mode: "onChange",
     });
 
-    const { fields: questionFields, append: appendQuestion, remove: removeQuestion } = useFieldArray({
+    const { fields: questionFields, append: appendQuestion, remove: removeQuestion, replace: replaceQuestions } = useFieldArray({
         control: form.control,
         name: "questions",
     });
@@ -330,7 +334,14 @@ export default function AssessmentCreationPage() {
         }
     };
     const handleImportQuestions = () => {
-        alert("Import Questions Feature: Opens file upload or paste dialog.");
+        setIsImportModalOpen(true);
+    };
+
+    const handleImportSuccess = (importedQuestions) => {
+        if (importedQuestions && importedQuestions.length > 0) {
+            // Use the 'replace' method from useFieldArray to update the UI
+            replaceQuestions(importedQuestions);
+        }
     };
     const handleDefineScoring = () => {
         alert("Define Scoring Rules: Opens a modal to set up detailed scoring/thresholds.");
@@ -386,7 +397,7 @@ export default function AssessmentCreationPage() {
                 </div>
                 <div className="flex flex-wrap gap-2">
 
-                    <Button type="button" variant="secondary" onClick={handleImportQuestions}>
+                    <Button type="button" variant="outline" onClick={handleImportQuestions}>
                         <Upload className="w-4 h-4 mr-2" /> Import bank
                     </Button>
                 </div>
@@ -645,7 +656,7 @@ export default function AssessmentCreationPage() {
                                         <Layers className="h-4 w-4" />
                                         Attach sample artifacts or reference material once saved.
                                     </p>
-                                    <Button type="button" variant="outline" className="w-full">
+                                    <Button type="button" variant="outline" className="w-full" onClick={() => setIsPreviewModalOpen(true)}>
                                         Open preview mode
                                     </Button>
                                 </CardContent>
@@ -736,6 +747,17 @@ export default function AssessmentCreationPage() {
                 onClose={() => setIsQuizModalOpen(false)}
                 onGenerate={handleGenerateQuiz}
                 isGenerating={isGenerating}
+            />
+            {/* Import Questions Modal */}
+            <QuestionImportModal
+                isOpen={isImportModalOpen}
+                onClose={() => setIsImportModalOpen(false)}
+                onImportSuccess={handleImportSuccess}
+            />
+            <AssessmentPreviewModal
+                isOpen={isPreviewModalOpen}
+                onClose={() => setIsPreviewModalOpen(false)}
+                assessmentData={form.getValues()}
             />
         </div>
     );

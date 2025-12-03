@@ -3,6 +3,8 @@ const router = express.Router();
 const { CompetencyAssessment, CompetencyAssignment, User } = require('../models');
 const PDFDocument = require('pdfkit');
 const csv = require('fast-csv');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
 
 const normalizeNumber = (value) => {
   if (value === null || value === undefined || value === '') {
@@ -622,6 +624,111 @@ router.get('/assessments/:id/report', async (req, res) => {
     console.error('Generate competency report error', error);
     res.status(500).json({ message: 'Unable to generate competency report right now.' });
   }
+});
+
+router.get('/assessments/import-template', (req, res) => {
+  const template = [
+    ['type', 'text', 'is_correct'],
+    ['question', 'What is the capital of France?', ''],
+    ['option', 'London', 'false'],
+    ['option', 'Paris', 'true'],
+    ['option', 'Berlin', 'false'],
+    ['question', 'Which of these are prime numbers? (Select all that apply)', ''],
+    ['option', '4', 'false'],
+    ['option', '7', 'true'],
+  ].map(row => row.join(',')).join('\n');
+
+  res.header('Content-Type', 'text/csv');
+  res.attachment('question_template.csv');
+  res.send(template);
+});
+
+router.post('/assessments/import', upload.single('questionsFile'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: 'No questions file was uploaded.' });
+  }
+
+  const fileContent = req.file.buffer.toString('utf8');
+  const questions = [];
+  const errors = [];
+  let currentQuestion = null;
+  let rowNumber = 1; // Start at 1 for the header row
+
+  const stream = csv.parse({ headers: ['type', 'text', 'is_correct'], renameHeaders: true, trim: true });
+
+  // Wrap the stream processing in a promise to handle it synchronously within the async route
+  const parsePromise = new Promise((resolve, reject) => {
+    stream
+      .on('error', (error) => reject(error))
+      .on('data', (row) => {
+        rowNumber++; // Increment for each data row
+        const type = (row.type || '').toLowerCase().trim();
+        const text = (row.text || '').trim();
+        const isCorrect = (row.is_correct || '').toLowerCase() === 'true';
+
+        if (!type || !text) {
+          errors.push({ row: rowNumber, message: "Row is missing a 'type' or 'text' value." });
+          return; // Skip this invalid row
+        }
+
+        if (type !== 'question' && type !== 'option') {
+          errors.push({ row: rowNumber, message: `Invalid type: '${row.type}'. Must be 'question' or 'option'.` });
+          return;
+        }
+
+        if (type === 'question') {
+          if (currentQuestion) {
+            // Final validation for the previous question before adding it
+            if (currentQuestion.options.length > 0 && !currentQuestion.options.some(o => o.isCorrect)) {
+              errors.push({ row: currentQuestion._sourceRow, message: `Question "${currentQuestion.title.slice(0, 30)}..." has no correct option marked.` });
+            }
+            questions.push(currentQuestion);
+          }
+          currentQuestion = {
+            title: text,
+            type: 'multiple_choice',
+            options: [],
+            _sourceRow: rowNumber, // For better error reporting
+          };
+        } else if (type === 'option' && currentQuestion) {
+          currentQuestion.options.push({ text, isCorrect });
+        } else if (type === 'option' && !currentQuestion) {
+          errors.push({ row: rowNumber, message: "Found an 'option' row before a 'question' row." });
+        }
+      })
+      .on('end', (rowCount) => {
+        if (currentQuestion) {
+          // Final validation for the very last question in the file
+          if (currentQuestion.options.length > 0 && !currentQuestion.options.some(o => o.isCorrect)) {
+            errors.push({ row: currentQuestion._sourceRow, message: `Question "${currentQuestion.title.slice(0, 30)}..." has no correct option marked.` });
+          }
+          questions.push(currentQuestion);
+        }
+
+        questions.forEach((q) => {
+          // A question with no options is a short answer question
+          if (q.options.length === 0) {
+            q.type = 'short_answer';
+          }
+          delete q._sourceRow; // Clean up helper property
+        });
+
+        console.log(`Parsed ${rowCount} rows. Created ${questions.length} questions with ${errors.length} errors.`);
+        resolve({ questions, errors });
+      });
+
+    stream.write(fileContent);
+    stream.end();
+  });
+
+  parsePromise
+    .then((result) => {
+      res.status(200).json(result);
+    })
+    .catch((error) => {
+      console.error('CSV parsing error:', error);
+      res.status(400).json({ message: 'The uploaded CSV file is malformed. Please check its structure.' });
+    });
 });
 
 module.exports = router;
