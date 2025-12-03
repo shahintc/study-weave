@@ -8,6 +8,11 @@ import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import DashboardControls from "@/components/dashboard/DashboardControls";
 import { useDashboardPreferences } from "@/hooks/useDashboardPreferences";
+import {
+  buildStudyTimerKey,
+  formatDuration,
+  readTimerSnapshot,
+} from "@/lib/studyTimer";
 
 const ARTIFACT_MODE_LABELS = {
   stage1: "Stage 1 bug labeling",
@@ -103,6 +108,7 @@ export default function ParticipantDashboard() {
       return new Set();
     }
   });
+  const [timerSnapshots, setTimerSnapshots] = useState({});
   const defaultPreferences = useMemo(
     () => ({
       filters: { study: "all", criteria: "", from: "", to: "" },
@@ -183,12 +189,39 @@ export default function ParticipantDashboard() {
     }
   }, [authToken, navigate]);
 
+  const refreshTimerSnapshots = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const next = {};
+    studies.forEach((study) => {
+      const timerKey = buildStudyTimerKey({
+        studyId: study.studyId,
+        studyArtifactId:
+          study.nextAssignment?.studyArtifactId ||
+          study.cta?.studyArtifactId ||
+          null,
+        studyParticipantId: study.studyParticipantId,
+      });
+      if (!timerKey) return;
+      const snapshot = readTimerSnapshot(timerKey);
+      if (snapshot) {
+        next[timerKey] = snapshot;
+      }
+    });
+    setTimerSnapshots(next);
+  }, [studies]);
+
   useEffect(() => {
     if (!user || !authToken) {
       return;
     }
     fetchAssignments();
   }, [user, authToken, fetchAssignments]);
+
+  useEffect(() => {
+    refreshTimerSnapshots();
+    const id = setInterval(refreshTimerSnapshots, 1000);
+    return () => clearInterval(id);
+  }, [refreshTimerSnapshots]);
 
   const hasActiveFilters = useMemo(
     () =>
@@ -428,6 +461,29 @@ export default function ParticipantDashboard() {
                 const nextModeLabel = study.nextAssignment?.modeLabel || null;
                 const artifactTotals = study.artifactProgress?.totals?.submitted || 0;
                 const isClosed = Boolean(study.isPastDeadline);
+                const timerKey = buildStudyTimerKey({
+                  studyId: study.studyId,
+                  studyArtifactId:
+                    study.nextAssignment?.studyArtifactId ||
+                    study.cta?.studyArtifactId ||
+                    null,
+                  studyParticipantId: study.studyParticipantId,
+                });
+                const timerSnapshot = timerKey ? timerSnapshots[timerKey] : null;
+                const timerIndicatorClass = timerSnapshot?.submitted
+                  ? "bg-slate-400"
+                  : timerSnapshot?.running
+                  ? "bg-emerald-500 animate-pulse"
+                  : timerSnapshot
+                  ? "bg-amber-500"
+                  : "bg-slate-300";
+                const timerStatusText = timerSnapshot?.submitted
+                  ? "submitted"
+                  : timerSnapshot?.running
+                  ? "running"
+                  : timerSnapshot
+                  ? "paused"
+                  : null;
                 return (
                   <Card key={normalizeStudyId(study) || study.studyParticipantId}>
                     <CardHeader className="pb-3">
@@ -461,7 +517,7 @@ export default function ParticipantDashboard() {
                         <Progress value={progressPercent} />
                       </div>
 
-                      <div className="grid gap-4 md:grid-cols-2">
+                      <div className="grid gap-4 md:grid-cols-3">
                         <div className="space-y-1">
                           <p className="text-sm font-medium">Competency assessment</p>
                           <p className="text-sm text-muted-foreground">{competency.statusLabel || "Not assigned"}</p>
@@ -471,6 +527,17 @@ export default function ParticipantDashboard() {
                           <p className="text-sm font-medium">Artifact submissions</p>
                           <p className="text-sm text-muted-foreground">{artifactTotals} submitted</p>
                           {renderArtifactChips(study.artifactProgress?.modes)}
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium">Time on artifact task</p>
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <span className={`h-2.5 w-2.5 rounded-full ${timerIndicatorClass}`} />
+                            <span>
+                              {timerSnapshot
+                                ? `${formatDuration(timerSnapshot.elapsedMs)}${timerStatusText ? ` (${timerStatusText})` : ""}`
+                                : "Not started yet"}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </CardContent>

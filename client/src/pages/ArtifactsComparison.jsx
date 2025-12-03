@@ -17,6 +17,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import api from "@/api/axios";
+import {
+  buildStudyTimerKey,
+  formatDuration,
+  readStoredTimer,
+  writeStoredTimer,
+} from "@/lib/studyTimer";
 import { Star } from "lucide-react";
 
 /** Bug categories (Defects4J/GHRB taxonomy) */
@@ -445,6 +451,12 @@ export default function ArtifactsComparison() {
   const [assignmentPanes, setAssignmentPanes] = useState(null);
   const [hasLocalDraft, setHasLocalDraft] = useState(false);
   const [submissionLocked, setSubmissionLocked] = useState(false);
+  const [timerDisplayMs, setTimerDisplayMs] = useState(0);
+  const [timerStatus, setTimerStatus] = useState("paused"); // running | paused | submitted
+  const timerStartRef = useRef(null);
+  const timerIntervalRef = useRef(null);
+  const timerBaseRef = useRef(0);
+  const timerStatusRef = useRef("paused");
 
   const activeParticipantId =
     resolvedStudyParticipantId ||
@@ -452,6 +464,19 @@ export default function ArtifactsComparison() {
     null;
   const missingStudyContext =
     !studyContext.studyId || !studyContext.studyArtifactId;
+  const timerStorageKey = useMemo(
+    () =>
+      buildStudyTimerKey({
+        studyId: studyContext.studyId,
+        studyArtifactId: studyContext.studyArtifactId,
+        studyParticipantId: activeParticipantId,
+      }),
+    [activeParticipantId, studyContext.studyArtifactId, studyContext.studyId]
+  );
+
+  useEffect(() => {
+    timerStatusRef.current = timerStatus;
+  }, [timerStatus]);
 
   const computeCriteriaScores = useCallback(
     (criteriaList = evaluationCriteria, starMap = criteriaRatings) => {
@@ -483,6 +508,107 @@ export default function ArtifactsComparison() {
     },
     [evaluationCriteria],
   );
+
+  const persistTimerState = useCallback(
+    (nextState) => {
+      if (!timerStorageKey) return;
+      writeStoredTimer(timerStorageKey, nextState);
+    },
+    [timerStorageKey],
+  );
+
+  const stopTimerInterval = useCallback(() => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+  }, []);
+
+  const updateTimerDisplay = useCallback(() => {
+    const now = Date.now();
+    const delta = timerStartRef.current ? Math.max(0, now - timerStartRef.current) : 0;
+    setTimerDisplayMs(timerBaseRef.current + delta);
+  }, []);
+
+  const pauseTimer = useCallback(
+    (markSubmitted = false) => {
+      if (!timerStorageKey) return;
+      const now = Date.now();
+      const delta = timerStartRef.current ? Math.max(0, now - timerStartRef.current) : 0;
+      const total = timerBaseRef.current + delta;
+      timerBaseRef.current = total;
+      timerStartRef.current = null;
+      stopTimerInterval();
+      setTimerDisplayMs(total);
+      const finalSubmitted =
+        markSubmitted || timerStatusRef.current === "submitted";
+      setTimerStatus(finalSubmitted ? "submitted" : "paused");
+      persistTimerState({
+        elapsedMs: total,
+        running: false,
+        lastStart: null,
+        submitted: finalSubmitted,
+      });
+    },
+    [persistTimerState, stopTimerInterval, timerStorageKey],
+  );
+
+  const startTimer = useCallback(() => {
+    if (!timerStorageKey || submissionLocked) return;
+    const now = Date.now();
+    timerStartRef.current = now;
+    setTimerStatus("running");
+    stopTimerInterval();
+    updateTimerDisplay();
+    persistTimerState({
+      elapsedMs: timerBaseRef.current,
+      running: true,
+      lastStart: now,
+      submitted: false,
+    });
+    timerIntervalRef.current = setInterval(updateTimerDisplay, 1000);
+  }, [
+    persistTimerState,
+    stopTimerInterval,
+    submissionLocked,
+    timerStorageKey,
+    updateTimerDisplay,
+  ]);
+
+  const hydrateTimerFromStorage = useCallback(() => {
+    if (!timerStorageKey || missingStudyContext) return;
+    const saved = readStoredTimer(timerStorageKey);
+    const now = Date.now();
+    let baseElapsed = Number(saved?.elapsedMs) || 0;
+    const submittedFlag = Boolean(saved?.submitted || submissionLocked);
+    if (!submittedFlag && saved?.running && saved?.lastStart) {
+      baseElapsed += Math.max(0, now - Number(saved.lastStart));
+    }
+
+    timerBaseRef.current = baseElapsed;
+    setTimerDisplayMs(baseElapsed);
+
+    if (submittedFlag) {
+      setTimerStatus("submitted");
+      persistTimerState({
+        elapsedMs: baseElapsed,
+        running: false,
+        lastStart: null,
+        submitted: true,
+      });
+      stopTimerInterval();
+      return;
+    }
+
+    startTimer();
+  }, [
+    missingStudyContext,
+    persistTimerState,
+    startTimer,
+    submissionLocked,
+    stopTimerInterval,
+    timerStorageKey,
+  ]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -520,6 +646,25 @@ export default function ArtifactsComparison() {
       console.warn("Unable to persist study visit flag", err);
     }
   }, [studyContext.studyId]);
+
+  useEffect(() => {
+    if (!timerStorageKey) return;
+    hydrateTimerFromStorage();
+
+    const onBeforeUnload = () => pauseTimer(false);
+    window.addEventListener("beforeunload", onBeforeUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      pauseTimer(false);
+    };
+  }, [hydrateTimerFromStorage, pauseTimer, timerStorageKey]);
+
+  useEffect(() => {
+    if (submissionLocked) {
+      pauseTimer(true);
+    }
+  }, [pauseTimer, submissionLocked]);
 
   // ===== GLOBAL MODES =====
   // stage1: participant labels a single bug report
@@ -2001,6 +2146,25 @@ export default function ArtifactsComparison() {
       : studyProgressStatus === "in_progress"
       ? "In progress"
       : "Not started";
+  const timerStatusLabel =
+    timerStatus === "submitted"
+      ? "Submitted"
+      : timerStatus === "running"
+      ? "Running"
+      : "Paused";
+  const timerDurationLabel = formatDuration(timerDisplayMs);
+  const timerBadgeClass =
+    timerStatus === "submitted"
+      ? "border-slate-200 bg-slate-50 text-slate-700"
+      : timerStatus === "running"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : "border-amber-200 bg-amber-50 text-amber-800";
+  const timerDotClass =
+    timerStatus === "submitted"
+      ? "bg-slate-400"
+      : timerStatus === "running"
+      ? "bg-emerald-500 animate-pulse"
+      : "bg-amber-500";
 
   const blockingReasons = [];
   if (missingStudyContext) {
@@ -2184,6 +2348,7 @@ export default function ArtifactsComparison() {
           hydrateAssessmentPayload(saved.payload);
         }
         setSubmissionLocked(true);
+        pauseTimer(true);
       }
       setAssessmentSuccess("Assessment submitted successfully.");
     } catch (error) {
@@ -2253,7 +2418,7 @@ export default function ArtifactsComparison() {
   return (
     <div className="min-h-screen bg-white p-6 text-gray-900 font-sans">
       <div className="max-w-[1400px] mx-auto space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex flex-col gap-1">
             <span className="text-xs uppercase tracking-wide text-gray-500">
               Assigned task
@@ -2278,75 +2443,93 @@ export default function ArtifactsComparison() {
               </p>
             )}
           </div>
-          <span
-            className={`text-xs px-2 py-1 rounded-full border ${
-              studyProgressStatus === "completed"
-                ? "border-emerald-200 text-emerald-700 bg-emerald-50"
-                : studyProgressStatus === "in_progress"
-                ? "border-amber-200 text-amber-700 bg-amber-50"
-                : "border-slate-200 text-slate-600 bg-slate-50"
-            }`}
-          >
-            {studyProgressLabel}
-          </span>
-          <div className="flex items-center gap-3">
-            {allowSyncAndSwap && (
-              <>
-                <div className="flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-md border">
-                  <Checkbox
-                    id="sync-mode"
-                    checked={syncScroll}
-                    onCheckedChange={(checked) => setSyncScroll(!!checked)}
-                  />
-                  <label
-                    htmlFor="sync-mode"
-                    className="text-sm font-medium cursor-pointer select-none"
-                  >
-                    Sync Scroll
-                  </label>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    const tD = leftData;
-                    setLeftData(rightData);
-                    setRightData(tD);
-                    const tA = leftAnn;
-                    setLeftAnn(rightAnn);
-                    setRightAnn(tA);
-                    const tS = leftSummary;
-                    setLeftSummary(rightSummary);
-                    setRightSummary(tS);
-                    const tC = leftCategory;
-                    setLeftCategory(rightCategory);
-                    setRightCategory(tC);
-                  }}
-                >
-                  Swap Sides
-                </Button>
-              </>
-            )}
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setShowBig(true)}
-              title="Full Screen"
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
+          <div className="flex flex-col gap-2 items-start lg:items-end">
+            <div className="flex flex-wrap items-center gap-3">
+              <span
+                className={`text-xs px-2 py-1 rounded-full border ${
+                  studyProgressStatus === "completed"
+                    ? "border-emerald-200 text-emerald-700 bg-emerald-50"
+                    : studyProgressStatus === "in_progress"
+                    ? "border-amber-200 text-amber-700 bg-amber-50"
+                    : "border-slate-200 text-slate-600 bg-slate-50"
+                }`}
               >
-                <polyline points="15 3 21 3 21 9" />
-                <polyline points="9 21 3 21 3 15" />
-                <line x1="21" y1="3" x2="14" y2="10" />
-                <line x1="3" y1="21" x2="10" y2="14" />
-              </svg>
-            </Button>
+                {studyProgressLabel}
+              </span>
+              <div
+                className={`flex items-center gap-2 rounded-full border px-3 py-1 ${timerBadgeClass}`}
+                title="Tracks your time on this study task"
+              >
+                <span className={`h-2 w-2 rounded-full ${timerDotClass}`} />
+                <div className="flex flex-col leading-tight">
+                  <span className="text-[11px] font-semibold text-gray-700">
+                    Time on task
+                  </span>
+                  <span className="text-[11px] text-gray-600">
+                    {timerDurationLabel} • {timerStatusLabel}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 justify-end">
+              {allowSyncAndSwap && (
+                <>
+                  <div className="flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-md border">
+                    <Checkbox
+                      id="sync-mode"
+                      checked={syncScroll}
+                      onCheckedChange={(checked) => setSyncScroll(!!checked)}
+                    />
+                    <label
+                      htmlFor="sync-mode"
+                      className="text-sm font-medium cursor-pointer select-none"
+                    >
+                      Sync Scroll
+                    </label>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const tD = leftData;
+                      setLeftData(rightData);
+                      setRightData(tD);
+                      const tA = leftAnn;
+                      setLeftAnn(rightAnn);
+                      setRightAnn(tA);
+                      const tS = leftSummary;
+                      setLeftSummary(rightSummary);
+                      setRightSummary(tS);
+                      const tC = leftCategory;
+                      setLeftCategory(rightCategory);
+                      setRightCategory(tC);
+                    }}
+                  >
+                    Swap Sides
+                  </Button>
+                </>
+              )}
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setShowBig(true)}
+                title="Full Screen"
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                >
+                  <polyline points="15 3 21 3 21 9" />
+                  <polyline points="9 21 3 21 3 15" />
+                  <line x1="21" y1="3" x2="14" y2="10" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
+                </svg>
+              </Button>
+            </div>
           </div>
         </div>
 
