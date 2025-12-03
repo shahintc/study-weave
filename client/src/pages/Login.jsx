@@ -17,10 +17,19 @@ export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [verifyEmail, setVerifyEmail] = useState("");
+  const [verifyCode, setVerifyCode] = useState("");
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [verifying, setVerifying] = useState(false);
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError("");
+    setMessage("");
+    setNeedsVerification(false);
     setLoading(true);
 
     try {
@@ -37,9 +46,56 @@ export default function Login() {
         navigate("/participant");
       }
     } catch (err) {
-      alert(err.response?.data?.message || "Login failed");
+      const msg = err.response?.data?.message || "Login failed";
+      setError(msg);
+      if (err.response?.data?.requiresVerification) {
+        setNeedsVerification(true);
+        setVerifyEmail(err.response?.data?.email || email);
+        setMessage("Enter the code we sent to verify your email.");
+      }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleVerify = async (e) => {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    setVerifying(true);
+    try {
+      const res = await axios.post("/api/auth/verify-email", {
+        email: verifyEmail,
+        code: verifyCode.trim(),
+      });
+      localStorage.setItem("token", res.data.token);
+      localStorage.setItem("user", JSON.stringify(res.data.user));
+
+      const role = res.data.user?.role;
+      if (role === "researcher") {
+        navigate("/researcher");
+      } else {
+        navigate("/participant");
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || "Verification failed");
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleResend = async () => {
+    if (!verifyEmail) return;
+    setError("");
+    setMessage("");
+    setVerifying(true);
+    try {
+      const res = await axios.post("/api/auth/resend-verification", { email: verifyEmail });
+      setMessage(res.data?.message || "Verification code sent.");
+    } catch (err) {
+      setError(err.response?.data?.message || "Could not resend code");
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -51,6 +107,16 @@ export default function Login() {
           <CardDescription>Sign in to your account</CardDescription>
         </CardHeader>
         <CardContent>
+          {error ? (
+            <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          ) : null}
+          {message ? (
+            <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+              {message}
+            </div>
+          ) : null}
           <form onSubmit={handleSubmit} className="grid gap-4">
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
@@ -78,6 +144,44 @@ export default function Login() {
               {loading ? "Logging in..." : "Login"}
             </Button>
           </form>
+
+          {needsVerification ? (
+            <div className="mt-6 rounded-md border bg-muted/30 p-4">
+              <p className="mb-3 text-sm font-semibold">Verify your email</p>
+              <form onSubmit={handleVerify} className="grid gap-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="verifyEmail">Email</Label>
+                  <Input
+                    id="verifyEmail"
+                    type="email"
+                    value={verifyEmail}
+                    onChange={(e) => setVerifyEmail(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="verifyCode">Verification code</Label>
+                  <Input
+                    id="verifyCode"
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="123456"
+                    value={verifyCode}
+                    onChange={(e) => setVerifyCode(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="submit" disabled={verifying}>
+                    {verifying ? "Verifying..." : "Verify and continue"}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={handleResend} disabled={verifying || !verifyEmail}>
+                    Resend code
+                  </Button>
+                </div>
+              </form>
+            </div>
+          ) : null}
         </CardContent>
         <CardFooter className="flex w-full flex-col items-start gap-2">
           <Link to="/forgot-password" className="text-sm text-primary underline-offset-4 hover:underline">

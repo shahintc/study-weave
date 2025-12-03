@@ -1,45 +1,247 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const pool = require('../config/database'); // ADD THIS LINE
+const crypto = require('crypto');
+const pool = require('../config/database');
 const User = require('../models/User');
+const { sendEmail, isEmailConfigured } = require('../services/emailService');
 const router = express.Router();
 
-// Register
+const PASSWORD_POLICY = /^(?=.*[A-Z]).{6,}$/;
+const CODE_TTL_MINUTES = 15;
+
+const sanitizeUser = (user) => ({
+  id: user.id,
+  name: user.name,
+  email: user.email,
+  role: user.role,
+  roleId: user.roleId,
+  emailVerified: Boolean(user.emailVerified ?? user.email_verified),
+});
+
+const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const hashCode = (code) => crypto.createHash('sha256').update(String(code)).digest('hex');
+const expiresAt = (minutes) => new Date(Date.now() + minutes * 60 * 1000);
+const isExpired = (date) => !date || new Date(date).getTime() < Date.now();
+
+const requirePasswordPolicy = (password) => PASSWORD_POLICY.test(password);
+
+// Register (sends verification code)
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password, role, roleId } = req.body;
 
-    // Check if user already exists
+    if (!email || !password || !name) {
+      return res.status(400).json({ message: 'Name, email, and password are required.' });
+    }
+
+    if (!requirePasswordPolicy(password)) {
+      return res.status(400).json({
+        message: 'Password must be at least 6 characters and include one uppercase letter.',
+      });
+    }
+
+    if (!isEmailConfigured()) {
+      return res.status(500).json({
+        message: 'Email is not configured on the server. Configure SMTP to enable registration.',
+      });
+    }
+
     const existingUser = await User.findByEmail(email);
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
 
-    // Create new user
-    const user = await User.create({ name, email, password, role, roleId });
-    
-    // Generate JWT token
-    const token = jwt.sign(
-      { userId: user.id, email: user.email, role: user.role, roleId: user.roleId },
-      process.env.JWT_SECRET || 'fallback_secret',
-      { expiresIn: '24h' }
-    );
+    const code = generateCode();
+    const user = await User.create({
+      name,
+      email,
+      password,
+      role,
+      roleId,
+      emailVerified: false,
+      verificationCode: hashCode(code),
+      verificationExpires: expiresAt(CODE_TTL_MINUTES),
+    });
 
-    // sends final response back to client
+    await sendEmail({
+      to: email,
+      subject: 'Verify your StudyWeave account',
+      text: `Your verification code is ${code}. It expires in ${CODE_TTL_MINUTES} minutes.`,
+    });
+
     res.status(201).json({
-      message: 'User created successfully',
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        roleId: user.roleId,
-      }
+      message: 'Verification code sent to your email.',
+      requiresVerification: true,
+      email: user.email,
     });
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({ message: 'Server error during registration' });
+  }
+});
+
+// Request password reset (code)
+router.post('/request-password-reset', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required.' });
+    }
+    if (!isEmailConfigured()) {
+      return res.status(500).json({
+        message: 'Email is not configured on the server. Configure SMTP to reset passwords.',
+      });
+    }
+    const user = await User.findByEmail(email);
+    if (!user) {
+      return res
+        .status(200)
+        .json({ message: 'If an account exists for this email, a reset code was sent.' });
+    }
+
+    const code = generateCode();
+    await User.update(user.id, {
+      resetCode: hashCode(code),
+      resetExpires: expiresAt(CODE_TTL_MINUTES),
+    });
+
+    await sendEmail({
+      to: email,
+      subject: 'Reset your StudyWeave password',
+      text: `Your password reset code is ${code}. It expires in ${CODE_TTL_MINUTES} minutes.`,
+    });
+
+    res.json({ message: 'If an account exists for this email, a reset code was sent.' });
+  } catch (error) {
+    console.error('Request password reset error:', error);
+    res.status(500).json({ message: 'Server error while requesting reset' });
+  }
+});
+
+// Reset password with code
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { email, code, password } = req.body;
+    if (!email || !code || !password) {
+      return res.status(400).json({ message: 'Email, code, and new password are required.' });
+    }
+    if (!requirePasswordPolicy(password)) {
+      return res.status(400).json({
+        message: 'Password must be at least 6 characters and include one uppercase letter.',
+      });
+    }
+    const user = await User.findByEmail(email);
+    if (!user || !user.resetCode) {
+      return res.status(400).json({ message: 'Invalid reset request.' });
+    }
+    if (isExpired(user.resetExpires)) {
+      return res.status(400).json({ message: 'Reset code expired. Request a new one.' });
+    }
+    const hashed = hashCode(code);
+    if (hashed !== user.resetCode) {
+      return res.status(400).json({ message: 'Invalid reset code.' });
+    }
+
+    await User.update(user.id, {
+      password,
+      resetCode: null,
+      resetExpires: null,
+    });
+
+    res.json({ message: 'Password reset successful. You can now log in.' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ message: 'Server error while resetting password' });
+  }
+});
+
+// Verify email with code
+router.post('/verify-email', async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    if (!email || !code) {
+      return res.status(400).json({ message: 'Email and code are required.' });
+    }
+
+    const user = await User.findByEmail(email);
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid verification request.' });
+    }
+
+    if (user.emailVerified) {
+      const token = jwt.sign(
+        { userId: user.id, email: user.email, role: user.role, roleId: user.roleId },
+        process.env.JWT_SECRET || 'fallback_secret',
+        { expiresIn: '24h' },
+      );
+      return res.json({ message: 'Email already verified.', token, user: sanitizeUser(user) });
+    }
+
+    if (!user.verificationCode || isExpired(user.verificationExpires)) {
+      return res.status(400).json({ message: 'Verification code is expired. Request a new one.' });
+    }
+
+    const hashed = hashCode(code);
+    if (hashed !== user.verificationCode) {
+      return res.status(400).json({ message: 'Invalid verification code.' });
+    }
+
+    const updatedUser = await User.update(user.id, {
+      emailVerified: true,
+      verificationCode: null,
+      verificationExpires: null,
+    });
+
+    const token = jwt.sign(
+      { userId: updatedUser.id, email: updatedUser.email, role: updatedUser.role, roleId: updatedUser.roleId },
+      process.env.JWT_SECRET || 'fallback_secret',
+      { expiresIn: '24h' },
+    );
+
+    res.json({
+      message: 'Email verified successfully.',
+      token,
+      user: sanitizeUser(updatedUser),
+    });
+  } catch (error) {
+    console.error('Verify email error:', error);
+    res.status(500).json({ message: 'Server error during verification' });
+  }
+});
+
+// Resend verification code
+router.post('/resend-verification', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required.' });
+    }
+    if (!isEmailConfigured()) {
+      return res.status(500).json({
+        message: 'Email is not configured on the server. Configure SMTP to resend codes.',
+      });
+    }
+    const user = await User.findByEmail(email);
+    if (!user) {
+      return res.status(200).json({ message: 'If the account exists, a code was sent.' });
+    }
+    if (user.emailVerified) {
+      return res.status(200).json({ message: 'Email is already verified.' });
+    }
+    const code = generateCode();
+    await User.update(user.id, {
+      verificationCode: hashCode(code),
+      verificationExpires: expiresAt(CODE_TTL_MINUTES),
+    });
+    await sendEmail({
+      to: email,
+      subject: 'Your new StudyWeave verification code',
+      text: `Your verification code is ${code}. It expires in ${CODE_TTL_MINUTES} minutes.`,
+    });
+    res.json({ message: 'Verification code sent.' });
+  } catch (error) {
+    console.error('Resend verification error:', error);
+    res.status(500).json({ message: 'Server error while resending code' });
   }
 });
 
@@ -60,6 +262,14 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
+    if (!user.emailVerified) {
+      return res.status(403).json({
+        message: 'Email not verified. Please verify your email before logging in.',
+        requiresVerification: true,
+        email,
+      });
+    }
+
     // Generate JWT token
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role, roleId: user.roleId },
@@ -70,13 +280,7 @@ router.post('/login', async (req, res) => {
     res.json({
       message: 'Login successful',
       token,
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        roleId: user.roleId,
-      }
+      user: sanitizeUser(user),
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -89,6 +293,12 @@ router.put('/update', async (req, res) => {
   try {
     const { id, name, email, password, role, roleId } = req.body;
 
+    if (password && !requirePasswordPolicy(password)) {
+      return res.status(400).json({
+        message: 'Password must be at least 6 characters and include one uppercase letter.',
+      });
+    }
+
     const updatedUser = await User.update(id, { name, email, password, role, roleId });
     if (!updatedUser) {
       return res.status(404).json({ message: 'User not found' });
@@ -96,7 +306,7 @@ router.put('/update', async (req, res) => {
 
     res.json({
       message: 'User updated successfully',
-      user: updatedUser
+      user: sanitizeUser(updatedUser),
     });
   } catch (error) {
     console.error('Update error:', error);
