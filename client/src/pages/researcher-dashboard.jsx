@@ -130,6 +130,7 @@ export default function ResearcherDashboard() {
   const [studies, setStudies] = useState([]);
   const [isStudiesLoading, setIsStudiesLoading] = useState(false);
   const [studiesError, setStudiesError] = useState("");
+  const [, setNotifications] = useState([]);
   const [participantMatrix, setParticipantMatrix] = useState(null);
   const [participantError, setParticipantError] = useState("");
   const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
@@ -180,6 +181,36 @@ export default function ResearcherDashboard() {
     }
   }, [user?.id]);
 
+  const fetchNotifications = useCallback(async () => {
+    if (!authToken) {
+      return;
+    }
+    try {
+      const { data } = await api.get("/api/researcher/notifications", {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const list = data.notifications || [];
+      let filtered = list;
+      try {
+        const rawRead = window.localStorage.getItem("researcherNotificationsReadIds");
+        const readIds = new Set(JSON.parse(rawRead || "[]"));
+        filtered = list.filter((item) => !readIds.has(item.id));
+      } catch (parseError) {
+        filtered = list;
+      }
+      setNotifications(filtered);
+      try {
+        window.localStorage.setItem("researcherNotificationsCount", String(filtered.length));
+        window.localStorage.setItem("researcherNotificationsList", JSON.stringify(filtered));
+        window.dispatchEvent(new Event("storage"));
+      } catch (storageError) {
+        // Ignore storage write errors
+      }
+    } catch (error) {
+      console.error("Researcher notifications fetch failed", error);
+    }
+  }, [authToken]);
+
   useEffect(() => {
     const rawUser = localStorage.getItem("user");
     const token = localStorage.getItem("token");
@@ -200,10 +231,11 @@ export default function ResearcherDashboard() {
   }, [navigate]);
 
   useEffect(() => {
-    if (user?.role === "researcher") {
+    if (user?.role === "researcher" && authToken) {
       loadStudies();
+      fetchNotifications();
     }
-  }, [user, loadStudies]);
+  }, [user, authToken, loadStudies, fetchNotifications]);
 
   const selectedStudy = useMemo(() => {
     if (!monitoringStudyId) return null;

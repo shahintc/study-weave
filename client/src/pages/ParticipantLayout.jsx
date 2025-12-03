@@ -48,7 +48,7 @@ export default function ParticipantLayout() {
         if (Array.isArray(parsed)) {
           setNotifications(parsed);
         }
-      } catch (e) {
+      } catch {
         setNotifications([]);
       }
     };
@@ -99,6 +99,24 @@ export default function ParticipantLayout() {
 }
 
 function NotificationBell({ count = 0, notifications = [] }) {
+  const markRead = (id) => {
+    if (!id) return;
+    try {
+      const rawRead = window.localStorage.getItem("participantNotificationsReadIds");
+      const readIds = new Set(JSON.parse(rawRead || "[]"));
+      readIds.add(id);
+      window.localStorage.setItem("participantNotificationsReadIds", JSON.stringify([...readIds]));
+
+      const nextList = notifications.filter((n) => n.id !== id);
+      window.localStorage.setItem("participantNotificationsList", JSON.stringify(nextList));
+      window.localStorage.setItem("participantNotificationsCount", String(nextList.length));
+
+      window.dispatchEvent(new Event("storage"));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -123,15 +141,25 @@ function NotificationBell({ count = 0, notifications = [] }) {
             notifications.map((n) => (
               <DropdownMenuItem key={n.id} className="whitespace-normal text-sm">
                 <div className="flex flex-col gap-0.5">
-                  <span className="font-medium">
-                    {n.type === "warning"
-                      ? "⚠️ Last day"
-                      : n.type === "info"
-                      ? "📌 Reminder"
-                      : n.type === "assignment"
-                      ? "📥 New study"
-                      : "🔔"}
-                  </span>
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium">
+                      {n.type === "warning"
+                        ? "⚠ Last day"
+                        : n.type === "info"
+                        ? "ℹ Reminder"
+                        : n.type === "assignment"
+                        ? "📄 New study"
+                        : "Notification"}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => markRead(n.id)}
+                    >
+                      Mark read
+                    </Button>
+                  </div>
                   <span className="text-muted-foreground text-xs">{n.message}</span>
                   {n.studyId ? (
                     <span className="text-[11px] text-muted-foreground">Study #{n.studyId}</span>
@@ -168,4 +196,3 @@ function UserNav({ displayName = "Participant", onLogout }) {
     </DropdownMenu>
   );
 }
-

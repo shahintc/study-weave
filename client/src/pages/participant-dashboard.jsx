@@ -63,6 +63,12 @@ const getParticipationStatusMeta = (status) =>
     className: "border border-slate-200 bg-slate-50 text-slate-700",
   };
 
+const deriveProgressPercent = (status) => {
+  if (status === "completed") return 100;
+  if (status === "in_progress") return 50;
+  return 0;
+};
+
 const normalizeStudyId = (study) =>
   String(study?.studyId || study?.id || study?.studyParticipantId || "");
 
@@ -164,17 +170,28 @@ export default function ParticipantDashboard() {
       const { data } = await axios.get("/api/participant/assignments", {
         headers: { Authorization: `Bearer ${token}` },
       });
+      const rawNotifications = data.notifications || [];
+      let filteredNotifications = rawNotifications;
+      try {
+        const readRaw = window.localStorage.getItem("participantNotificationsReadIds");
+        const readIds = new Set(JSON.parse(readRaw || "[]"));
+        filteredNotifications = rawNotifications.filter((item) => !readIds.has(item.id));
+      } catch {
+        filteredNotifications = rawNotifications;
+      }
+
       setStudies(data.studies || []);
-      setNotifications(data.notifications || []);
+      setNotifications(filteredNotifications);
       try {
         window.localStorage.setItem(
           "participantNotificationsCount",
-          String((data.notifications || []).length),
+          String(filteredNotifications.length),
         );
         window.localStorage.setItem(
           "participantNotificationsList",
-          JSON.stringify(data.notifications || []),
+          JSON.stringify(filteredNotifications),
         );
+        window.dispatchEvent(new Event("storage"));
       } catch (e) {
         // ignore storage failures
       }
@@ -456,7 +473,7 @@ export default function ParticipantDashboard() {
               filteredStudies.map((study) => {
                 const cardStatus = deriveCardStatus(study, visitedStudies);
                 const statusMeta = getParticipationStatusMeta(cardStatus);
-                const progressPercent = clampPercent(study.progressPercent);
+            const progressPercent = deriveProgressPercent(cardStatus);
                 const competency = study.competency || {};
                 const nextModeLabel = study.nextAssignment?.modeLabel || null;
                 const artifactTotals = study.artifactProgress?.totals?.submitted || 0;

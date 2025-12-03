@@ -10,6 +10,7 @@ const {
   Evaluation,
   ArtifactAssessment,
   CompetencyAssignment,
+  CompetencyAssessment,
   ActionLog,
 } = require('../models');
 const authMiddleware = require('../middleware/auth');
@@ -69,6 +70,75 @@ router.get('/studies', async (req, res) => {
   } catch (error) {
     console.error('Researcher studies error', error);
     res.status(500).json({ message: 'Unable to load studies right now' });
+  }
+});
+
+router.get('/notifications', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || req.user.role !== 'researcher') {
+      return res.status(403).json({ message: 'Only researchers can view these notifications.' });
+    }
+
+    const enrollments = await StudyParticipant.findAll({
+      include: [
+        {
+          model: Study,
+          as: 'study',
+          attributes: ['id', 'title'],
+          where: { researcherId: req.user.id },
+        },
+        { model: User, as: 'participant', attributes: ['id', 'name'] },
+        {
+          model: CompetencyAssignment,
+          as: 'sourceAssignment',
+          attributes: ['id', 'status', 'decision', 'submittedAt', 'reviewedAt'],
+          required: false,
+        },
+      ],
+      order: [['updatedAt', 'DESC']],
+    });
+
+    const competencyAssignments = await CompetencyAssignment.findAll({
+      where: {
+        researcherId: req.user.id,
+        status: { [Op.in]: ['submitted', 'reviewed'] },
+      },
+      include: [
+        { model: User, as: 'participant', attributes: ['id', 'name'] },
+        { model: CompetencyAssessment, as: 'assessment', attributes: ['id', 'title'] },
+      ],
+      order: [['submittedAt', 'DESC']],
+    });
+
+    const studySubmissions = await ArtifactAssessment.findAll({
+      where: {
+        status: 'submitted',
+      },
+      include: [
+        {
+          model: Study,
+          as: 'study',
+          attributes: ['id', 'title', 'researcherId'],
+          where: { researcherId: req.user.id },
+        },
+        { model: StudyArtifact, as: 'studyArtifact', attributes: ['id', 'label'] },
+        {
+          model: StudyParticipant,
+          as: 'studyParticipant',
+          attributes: ['id', 'participantId'],
+          include: [{ model: User, as: 'participant', attributes: ['id', 'name'] }],
+          required: false,
+        },
+        { model: User, as: 'evaluator', attributes: ['id', 'name'] },
+      ],
+      order: [['createdAt', 'DESC']],
+    });
+
+    const notifications = buildResearcherNotifications(enrollments, competencyAssignments, studySubmissions);
+    return res.json({ notifications });
+  } catch (error) {
+    console.error('Researcher notifications fetch error', error);
+    return res.status(500).json({ message: 'Unable to load notifications right now.' });
   }
 });
 
@@ -535,6 +605,125 @@ function buildNextAssignmentPayload(participant, artifactLookup, defaultMode) {
     artifactLabel: artifact?.label || null,
     updatedAt: participant.updatedAt ? new Date(participant.updatedAt).toISOString() : null,
   };
+}
+
+function buildResearcherNotifications(enrollments = [], competencyAssignments = [], studySubmissions = []) {
+  const dedup = new Map();
+
+  const toIso = (value) => {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
+
+  enrollments.forEach((entry) => {
+    const plain = typeof entry.get === 'function' ? entry.get({ plain: true }) : entry;
+    const study = plain.study || {};
+    const participant = plain.participant || {};
+    const participantId = participant.id || plain.participantId || null;
+    const participantName = participant.name || (participantId ? `Participant ${participantId}` : 'Participant');
+    const studyId = study.id ? String(study.id) : null;
+    const studyTitle = study.title || 'Study';
+
+    if (plain.participationStatus === 'completed') {
+      const occurredAt = toIso(plain.completedAt) || toIso(plain.updatedAt) || toIso(new Date());
+      const id = `study-${studyId || 'unknown'}-participant-${participantId || 'unknown'}-study-completed`;
+      dedup.set(id, {
+        id,
+        type: 'study_complete',
+        message: `${participantName} completed the study "${studyTitle}".`,
+        studyId,
+        participantId: participantId ? String(participantId) : null,
+        participantName,
+        studyTitle,
+        occurredAt,
+      });
+    }
+
+    const assignment = plain.sourceAssignment;
+    if (assignment && (assignment.status === 'submitted' || assignment.status === 'reviewed')) {
+      const occurredAt =
+        toIso(assignment.reviewedAt) || toIso(assignment.submittedAt) || toIso(plain.updatedAt) || toIso(new Date());
+      const id = `study-${studyId || 'unknown'}-participant-${participantId || 'unknown'}-competency-${assignment.status}`;
+      const verb = assignment.status === 'reviewed' ? 'finished' : 'submitted';
+      dedup.set(id, {
+        id,
+        type: 'competency_complete',
+        message: `${participantName} ${verb} the competency for "${studyTitle}".`,
+        studyId,
+        participantId: participantId ? String(participantId) : null,
+        participantName,
+        studyTitle,
+        occurredAt,
+      });
+    }
+  });
+
+  competencyAssignments.forEach((assignmentInstance) => {
+    const assignment = typeof assignmentInstance.get === 'function' ? assignmentInstance.get({ plain: true }) : assignmentInstance;
+    const participant = assignment.participant || {};
+    const assessment = assignment.assessment || {};
+    const participantId = participant.id || assignment.participantId || null;
+    const participantName = participant.name || (participantId ? `Participant ${participantId}` : 'Participant');
+    const status = assignment.status;
+    const occurredAt =
+      toIso(assignment.reviewedAt) ||
+      toIso(assignment.submittedAt) ||
+      toIso(assignment.updatedAt) ||
+      toIso(new Date());
+
+    const id = `competency-${assignment.id}-${status}`;
+    if (!dedup.has(id)) {
+      const verb = status === 'reviewed' ? 'finished' : 'submitted';
+      dedup.set(id, {
+        id,
+        type: 'competency_complete',
+        message: `${participantName} ${verb} the competency "${assessment.title || 'Assessment'}".`,
+        studyId: null,
+        participantId: participantId ? String(participantId) : null,
+        participantName,
+        studyTitle: assessment.title || 'Competency',
+        occurredAt,
+      });
+    }
+  });
+
+  studySubmissions.forEach((submissionInstance) => {
+    const submission =
+      typeof submissionInstance.get === 'function' ? submissionInstance.get({ plain: true }) : submissionInstance;
+    const study = submission.study || {};
+    const participant =
+      submission.studyParticipant?.participant || submission.studyParticipant || submission.evaluator || {};
+    const participantId =
+      participant.id || submission.studyParticipant?.participantId || submission.evaluatorUserId || null;
+    const participantName =
+      participant.name || (participantId ? `Participant ${participantId}` : 'Participant');
+    const studyId = study.id ? String(study.id) : null;
+    const studyTitle = study.title || 'Study';
+    const artifactLabel =
+      submission.studyArtifact?.label || (submission.studyArtifactId ? `Artifact ${submission.studyArtifactId}` : null);
+    const occurredAt = toIso(submission.updatedAt) || toIso(submission.createdAt) || toIso(new Date());
+    const id = `study-submission-${submission.id}`;
+
+    if (!dedup.has(id)) {
+      dedup.set(id, {
+        id,
+        type: 'study_submission',
+        message: `${participantName} submitted their study work${artifactLabel ? ` for "${artifactLabel}"` : ''} in "${studyTitle}".`,
+        studyId,
+        participantId: participantId ? String(participantId) : null,
+        participantName,
+        studyTitle,
+        occurredAt,
+      });
+    }
+  });
+
+  return Array.from(dedup.values()).sort((a, b) => {
+    const aTime = a.occurredAt ? new Date(a.occurredAt).getTime() : 0;
+    const bTime = b.occurredAt ? new Date(b.occurredAt).getTime() : 0;
+    return bTime - aTime;
+  });
 }
 
 async function loadStudyCard(studyId) {

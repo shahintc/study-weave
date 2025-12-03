@@ -2,9 +2,11 @@ import React, { useEffect, useState } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { Bell } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -15,6 +17,8 @@ export default function ResearcherLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [user, setUser] = useState(null);
+  const [notificationCount, setNotificationCount] = useState(0);
+  const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -32,6 +36,28 @@ export default function ResearcherLayout() {
       navigate("/login");
     }
   }, [navigate]);
+
+  useEffect(() => {
+    const readNotifications = () => {
+      try {
+        const rawCount = window.localStorage.getItem("researcherNotificationsCount");
+        const parsedCount = Number(rawCount);
+        setNotificationCount(Number.isFinite(parsedCount) ? parsedCount : 0);
+
+        const rawList = window.localStorage.getItem("researcherNotificationsList");
+        const parsedList = JSON.parse(rawList || "[]");
+        setNotifications(Array.isArray(parsedList) ? parsedList : []);
+      } catch (error) {
+        setNotificationCount(0);
+        setNotifications([]);
+      }
+    };
+
+    readNotifications();
+    const handleStorage = () => readNotifications();
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem("token");
@@ -54,7 +80,10 @@ export default function ResearcherLayout() {
     <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Study Weave (Researcher)</h1>
-        <UserNav displayName={user?.name || "Researcher"} onLogout={handleLogout} />
+        <div className="flex items-center gap-3">
+          <NotificationBell count={notificationCount} notifications={notifications} />
+          <UserNav displayName={user?.name || "Researcher"} onLogout={handleLogout} />
+        </div>
       </header>
 
       <nav className="flex items-center gap-2 border-b pb-4">
@@ -76,6 +105,85 @@ export default function ResearcherLayout() {
 
       <Outlet />
     </div>
+  );
+}
+
+function NotificationBell({ count = 0, notifications = [] }) {
+  const markRead = (id) => {
+    if (!id) return;
+    try {
+      const rawRead = window.localStorage.getItem("researcherNotificationsReadIds");
+      const readIds = new Set(JSON.parse(rawRead || "[]"));
+      readIds.add(id);
+      window.localStorage.setItem("researcherNotificationsReadIds", JSON.stringify([...readIds]));
+
+      const nextList = notifications.filter((n) => n.id !== id);
+      window.localStorage.setItem("researcherNotificationsList", JSON.stringify(nextList));
+      window.localStorage.setItem("researcherNotificationsCount", String(nextList.length));
+
+      window.dispatchEvent(new Event("storage"));
+    } catch (error) {
+      // Ignore storage errors; UI will refresh on next fetch
+    }
+  };
+
+  const labelForType = (type) => {
+    switch (type) {
+      case "study_submission":
+        return "Study submission";
+      case "study_complete":
+        return "Study completed";
+      case "competency_complete":
+        return "Competency finished";
+      default:
+        return "Notification";
+    }
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" className="relative">
+          <Bell className="h-5 w-5" />
+          {count > 0 && (
+            <span className="absolute -top-1 -right-1 rounded-full bg-destructive px-1.5 text-[10px] font-semibold text-white">
+              {count}
+            </span>
+          )}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel>Notifications</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup className="max-h-80 overflow-auto">
+          {notifications.length === 0 ? (
+            <DropdownMenuItem className="text-sm text-muted-foreground">You're all caught up.</DropdownMenuItem>
+          ) : (
+            notifications.map((n) => (
+              <DropdownMenuItem key={n.id} className="whitespace-normal text-sm">
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-medium">{labelForType(n.type)}</span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => markRead(n.id)}
+                    >
+                      Mark read
+                    </Button>
+                  </div>
+                  <span className="text-xs text-muted-foreground">{n.message}</span>
+                  {n.studyTitle ? (
+                    <span className="text-[11px] text-muted-foreground">{n.studyTitle}</span>
+                  ) : null}
+                </div>
+              </DropdownMenuItem>
+            ))
+          )}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
