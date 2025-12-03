@@ -38,6 +38,32 @@ const User = sequelize.define(
       allowNull: false,
       defaultValue: 'participant',
     },
+    emailVerified: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'email_verified',
+    },
+    verificationCode: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'verification_code',
+    },
+    verificationExpires: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'verification_expires',
+    },
+    resetCode: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'reset_code',
+    },
+    resetExpires: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'reset_expires',
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,
