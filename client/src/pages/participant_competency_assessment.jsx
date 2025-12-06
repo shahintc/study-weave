@@ -125,44 +125,63 @@ const buildSectionsFromAssignment = (assignment) => {
   if (!questions.length) {
     return FALLBACK_SECTIONS;
   }
-  return [
-    {
-      id: "assessment",
-      title: assignment.title || "Assessment questions",
-      helper: assignment.notes || "Answer carefully. All questions are required.",
-      questions: questions.map((question, index) => {
-        const type =
-          question.type === "short_answer"
-            ? "text"
-            : question.type === "scale"
-              ? "scale"
-              : "choice";
-        const computedId = question.id != null ? String(question.id) : `question-${index + 1}`;
-        return {
-          id: computedId,
-          label: question.title || `Question ${index + 1}`,
-          helper: question.helper || "",
-          type,
-          typeLabel:
-            type === "text"
-              ? "Short answer"
-              : type === "scale"
-                ? "Rating"
-                : "Multiple choice",
-          options:
-            type === "choice"
-              ? (question.options || []).map((option, optionIndex) => ({
-                  value: String(option.value || option.text || `option-${optionIndex + 1}`),
-                  label: option.label || option.text || `Option ${optionIndex + 1}`,
-                }))
-              : [],
-          scale: question.scale,
-          textareaRows: question.textareaRows,
-          validation: question.validation || {},
-        };
-      }),
-    },
-  ];
+
+  const allQuestions = questions.map((question, index) => {
+    const type =
+      question.type === "short_answer"
+        ? "text"
+        : question.type === "scale"
+          ? "scale"
+          : "choice";
+    const computedId = question.id != null ? String(question.id) : `question-${index + 1}`;
+    return {
+      id: computedId,
+      label: question.title || `Question ${index + 1}`,
+      helper: question.helper || "",
+      type,
+      typeLabel:
+        type === "text"
+          ? "Short answer"
+          : type === "scale"
+            ? "Rating"
+            : "Multiple choice",
+      options:
+        type === "choice"
+          ? (question.options || []).map((option, optionIndex) => ({
+              value: String(option.value || option.text || `option-${optionIndex + 1}`),
+              label: option.label || option.text || `Option ${optionIndex + 1}`,
+            }))
+          : [],
+      scale: question.scale,
+      textareaRows: question.textareaRows,
+      validation: question.validation || {},
+    };
+  });
+
+  const mcQuestions = allQuestions.filter(q => q.type === 'choice' || q.type === 'scale');
+  const saQuestions = allQuestions.filter(q => q.type === 'text');
+
+  const sections = [];
+
+  if (mcQuestions.length > 0) {
+    sections.push({
+      id: "multiple-choice-section",
+      title: "Multiple Choice Questions",
+      helper: "Select the best option for each question.",
+      questions: mcQuestions,
+    });
+  }
+
+  if (saQuestions.length > 0) {
+    sections.push({
+      id: "short-answer-section",
+      title: "Short Answer Questions",
+      helper: "Provide a detailed response for each prompt.",
+      questions: saQuestions,
+    });
+  }
+
+  return sections;
 };
 
 const buildSchemaShapeFromSections = (sections) => {
@@ -323,8 +342,6 @@ export default function ParticipantCompetencyAssessment() {
       setIsSubmitting(false);
     }
   };
-
-  let questionNumber = 0;
 
   const renderQuestionInput = (question, field) => {
     if (question.type === "choice") {
@@ -561,10 +578,10 @@ export default function ParticipantCompetencyAssessment() {
                     <h2 className="text-lg font-semibold">{section.title}</h2>
                     <p className="text-sm text-muted-foreground">{section.helper}</p>
                   </div>
-                  <Separator />
+                  <Separator/>
                   <div className="space-y-6">
-                    {section.questions.map((question) => {
-                      questionNumber += 1;
+                    {section.questions.map((question, index) => {
+                      const questionNumber = index + 1;
                       return (
                         <FormField
                           key={question.id}

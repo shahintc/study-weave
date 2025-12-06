@@ -80,9 +80,14 @@ const defaultQuestion = {
   ],
 };
 
+// Default for short answer questions
+const defaultShortAnswerQuestion = {
+  title: "",
+  type: "short_answer",
+  options: [],
+};
 
 // header/nav removed
-
 
 // --- Dynamic Options Component ---
 // Separated component for managing options within a specific question
@@ -202,6 +207,12 @@ export default function AssessmentCreationPage() {
         name: "questions",
     });
     const status = form.watch("status");
+
+    const multipleChoiceQuestions = questionFields.map((field, index) => ({ field, index })).filter(({ field }) => field.type === 'multiple_choice');
+    const shortAnswerQuestions = questionFields.map((field, index) => ({ field, index })).filter(({ field }) => field.type === 'short_answer');
+    const questionIndexMap = useMemo(() => new Map(questionFields.map((field, index) => [field.id, index])), [questionFields]);
+
+
     const questionCount = form.watch("questions")?.length || 0;
 
     useEffect(() => {
@@ -512,91 +523,101 @@ export default function AssessmentCreationPage() {
                             <Card>
                                 <CardHeader><CardTitle>Questions editor</CardTitle></CardHeader>
                                 <CardContent className="space-y-6">
-
-                            {/* Dynamic Question List */}
-                            {questionFields.map((qField, qIndex) => (
-                                <div key={qField.id} className="border p-4 rounded-lg space-y-4 bg-gray-50/50">
-                                    <div className="flex justify-between items-center">
-                                        <h3 className="text-lg font-semibold text-gray-700">Question {qIndex + 1}</h3>
-                                        <Button
-                                            type="button"
-                                            variant="destructive"
-                                            size="sm"
-                                            onClick={() => removeQuestion(qIndex)}
-                                        >
-                                            <Trash2 className="w-4 h-4 mr-2" /> Delete Question
-                                        </Button>
+                                    {/* --- MULTIPLE CHOICE SECTION --- */}
+                                    <div className="space-y-4">
+                                        <h3 className="text-xl font-semibold text-gray-800 border-b pb-2">Multiple Choice Questions</h3>
+                                        {multipleChoiceQuestions.map(({ field: qField, index: qIndex }, displayIndex) => (
+                                            <div key={qField.id} className="border p-4 rounded-lg space-y-4 bg-gray-50/50">
+                                                <div className="flex justify-between items-center">
+                                                    <h4 className="text-lg font-semibold text-gray-700">Question {displayIndex + 1}</h4>
+                                                    <Button type="button" variant="destructive" size="sm" onClick={() => removeQuestion(qIndex)}>
+                                                        <Trash2 className="w-4 h-4 mr-2" /> Delete
+                                                    </Button>
+                                                </div>
+                                                <FormField
+                                                    control={form.control}
+                                                    name={`questions.${qIndex}.title`}
+                                                    render={({ field }) => (
+                                                        <FormItem>
+                                                            <FormLabel>Question Title</FormLabel>
+                                                            <FormControl><Textarea placeholder="What is Dependency Injection?" {...field} /></FormControl>
+                                                            <FormMessage />
+                                                        </FormItem>
+                                                    )}
+                                                />
+                                                <Separator />
+                                                <h5 className="font-semibold">Options (Select one or more 'Correct' options)</h5>
+                                                <OptionsFieldArray
+                                                    questionIndex={qIndex}
+                                                    control={form.control}
+                                                    errors={form.formState.errors}
+                                                />
+                                            </div>
+                                        ))}
+                                        <div className="flex justify-between items-center mt-4">
+                                            <Button type="button" onClick={() => appendQuestion(defaultQuestion)}>
+                                                <Plus className="w-4 h-4 mr-2" /> Add Multiple Choice Question
+                                            </Button>
+                                            {multipleChoiceQuestions.length === 0 && (
+                                                <p className="text-sm text-muted-foreground">No multiple choice questions yet.</p>
+                                            )}
+                                        </div>
                                     </div>
 
-                                    {/* Question Title */}
-                                    <FormField
-                                        control={form.control}
-                                        name={`questions.${qIndex}.title`}
-                                        render={({ field }) => (
-                                            <FormItem>
-                                                <FormLabel>Question Title</FormLabel>
-                                                <FormControl><Textarea placeholder="What is Dependency Injection?" {...field} /></FormControl>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                    <FormField
-                                        control={form.control}
-                                        name={`questions.${qIndex}.type`}
-                                        render={({ field }) => (
-                                            <FormItem className="w-full sm:w-1/2">
-                                                <FormLabel>Response type</FormLabel>
-                                                <Select value={field.value} onValueChange={field.onChange}>
-                                                    <FormControl>
-                                                        <SelectTrigger>
-                                                            <SelectValue placeholder="Select type" />
-                                                        </SelectTrigger>
-                                                    </FormControl>
-                                                    <SelectContent>
-                                                        <SelectItem value="multiple_choice">Multiple choice</SelectItem>
-                                                        <SelectItem value="short_answer">Short answer</SelectItem>
-                                                    </SelectContent>
-                                                </Select>
-                                                <FormMessage />
-                                            </FormItem>
-                                        )}
-                                    />
-                                    <p className="text-sm text-gray-500">
-                                        {form.watch(`questions.${qIndex}.type`) === "short_answer"
-                                            ? "Participants will write a free-form response; scoring is manual."
-                                            : "Set at least two options and mark the correct ones."}
-                                    </p>
-                                    <Separator />
-                                    {form.watch(`questions.${qIndex}.type`) === "multiple_choice" ? (
-                                        <>
-                                            <h4 className="font-semibold mt-4">Options (Select one or more 'Correct' options)</h4>
-                                            <OptionsFieldArray
-                                                questionIndex={qIndex}
-                                                control={form.control}
-                                                errors={form.formState.errors}
-                                            />
-                                        </>
-                                    ) : (
-                                        <div className="rounded-md bg-white p-3 text-sm text-muted-foreground">
-                                            Participants will respond with a short paragraph. Encourage them to provide detailed reasoning.
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
+                                    <Separator className="my-8" />
 
-                            {/* Question Actions */}
-                            <div className="flex flex-col sm:flex-row justify-between mt-6 space-y-3 sm:space-y-0">
-                                <div className="space-x-2">
-                                    <Button type="button" onClick={() => appendQuestion(defaultQuestion)}>
-                                        <Plus className="w-4 h-4 mr-2" /> Add New Question
-                                    </Button>
+                                    {/* --- SHORT ANSWER SECTION --- */}
+                                    <div className="space-y-4">
+                                        <h3 className="text-xl font-semibold text-gray-800 border-b pb-2">Short Answer Questions</h3>
+                                        {shortAnswerQuestions.map(({ field: qField, index: qIndex }, displayIndex) => (
+                                            <div key={qField.id} className="border p-4 rounded-lg space-y-4 bg-gray-50/50">
+                                                <div className="flex justify-between items-center">
+                                                    <h4 className="text-lg font-semibold text-gray-700">Question {displayIndex + 1}</h4>
+                                                    <Button type="button" variant="destructive" size="sm" onClick={() => removeQuestion(qIndex)}>
+                                                        <Trash2 className="w-4 h-4 mr-2" /> Delete
+                                                    </Button>
+                                                </div>
+                                                <FormField
+                                                    control={form.control}
+                                                    name={`questions.${qIndex}.title`}
+                                                    render={({ field }) => (
+                                                        <FormItem>
+                                                            <FormLabel>Question Prompt</FormLabel>
+                                                            <FormControl><Textarea placeholder="Describe a situation where you would use a Singleton pattern." {...field} /></FormControl>
+                                                            <FormMessage />
+                                                        </FormItem>
+                                                    )}
+                                                />
+                                                <div className="rounded-md bg-white p-3 text-sm text-muted-foreground">
+                                                    Participants will respond with a short paragraph. Scoring for these questions is manual.
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div className="flex justify-between items-center mt-4">
+                                            <Button type="button" onClick={() => appendQuestion(defaultShortAnswerQuestion)}>
+                                                <Plus className="w-4 h-4 mr-2" /> Add Short Answer Question
+                                            </Button>
+                                            {shortAnswerQuestions.length === 0 && (
+                                                <p className="text-sm text-muted-foreground">No short answer questions yet.</p>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <Separator className="my-8" />
+
+                                    {/* --- GLOBAL ACTIONS --- */}
+                                    <div className="flex flex-col sm:flex-row justify-between mt-6 space-y-3 sm:space-y-0">
+                                        <p className="text-sm text-muted-foreground">
+                                            You can also import a question bank or generate questions with AI.
+                                        </p>
+                                        <div className="flex gap-2">
                                     <Button type="button" variant="outline" onClick={handleImportQuestions}>
                                         <Upload className="w-4 h-4 mr-2" /> Import Questions
                                     </Button>
-                                </div>
                                 <Button type="button" variant="secondary" onClick={handleGenerateAI}>
                                     <Zap className="w-4 h-4 mr-2" /> Generate with AI
                                 </Button>
+                                        </div>
                             </div>
 
                         </CardContent>

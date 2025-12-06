@@ -462,17 +462,56 @@ router.get('/assessments/:id/report', async (req, res) => {
     const totalApproved = assignments.filter((a) => a.decision === 'approved').length;
     const acceptanceRate = totalReviewed > 0 ? ((totalApproved / totalReviewed) * 100).toFixed(1) : 0;
 
+    const mcQuestions = (assessment.questions || []).filter(q => q.type === 'multiple_choice');
+    const saQuestions = (assessment.questions || []).filter(q => q.type === 'short_answer');
+
+    // --- Calculate new metrics ---
+    let totalCorrectMcqAnswers = 0;
+    const questionPerformance = mcQuestions.map(q => ({
+      id: q.id,
+      title: q.title,
+      correct: 0,
+      total: 0,
+    }));
+    const questionPerfMap = new Map(questionPerformance.map(q => [q.id, q]));
+
+    if (totalReviewed > 0) {
+      assignments.forEach(assignment => {
+        mcQuestions.forEach(q => {
+          const correctOption = q.options.find(opt => opt.isCorrect);
+          const participantResponse = assignment.responses?.[q.id];
+          const perf = questionPerfMap.get(q.id);
+          if (perf) {
+            perf.total++;
+            if (correctOption && participantResponse === correctOption.text) {
+              perf.correct++;
+              totalCorrectMcqAnswers++;
+            }
+          }
+        });
+      });
+    }
+
+    const totalPossibleMcqAnswers = mcQuestions.length * totalReviewed;
+    const overallMcqPerformance = totalPossibleMcqAnswers > 0 ? ((totalCorrectMcqAnswers / totalPossibleMcqAnswers) * 100).toFixed(1) : 0;
+
     const reportData = {
       assessmentTitle: assessment.title,
-      passingThreshold: assessment.criteria?.passingThreshold,
-      acceptanceRate,
-      totalReviewed,
       submissions: assignments.map((a) => ({
         submissionId: String(a.id),
         status: a.decision,
         comments: a.reviewerNotes || 'No comments provided.',
         submittedAt: a.submittedAt,
       })),
+    };
+    
+    const summaryData = {
+      passingThreshold: assessment.criteria?.passingThreshold,
+      acceptanceRate,
+      totalReviewed,
+      totalApproved,
+      overallMcqPerformance,
+      questionPerformance: Array.from(questionPerfMap.values()),
     };
 
     const safeTitle = assessment.title.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);
@@ -487,15 +526,29 @@ router.get('/assessments/:id/report', async (req, res) => {
       csvStream.pipe(res);
 
       // Write metadata rows
-      csvStream.write(['Assessment Title', reportData.assessmentTitle]);
+      csvStream.write(['Report for Assessment', reportData.assessmentTitle]);
       csvStream.write(['Generated On', new Date().toLocaleDateString()]);
+      csvStream.write([]); // Blank line
+      csvStream.write(['Overall Performance Summary']);
       csvStream.write([
         'Overall Acceptance Rate',
-        `${reportData.acceptanceRate}% (${totalApproved}/${totalReviewed} approved)`,
+        `${summaryData.acceptanceRate}% (${summaryData.totalApproved}/${summaryData.totalReviewed} approved)`,
       ]);
+      csvStream.write(['Multiple Choice Performance', `${summaryData.overallMcqPerformance}% correct`]);
+      csvStream.write(['Total MC Questions', mcQuestions.length]);
+      csvStream.write(['Total Short Answer Questions', saQuestions.length]);
       csvStream.write([]); // Blank line
 
-      // Write headers for data
+      // Write Question-by-Question Performance
+      csvStream.write(['Question-by-Question Performance (Multiple Choice)']);
+      csvStream.write(['Question Title', 'Solve Rate', 'Correct / Total']);
+      summaryData.questionPerformance.forEach(q => {
+        const solveRate = q.total > 0 ? `${((q.correct / q.total) * 100).toFixed(1)}%` : 'N/A';
+        csvStream.write([q.title, solveRate, `${q.correct} / ${q.total}`]);
+      });
+      csvStream.write([]); // Blank line
+
+      // Write headers for individual submission data
       csvStream.write(['Submission ID', 'Acceptance Status', 'Reviewer Notes', 'Submitted At']);
 
       // Write submission data
@@ -559,13 +612,31 @@ router.get('/assessments/:id/report', async (req, res) => {
         doc.strokeColor(colors.border).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
         doc.moveDown(0.5);
         doc
-          .fontSize(11)
+          .fontSize(10)
           .font('Helvetica')
           .fillColor(colors.text)
-          .text(
-            `Overall Acceptance Rate: ${reportData.acceptanceRate}% (${totalApproved} of ${totalReviewed} reviewed submissions)`,
-          );
+          .text(`Acceptance Rate: `, { continued: true })
+          .font('Helvetica-Bold').text(`${summaryData.acceptanceRate}% `, { continued: true })
+          .font('Helvetica').text(`(${summaryData.totalApproved} of ${summaryData.totalReviewed} approved)`);
+        
+        doc.text(`MCQ Performance: `, { continued: true })
+          .font('Helvetica-Bold').text(`${summaryData.overallMcqPerformance}% `, { continued: true })
+          .font('Helvetica').text(`(${totalCorrectMcqAnswers} of ${totalPossibleMcqAnswers} correct answers)`);
+
+        doc.text(`Question Count: `, { continued: true })
+          .font('Helvetica-Bold').text(`${mcQuestions.length} `, { continued: true })
+          .font('Helvetica').text(`Multiple Choice, `, { continued: true })
+          .font('Helvetica-Bold').text(`${saQuestions.length} `, { continued: true })
+          .font('Helvetica').text(`Short Answer`);
+
         doc.moveDown(2);
+      };
+
+      const checkPageBreak = (threshold = 700) => {
+        if (doc.y > threshold) {
+          doc.addPage();
+          generateHeader();
+        }
       };
 
       const generateTable = () => {
@@ -612,10 +683,66 @@ router.get('/assessments/:id/report', async (req, res) => {
         });
       };
 
+      const generateQuestionPerformanceTable = () => {
+        doc.fontSize(12).font('Helvetica-Bold').text('Question Performance (Multiple Choice)');
+        doc.moveDown(0.5);
+
+        const table = {
+          headers: ['#', 'Question', 'Solve Rate', 'Correct / Total'],
+          rows: summaryData.questionPerformance.map((q, index) => {
+            const solveRate = q.total > 0 ? `${((q.correct / q.total) * 100).toFixed(1)}%` : 'N/A';
+            return [index + 1, q.title, solveRate, `${q.correct} / ${q.total}`];
+          }),
+          columnWidths: [30, 290, 80, 100],
+          columnAligns: ['left', 'left', 'right', 'right'],
+        };
+
+        let tableTop = doc.y;
+        const headerHeight = 25;
+
+        // Draw header
+        doc.rect(50, tableTop, 500, headerHeight).fill(colors.headerBg);
+        doc.fillColor(colors.text).font('Helvetica-Bold').fontSize(10);
+        let currentX = 50;
+        table.headers.forEach((header, i) => {
+          doc.text(header, currentX + 10, tableTop + 8, { width: table.columnWidths[i] - 20, align: table.columnAligns[i] });
+          currentX += table.columnWidths[i];
+        });
+
+        let currentY = tableTop + headerHeight;
+
+        // Draw rows
+        doc.fillColor(colors.text).font('Helvetica').fontSize(9);
+        table.rows.forEach((row, i) => {
+          // Calculate dynamic row height based on the tallest cell (the question title)
+          const questionText = String(row[1]);
+          const cellPadding = 16; // 8px top + 8px bottom
+          const rowHeight = doc.heightOfString(questionText, { width: table.columnWidths[1] - 20 }) + cellPadding;
+
+          // Check for page break before drawing the row
+          checkPageBreak(doc.page.height - doc.page.margins.bottom - rowHeight);
+
+          // Draw row content
+          currentX = 50;
+          row.forEach((cell, j) => {
+            doc.text(String(cell), currentX + 10, currentY + 8, { width: table.columnWidths[j] - 20, align: table.columnAligns[j] });
+            currentX += table.columnWidths[j];
+          });
+
+          // Draw bottom border for the row
+          doc.strokeColor(colors.border).moveTo(50, currentY + rowHeight).lineTo(550, currentY + rowHeight).stroke();
+          currentY += rowHeight;
+        });
+        doc.y = currentY; // Set the document's Y position to the end of the table
+        doc.moveDown(2);
+      };
+
       // --- Build the Document ---
       generateHeader();
       generateTitle();
       generateSummary();
+      generateQuestionPerformanceTable();
+      checkPageBreak(doc.page.height - doc.page.margins.bottom - 100); // Ensure space for the next table header
       generateTable();
 
       doc.end();
@@ -678,9 +805,14 @@ router.post('/assessments/import', upload.single('questionsFile'), (req, res) =>
 
         if (type === 'question') {
           if (currentQuestion) {
-            // Final validation for the previous question before adding it
-            if (currentQuestion.options.length > 0 && !currentQuestion.options.some(o => o.isCorrect)) {
-              errors.push({ row: currentQuestion._sourceRow, message: `Question "${currentQuestion.title.slice(0, 30)}..." has no correct option marked.` });
+            // A question with no options is a short answer question
+            if (currentQuestion.options.length === 0) {
+              currentQuestion.type = 'short_answer';
+            } else {
+              // Final validation for the previous multiple-choice question before adding it
+              if (!currentQuestion.options.some(o => o.isCorrect)) {
+                errors.push({ row: currentQuestion._sourceRow, message: `Question "${currentQuestion.title.slice(0, 30)}..." has no correct option marked.` });
+              }
             }
             questions.push(currentQuestion);
           }
@@ -698,20 +830,19 @@ router.post('/assessments/import', upload.single('questionsFile'), (req, res) =>
       })
       .on('end', (rowCount) => {
         if (currentQuestion) {
-          // Final validation for the very last question in the file
-          if (currentQuestion.options.length > 0 && !currentQuestion.options.some(o => o.isCorrect)) {
-            errors.push({ row: currentQuestion._sourceRow, message: `Question "${currentQuestion.title.slice(0, 30)}..." has no correct option marked.` });
+          // A question with no options is a short answer question
+          if (currentQuestion.options.length === 0) {
+            currentQuestion.type = 'short_answer';
+          } else {
+            // Final validation for the very last multiple-choice question in the file
+            if (!currentQuestion.options.some(o => o.isCorrect)) {
+              errors.push({ row: currentQuestion._sourceRow, message: `Question "${currentQuestion.title.slice(0, 30)}..." has no correct option marked.` });
+            }
           }
           questions.push(currentQuestion);
         }
 
-        questions.forEach((q) => {
-          // A question with no options is a short answer question
-          if (q.options.length === 0) {
-            q.type = 'short_answer';
-          }
-          delete q._sourceRow; // Clean up helper property
-        });
+        questions.forEach(q => delete q._sourceRow); // Clean up helper property
 
         console.log(`Parsed ${rowCount} rows. Created ${questions.length} questions with ${errors.length} errors.`);
         resolve({ questions, errors });
