@@ -130,12 +130,14 @@ router.get('/assignments', async (req, res) => {
       const status = plain.status || 'pending';
 
       const isLocked = status === 'submitted' || status === 'reviewed';
-      const statusChip =
-        isLocked
-          ? 'Submitted'
-          : status === 'in_progress'
-            ? 'In progress'
-            : 'Awaiting submission';
+      let statusChip = 'Awaiting submission';
+      if (status === 'in_progress') {
+        statusChip = 'In progress';
+      } else if (status === 'submitted') {
+        statusChip = 'Submitted';
+      } else if (status === 'reviewed') {
+        statusChip = 'Reviewed';
+      }
 
       return {
         id: String(plain.id),
@@ -158,6 +160,10 @@ router.get('/assignments', async (req, res) => {
         instructions: instructionList,
         resources,
         assignedAt: plain.createdAt,
+        submittedAt: plain.submittedAt,
+        reviewedAt: plain.reviewedAt,
+        reviewerNotes: plain.reviewerNotes,
+        responses: plain.responses,
         questions: assessment.questions || [],
       };
     });

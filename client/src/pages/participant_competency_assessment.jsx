@@ -1,6 +1,6 @@
 // src/pages/ParticipantCompetencyAssessment.jsx
 
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -31,6 +31,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -40,6 +41,14 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
+import { Timer, CheckCircle, Save, Expand, ChevronsRight, Eye } from "lucide-react";
+import { AssessmentPreviewModal } from "./AssessmentPreviewModal";
+
+const formatTime = (seconds) => {
+  const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const secs = (seconds % 60).toString().padStart(2, '0');
+  return `${mins}:${secs}`;
+};
 
 const FALLBACK_SECTIONS = [
   {
@@ -211,16 +220,42 @@ export default function ParticipantCompetencyAssessment() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [assignments, setAssignments] = useState([]);
-  const [activeAssignmentId, setActiveAssignmentId] = useState(null);
+  const [activeAssignmentId, setActiveAssignmentId] = useState(null); // Will be null initially
   const [isAssignmentsLoading, setIsAssignmentsLoading] = useState(false);
   const [assignmentsError, setAssignmentsError] = useState("");
+  const [assessmentState, setAssessmentState] = useState("instructions"); // instructions, in_progress
+  const [startConfirmOpen, setStartConfirmOpen] = useState(false);
+
+  // Timer state
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const timerIntervalRef = useRef(null);
+  const startTimeRef = useRef(null);
+  const [pendingStartAssignmentId, setPendingStartAssignmentId] = useState(null);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
+  const [isFocusMode, setIsFocusMode] = useState(false);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [lastSaved, setLastSaved] = useState(null);
+  const questionRefs = useRef({});
+  const [previewAssignment, setPreviewAssignment] = useState(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
   const selectedAssignment = useMemo(() => {
     if (!assignments.length) {
       return null;
     }
-    return assignments.find((assignment) => assignment.id === activeAssignmentId) || assignments[0];
+    return assignments.find((assignment) => assignment.id === activeAssignmentId) || null;
   }, [assignments, activeAssignmentId]);
+  
+  const { activeAssignments, completedAssignments } = useMemo(() => {
+    const active = assignments.filter(a => !a.isLocked);
+    const completed = assignments.filter(a => a.isLocked);
+    return { activeAssignments: active, completedAssignments: completed };
+  }, [assignments]);
+  const durationInSeconds = useMemo(() => {
+    if (!selectedAssignment?.estimatedTime) return null;
+    const minutes = parseInt(selectedAssignment.estimatedTime, 10);
+    return Number.isFinite(minutes) ? minutes * 60 : null;
+  }, [selectedAssignment]);
 
   const questionSections = useMemo(
     () => buildSectionsFromAssignment(selectedAssignment),
@@ -245,6 +280,77 @@ export default function ParticipantCompetencyAssessment() {
   useEffect(() => {
     form.reset(defaultAnswers);
   }, [defaultAnswers, form]);
+
+  // --- Timer Logic ---
+  const startTimer = () => {
+    startTimeRef.current = Date.now();
+    setElapsedSeconds(0);
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    timerIntervalRef.current = setInterval(() => {
+      if (startTimeRef.current) {
+        setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }
+    }, 1000);
+  };
+
+  const stopTimer = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    const endTime = Date.now();
+    return startTimeRef.current ? Math.floor((endTime - startTimeRef.current) / 1000) : 0;
+  };
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, []);
+
+  // Warn user before leaving if assessment is in progress
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (assessmentState === 'in_progress') {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [assessmentState]);
+
+  // Function to save a draft
+  const handleSaveDraft = async () => {
+    setIsSavingDraft(true);
+    setLastSaved(null);
+    try {
+      // This is a mock save. In a real app, you'd send `form.getValues()` to the backend.
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      setLastSaved(new Date());
+    } catch (error) {
+      console.error("Draft saving failed", error);
+      // You could show an error toast here
+    } finally {
+      setIsSavingDraft(false);
+    }
+  };
+
+  // Scroll to question
+  const scrollToQuestion = (questionId) => {
+    const element = questionRefs.current[questionId];
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Highlight the question briefly
+      element.classList.add('ring-2', 'ring-primary', 'ring-offset-2', 'transition-shadow', 'duration-300');
+      setTimeout(() => element.classList.remove('ring-2', 'ring-primary', 'ring-offset-2'), 2000);
+    }
+  };
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -276,7 +382,8 @@ export default function ParticipantCompetencyAssessment() {
       });
       const payload = data.assignments || [];
       setAssignments(payload);
-      setActiveAssignmentId(payload[0]?.id ?? null);
+      // Do not set an active assignment initially
+      setAssessmentState("instructions"); // Reset state when fetching new assignments
     } catch (error) {
       console.error("Failed to load assignments", error);
       setAssignmentsError(error.response?.data?.message || "Unable to load assignments right now");
@@ -321,8 +428,10 @@ export default function ParticipantCompetencyAssessment() {
         setIsSubmitting(false);
         return;
       }
+      const timeTakenSeconds = stopTimer();
       const payload = {
         responses: values,
+        timeTakenSeconds,
       };
       console.log("Submitting values:", payload);
 
@@ -330,6 +439,7 @@ export default function ParticipantCompetencyAssessment() {
 
       alert("Assessment submitted successfully!");
       setConfirmOpen(false);
+      setAssessmentState("submitted");
       fetchAssignments(); // Refetch assignments to update the UI
     } catch (error) {
       console.error("Submission failed:", error);
@@ -338,6 +448,7 @@ export default function ParticipantCompetencyAssessment() {
       } else {
         alert("Submission failed. Please try again.");
       }
+      startTimer(); // Resume timer if submission fails
     } finally {
       setIsSubmitting(false);
     }
@@ -438,49 +549,118 @@ export default function ParticipantCompetencyAssessment() {
     overview && (overview.isLocked || ['submitted', 'reviewed'].includes((overview.status || '').toLowerCase()))
   );
 
-  return (
-    <div className="p-6 md:p-10 max-w-5xl mx-auto space-y-8">
-      <Card>
-        <CardHeader>
-          <CardTitle>My competency assignments</CardTitle>
-          <CardDescription>Pick a quiz to review its instructions and submit your responses.</CardDescription>
-          {assignmentsError ? (
-            <p className="text-xs text-destructive">{assignmentsError}</p>
-          ) : null}
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {assignments.map((assignment) => {
-            const isActive = assignment.id === overview.id;
-            return (
-              <div
-                key={assignment.id}
-                className={`flex flex-col gap-2 rounded-md border p-4 text-sm md:flex-row md:items-center md:justify-between ${
-                  isActive ? "border-primary bg-primary/5" : ""
-                }`}
-              >
-                <div>
-                  <p className="font-medium text-foreground">{assignment.title}</p>
-                  <p className="text-xs text-muted-foreground">{assignment.studyTitle}</p>
-                </div>
-                <div className="text-xs text-muted-foreground md:text-right">
-                  <p>Researcher: {assignment.reviewer}</p>
-                  <p>Due {assignment.dueAt}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={assignment.statusChip === "Awaiting submission" ? "secondary" : "outline"}>
-                    {assignment.statusChip}
-                  </Badge>
-                  <Button size="sm" variant={isActive ? "default" : "outline"} onClick={() => setActiveAssignmentId(assignment.id)}>
-                    {isActive ? "Viewing" : "Open"}
-                  </Button>
-                </div>
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
+  const handleOpenDetails = (assignmentId) => {
+    if (assessmentState === 'in_progress' && assignmentId !== activeAssignmentId) {
+      setLeaveConfirmOpen(true);
+      // We don't proceed with opening the new one until confirmed.
+      // A more robust solution might store the target and proceed on confirm.
+      return;
+    }
+    setActiveAssignmentId(assignmentId);
+    setAssessmentState('instructions');
+  };
 
-      <Card>
+  const handleOpenStartConfirmation = (assignmentId) => {
+    setPendingStartAssignmentId(assignmentId);
+    setStartConfirmOpen(true);
+  };
+
+  const handleStartAssessment = () => {
+    setActiveAssignmentId(pendingStartAssignmentId);
+    setStartConfirmOpen(false);
+    setAssessmentState("in_progress");
+    startTimer();
+    setPendingStartAssignmentId(null);
+  };
+
+  const handleOpenPreview = (assignment) => {
+    setPreviewAssignment(assignment);
+    setIsPreviewOpen(true);
+  };
+
+  return (
+    <div className={`p-6 md:p-10 mx-auto space-y-8 ${isFocusMode || assessmentState === 'in_progress' ? 'max-w-full px-4' : 'max-w-5xl'}`}>
+      {!isFocusMode && assessmentState !== 'in_progress' && (
+        <Card>
+          <CardHeader>
+            <CardTitle>My Competency Assignments</CardTitle>
+            <CardDescription>Select an active assignment to begin or review a completed one.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Tabs
+              defaultValue="active"
+              onValueChange={(tab) => {
+                if (tab === 'completed') {
+                  setActiveAssignmentId(null);
+                }
+              }}>
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="active">Active</TabsTrigger>
+                <TabsTrigger value="completed">Completed</TabsTrigger>
+              </TabsList>
+              <TabsContent value="active" className="pt-4 space-y-3">
+                {activeAssignments.map((assignment) => {
+                  const isActive = assignment.id === selectedAssignment?.id;
+                  return (
+                    <div
+                      key={assignment.id}
+                      className={`grid grid-cols-1 md:grid-cols-[2fr,1fr,auto] gap-4 items-center rounded-md border p-4 text-sm transition-colors ${activeAssignmentId === assignment.id ? "border-primary bg-primary/5" : ""}`}
+                    >
+                      <div>
+                        <p className="font-medium text-foreground">{assignment.title}</p>
+                        <p className="text-xs text-muted-foreground">{assignment.studyTitle}</p>
+                      </div>
+                      <div className="text-xs text-muted-foreground md:text-center">
+                        <p>Researcher: {assignment.reviewer}</p>
+                        <p>Due {assignment.dueAt}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant={assignment.statusChip === "Awaiting submission" ? "secondary" : "outline"}>
+                          {assignment.statusChip}
+                        </Badge>
+                        {!assignment.isLocked && assessmentState !== 'in_progress' && (
+                          <Button size="sm" variant="outline" onClick={() => handleOpenDetails(assignment.id)}>
+                            Open
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </TabsContent>
+              <TabsContent value="completed" className="pt-4 space-y-3">
+                {completedAssignments.map((assignment) => (
+                  <div
+                    key={assignment.id}
+                    className="grid grid-cols-1 md:grid-cols-[2fr,1fr,auto] gap-4 items-center rounded-md border p-4 text-sm transition-colors"
+                  >
+                    <div>
+                      <p className="font-medium text-foreground">{assignment.title}</p>
+                      <p className="text-xs text-muted-foreground">{assignment.studyTitle}</p>
+                    </div>
+                    <div className="text-xs text-muted-foreground md:text-center">
+                      <p>Submitted on {new Date(assignment.submittedAt).toLocaleDateString()}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={assignment.statusChip === "Reviewed" ? "default" : "outline"}>
+                        {assignment.statusChip}
+                      </Badge>
+                      <Button size="sm" variant="outline" onClick={() => handleOpenPreview(assignment)}>
+                        <Eye className="h-4 w-4 mr-2" />
+                        View
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+      )}
+
+      {activeAssignmentId && selectedAssignment && !isFocusMode && !isAssessmentLocked && (assessmentState === 'instructions' || assessmentState === 'in_progress') && (
+      <>
+      <Card className="bg-muted/30">
         <CardHeader className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -489,66 +669,54 @@ export default function ParticipantCompetencyAssessment() {
             </div>
             <Badge variant="outline">{overview.statusLabel}</Badge>
           </div>
-          <p className="text-sm text-muted-foreground">{overview.notes}</p>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-3">
-          <div>
-            <p className="text-xs text-muted-foreground uppercase">Due</p>
-            <p className="text-base font-medium">{overview.dueAt}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground uppercase">Estimated time</p>
-            <p className="text-base font-medium">{overview.estimatedTime}</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground uppercase">Reviewer</p>
-            <p className="text-base font-medium">{overview.reviewer}</p>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Instructions & resources</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <ul className="list-disc space-y-2 pl-5 text-sm text-muted-foreground">
-              {(overview.instructions || []).map((instruction) => (
-                <li key={instruction}>{instruction}</li>
-              ))}
-            </ul>
-            <Separator />
-            <div className="flex flex-wrap gap-3">
-              {(overview.resources || []).map((resource) => (
-                <Button key={resource.id} type="button" variant="outline" size="sm">
-                  {resource.label}
-                </Button>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Assignment progress</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
+        <CardContent>
+          <Tabs defaultValue="overview">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="instructions">Instructions</TabsTrigger>
+              <TabsTrigger value="progress">Progress</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="pt-4">
+              <p className="text-sm text-muted-foreground mb-4">{overview.notes}</p>
+              <div className="grid gap-4 md:grid-cols-3 text-sm">
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase">Due</p>
+                  <p className="font-medium">{overview.dueAt}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase">Estimated time</p>
+                  <p className="font-medium">{overview.estimatedTime}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground uppercase">Reviewer</p>
+                  <p className="font-medium">{overview.reviewer}</p>
+                </div>
+              </div>
+            </TabsContent>
+            <TabsContent value="instructions" className="pt-4">
+              <ul className="list-disc space-y-2 pl-5 text-sm text-muted-foreground">
+                {(overview.instructions || []).map((instruction, index) => (
+                  <li key={index}>{instruction}</li>
+                ))}
+              </ul>
+              {(overview.resources || []).length > 0 && <Separator className="my-4" />}
+              <div className="flex flex-wrap gap-3">
+                {(overview.resources || []).map((resource) => (
+                  <Button key={resource.id} type="button" variant="outline" size="sm">
+                    {resource.label}
+                  </Button>
+                ))}
+              </div>
+            </TabsContent>
+            <TabsContent value="progress" className="pt-4">
               <div className="flex items-center justify-between text-sm text-muted-foreground">
-                <span>
-                  {answeredCount}/{totalQuestions} answered
-                </span>
+                <span>{answeredCount}/{totalQuestions} answered</span>
                 <span>{completionPercent}%</span>
               </div>
               <Progress value={completionPercent} className="mt-2" />
-            </div>
-            <Separator />
-            <div className="space-y-2 text-sm text-muted-foreground">
-              <p>
-                <span className="font-medium text-foreground">Total score:</span>{" "}
-                {overview.totalScore ?? 0} pts
-              </p>
+              <Separator className="my-4" />
+              <div className="space-y-2 text-sm text-muted-foreground">
               <p>
                 <span className="font-medium text-foreground">Reviewer:</span>{" "}
                 {overview.reviewer || "Research team"}
@@ -557,82 +725,157 @@ export default function ParticipantCompetencyAssessment() {
                 <span className="font-medium text-foreground">Need help?</span> Email
                 support@studyweave.ai
               </p>
-            </div>
-          </CardContent>
+              </div>
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
+
+      </>)}
+      {activeAssignmentId && selectedAssignment && !isFocusMode && assessmentState === 'instructions' && !isAssessmentLocked && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Ready to begin?</CardTitle>
+            <CardDescription>Once you start, a timer will begin. Please complete the assessment in one sitting.</CardDescription>
+          </CardHeader>
+          <CardFooter>
+            <Button onClick={() => handleOpenStartConfirmation(activeAssignmentId)}>Start Assessment</Button>
+          </CardFooter>
         </Card>
-      </div>
-
-      <Form {...form}>
-        <form onSubmit={(event) => event.preventDefault()}>
-          <Card>
-            <CardHeader>
-              <CardTitle>Assessment form</CardTitle>
-              <p className="text-sm text-muted-foreground">
-                Answer each section carefully. All fields are required.
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-8">
-              {questionSections.map((section) => (
-                <section key={section.id} className="space-y-4">
-                  <div>
-                    <h2 className="text-lg font-semibold">{section.title}</h2>
-                    <p className="text-sm text-muted-foreground">{section.helper}</p>
+      )}
+      {assessmentState === 'in_progress' && !isAssessmentLocked && (
+        <div className="flex gap-6">
+          {/* --- QUICK NAVIGATION SIDEBAR --- */}
+          {(!isFocusMode) && (
+            <div className="hidden lg:block w-64 space-y-4 sticky top-24 self-start">
+              <h3 className="font-semibold text-sm">Questions</h3>
+              {questionSections.map(section => (
+                <div key={section.id} className="space-y-1">
+                  <h4 className="text-xs font-bold text-muted-foreground uppercase">{section.title}</h4>
+                  <div className="space-y-1">
+                    {section.questions.map((q, index) => (
+                      <Button
+                        key={q.id}
+                        variant="ghost"
+                        size="sm"
+                        className="w-full justify-start text-muted-foreground h-auto py-1"
+                        onClick={() => scrollToQuestion(q.id)}
+                      >
+                        <span className={`mr-2 h-2 w-2 rounded-full ${watchedValues[q.id] ? 'bg-green-500' : 'bg-gray-300'}`}></span>
+                        <span className="truncate">Q{index + 1}. {q.label}</span>
+                      </Button>
+                    ))}
                   </div>
-                  <Separator/>
-                  <div className="space-y-6">
-                    {section.questions.map((question, index) => {
-                      const questionNumber = index + 1;
-                      return (
-                        <FormField
-                          key={question.id}
-                          control={form.control}
-                          name={question.id}
-                          render={({ field }) => (
-                            <FormItem className="space-y-3">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <FormLabel className="text-base font-medium">
-                                  Q{questionNumber}. {question.label}
-                                </FormLabel>
-                                <Badge variant="secondary" className="text-xs uppercase">
-                                  {question.typeLabel}
-                                </Badge>
-                              </div>
-                              {question.helper ? (
-                                <FormDescription>{question.helper}</FormDescription>
-                              ) : null}
-                              <FormControl>{renderQuestionInput(question, field)}</FormControl>
-                              <FormMessage />
-                            </FormItem>
-                          )}
-                        />
-                      );
-                    })}
-                  </div>
-                </section>
+                </div>
               ))}
-            </CardContent>
+            </div>
+          )}
 
-            <CardFooter className="flex flex-col gap-4 border-t bg-muted/50 p-6 md:flex-row md:items-center md:justify-between">
-              <div className="text-sm text-muted-foreground">
-                You can review your answers before confirming submission. Draft saving arrives soon.
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <Button type="button" variant="outline" disabled>
-                  Save draft (coming soon)
-                </Button>
-                <Button
-                  type="button"
-                  onClick={handleValidateAndConfirm}
-                  disabled={isSubmitting || isAssessmentLocked}
-                >
-                  {isAssessmentLocked ? 'Already Submitted' : 'Submit assessment'}
-                </Button>
-              </div>
-            </CardFooter>
-          </Card>
-        </form>
-      </Form>
+          <div className="flex-1">
+            <Form {...form}>
+              <form onSubmit={(event) => event.preventDefault()}>
+                <Card>
+                  {/* --- STICKY HEADER --- */}
+                  <CardHeader className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <CardTitle>Assessment Form</CardTitle>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="icon" onClick={() => setIsFocusMode(!isFocusMode)} title={isFocusMode ? "Exit Focus Mode" : "Enter Focus Mode"}>
+                          <Expand className="h-4 w-4" />
+                        </Button>
+                        <div className={`flex items-center gap-2 p-2 rounded-md text-sm font-medium ${
+                          durationInSeconds && elapsedSeconds > durationInSeconds * 0.9 ? 'bg-destructive/10 text-destructive' :
+                          durationInSeconds && elapsedSeconds > durationInSeconds * 0.7 ? 'bg-amber-500/10 text-amber-600' :
+                          'bg-muted text-muted-foreground'
+                        }`}>
+                          <Timer className="h-4 w-4" />
+                          <span>{formatTime(elapsedSeconds)}</span>
+                          {durationInSeconds && <span>/ {formatTime(durationInSeconds)}</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pt-2">
+                      <p className="text-sm text-muted-foreground">Question Progress:</p>
+                      {questionSections.flatMap(s => s.questions).map((q, i) => (
+                        <div
+                          key={q.id}
+                          title={`Q${i+1}: ${q.label}`}
+                          className={`h-2 w-4 rounded-full cursor-pointer ${watchedValues[q.id] ? 'bg-green-500' : 'bg-gray-300'}`}
+                          onClick={() => scrollToQuestion(q.id)}
+                        />
+                      ))}
+                    </div>
+                  </CardHeader>
 
+                  <CardContent className="space-y-8 pt-6">
+                    {questionSections.map((section) => (
+                      <section key={section.id} className="space-y-4">
+                        <div>
+                          <h2 className="text-lg font-semibold">{section.title}</h2>
+                          <p className="text-sm text-muted-foreground">{section.helper}</p>
+                        </div>
+                        <Separator/>
+                        <div className="space-y-6">
+                          {section.questions.map((question, index) => {
+                            const questionNumber = index + 1;
+                            return (
+                              <div key={question.id} ref={el => questionRefs.current[question.id] = el} className="rounded-lg p-1 -m-1">
+                                <FormField
+                                  control={form.control}
+                                  name={question.id}
+                                  render={({ field }) => (
+                                    <FormItem className="space-y-3">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <FormLabel className="text-base font-medium">
+                                          Q{questionNumber}. {question.label}
+                                        </FormLabel>
+                                        <Badge variant="secondary" className="text-xs uppercase">
+                                          {question.typeLabel}
+                                        </Badge>
+                                      </div>
+                                      {question.helper ? (
+                                        <FormDescription>{question.helper}</FormDescription>
+                                      ) : null}
+                                      <FormControl>{renderQuestionInput(question, field)}</FormControl>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </section>
+                    ))}
+                  </CardContent>
+
+                  <CardFooter className="flex flex-col gap-4 border-t bg-muted/50 p-6 md:flex-row md:items-center md:justify-between">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      {isSavingDraft ? <><Timer className="h-4 w-4 animate-spin" /> Saving draft...</> :
+                       lastSaved ? <><CheckCircle className="h-4 w-4 text-green-600" /> Last saved at {lastSaved.toLocaleTimeString()}</> :
+                       "You can save a draft of your progress."}
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <Button type="button" variant="outline" onClick={handleSaveDraft} disabled={isSavingDraft}>
+                        <Save className="h-4 w-4 mr-2" />
+                        Save draft
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={handleValidateAndConfirm}
+                        disabled={isSubmitting || isAssessmentLocked}
+                      >
+                        {isAssessmentLocked ? 'Already Submitted' : 'Submit assessment'}
+                      </Button>
+                    </div>
+                  </CardFooter>
+                </Card>
+              </form>
+            </Form>
+          </div>
+        </div>
+      )}
+      
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -650,6 +893,48 @@ export default function ParticipantCompetencyAssessment() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog open={startConfirmOpen} onOpenChange={setStartConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Start the assessment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The timer will begin as soon as you continue. Ensure you have enough time to complete the assessment.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleStartAssessment}>
+              Start Now
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={leaveConfirmOpen} onOpenChange={setLeaveConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Leave this assessment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your progress is not saved, and the timer will be lost if you leave now. Are you sure you want to continue?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Stay</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setLeaveConfirmOpen(false); setAssessmentState('instructions'); stopTimer(); /* Add navigation logic here if needed */ }}>
+              Leave
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <SubmissionPreviewModal
+        isOpen={isPreviewOpen}
+        onClose={() => setIsPreviewOpen(false)}
+        assignment={previewAssignment}
+      />
     </div>
   );
 }
+
+const SubmissionPreviewModal = AssessmentPreviewModal;
