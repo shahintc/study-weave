@@ -9,6 +9,7 @@ const {
   StudyArtifact,
   Artifact,
   CompetencyAssignment,
+  CompetencyAssessment,
   ArtifactAssessment,
   User,
   StudyComparison,
@@ -128,37 +129,62 @@ router.get('/assignments', authMiddleware, async (req, res) => {
       return res.status(403).json({ message: 'Only participants can view these assignments.' });
     }
 
-    const enrollments = await StudyParticipant.findAll({
-      where: { participantId: req.user.id },
-      include: [
-        {
-          model: Study,
-          as: 'study',
-          include: [
-            { model: User, as: 'researcher', attributes: ['id', 'name', 'email'] },
-            {
-              model: StudyArtifact,
-              as: 'studyArtifacts',
-              include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name'] }],
-            },
-          ],
-        },
-        {
-          model: CompetencyAssignment,
-          as: 'sourceAssignment',
-          attributes: ['id', 'status', 'decision', 'score', 'submittedAt', 'reviewedAt'],
-        },
-        {
-          model: ArtifactAssessment,
-          as: 'artifactAssessments',
-          attributes: ['id', 'assessmentType', 'status', 'payload', 'createdAt', 'updatedAt'],
-        },
-      ],
-      order: [['updatedAt', 'DESC']],
-    });
+    const [enrollments, competencyAssignments] = await Promise.all([
+      StudyParticipant.findAll({
+        where: { participantId: req.user.id },
+        include: [
+          {
+            model: Study,
+            as: 'study',
+            include: [
+              { model: User, as: 'researcher', attributes: ['id', 'name', 'email'] },
+              {
+                model: StudyArtifact,
+                as: 'studyArtifacts',
+                include: [{ model: Artifact, as: 'artifact', attributes: ['id', 'name'] }],
+              },
+            ],
+          },
+          {
+            model: CompetencyAssignment,
+            as: 'sourceAssignment',
+            attributes: ['id', 'status', 'decision', 'score', 'submittedAt', 'reviewedAt'],
+          },
+          {
+            model: ArtifactAssessment,
+            as: 'artifactAssessments',
+            attributes: ['id', 'assessmentType', 'status', 'payload', 'createdAt', 'updatedAt'],
+          },
+        ],
+        order: [['updatedAt', 'DESC']],
+      }),
+      CompetencyAssignment.findAll({
+        where: { participantId: req.user.id },
+        include: [
+          {
+            model: StudyParticipant,
+            as: 'studyEnrollment',
+            attributes: ['id', 'studyId'],
+          },
+          {
+            model: CompetencyAssessment,
+            as: 'assessment',
+            attributes: ['id', 'title', 'metadata'],
+          },
+        ],
+        order: [['createdAt', 'DESC']],
+      }),
+    ]);
 
     const studies = enrollments.map((row) => formatEnrollment(row));
-    const notifications = buildNotifications(studies);
+    const notifications = [
+      ...buildNotifications(studies),
+      ...buildCompetencyNotifications(competencyAssignments),
+    ].sort((a, b) => {
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return bTime - aTime;
+    });
 
     return res.json({ studies, notifications });
   } catch (error) {
@@ -596,11 +622,15 @@ function buildNotifications(studies = []) {
   const items = [];
   studies.forEach((study) => {
     const startReached = hasStarted(study.timelineStart);
+    const updatedStamp = normalizeTimestamp(
+      study.lastUpdatedAt || study.timelineStart || new Date().toISOString(),
+    );
     items.push({
       id: `${study.studyParticipantId}-assigned`,
       type: 'assignment',
       message: `You were assigned to ${study.title}.`,
       studyId: study.studyId,
+      createdAt: updatedStamp,
     });
 
     if (isToday(study.timelineStart)) {
@@ -609,6 +639,7 @@ function buildNotifications(studies = []) {
         type: 'info',
         message: `${study.title} starts today. You can begin your tasks.`,
         studyId: study.studyId,
+        createdAt: normalizeTimestamp(study.timelineStart),
       });
     }
 
@@ -618,12 +649,62 @@ function buildNotifications(studies = []) {
         type: 'warning',
         message: `${study.title} ends today. Last chance to submit your work.`,
         studyId: study.studyId,
+        createdAt: normalizeTimestamp(study.timelineEnd),
       });
     }
 
     // Suppress other notification types; only keep assignment/start/end per request.
   });
   return items;
+}
+
+function buildCompetencyNotifications(assignments = []) {
+  const items = [];
+  assignments.forEach((record) => {
+    const entry = typeof record.get === 'function' ? record.get({ plain: true }) : record;
+    if (!entry) {
+      return;
+    }
+
+    const status = typeof entry.status === 'string' ? entry.status.toLowerCase() : 'pending';
+    if (status !== 'pending' && status !== 'in_progress') {
+      return;
+    }
+
+    const assessment = entry.assessment || {};
+    const metadata = normalizeJson(assessment.metadata);
+    const studyId =
+      (entry.studyEnrollment && entry.studyEnrollment.studyId) ||
+      metadata.studyId ||
+      null;
+    const studyLabel = metadata.studyTitle
+      ? ` for ${metadata.studyTitle}`
+      : studyId
+      ? ` for Study #${studyId}`
+      : '';
+    const assignmentId = entry.id ? String(entry.id) : null;
+
+    items.push({
+      id: `competency-${assignmentId || Math.random().toString(36).slice(2)}`,
+      type: 'competency',
+      message: `New competency assigned: ${assessment.title || 'Assessment'}${studyLabel}.`,
+      assignmentId,
+      studyId: studyId ? String(studyId) : null,
+      createdAt: normalizeTimestamp(entry.createdAt || entry.updatedAt),
+    });
+  });
+  return items;
+}
+
+function normalizeTimestamp(value) {
+  if (!value) {
+    return new Date().toISOString();
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return new Date().toISOString();
+  }
+  return date.toISOString();
 }
 
 function isToday(dateValue) {
