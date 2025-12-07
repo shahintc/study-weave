@@ -1,7 +1,7 @@
 // src/pages/ParticipantCompetencyAssessment.jsx
 
-import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useNavigate, useLocation, Link, useBeforeUnload } from 'react-router-dom';
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -235,9 +235,17 @@ export default function ParticipantCompetencyAssessment() {
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [lastSaved, setLastSaved] = useState(null);
+  const [timeUpOpen, setTimeUpOpen] = useState(false);
   const questionRefs = useRef({});
   const [previewAssignment, setPreviewAssignment] = useState(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  // --- Warn on Leave Logic ---
+  useBeforeUnload(
+    useCallback(() => {
+      if (assessmentState === "in_progress") return "Are you sure you want to leave? Your progress will be submitted.";
+    }, [assessmentState])
+  );
 
   const selectedAssignment = useMemo(() => {
     if (!assignments.length) {
@@ -288,6 +296,11 @@ export default function ParticipantCompetencyAssessment() {
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     timerIntervalRef.current = setInterval(() => {
       if (startTimeRef.current) {
+        const currentElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+        if (durationInSeconds && currentElapsed >= durationInSeconds) {
+          stopTimer();
+          setTimeUpOpen(true); // Trigger time's up dialog
+        }
         setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
       }
     }, 1000);
@@ -299,7 +312,11 @@ export default function ParticipantCompetencyAssessment() {
       timerIntervalRef.current = null;
     }
     const endTime = Date.now();
-    return startTimeRef.current ? Math.floor((endTime - startTimeRef.current) / 1000) : 0;
+    const timeTaken = startTimeRef.current ? Math.floor((endTime - startTimeRef.current) / 1000) : 0;
+    if (durationInSeconds && timeTaken > durationInSeconds) {
+      return durationInSeconds; // Cap time taken at the duration limit
+    }
+    return timeTaken;
   };
 
   // Cleanup timer on unmount
@@ -308,22 +325,6 @@ export default function ParticipantCompetencyAssessment() {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
   }, []);
-
-  // Warn user before leaving if assessment is in progress
-  useEffect(() => {
-    const handleBeforeUnload = (e) => {
-      if (assessmentState === 'in_progress') {
-        e.preventDefault();
-        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [assessmentState]);
 
   // Function to save a draft
   const handleSaveDraft = async () => {
@@ -418,6 +419,16 @@ export default function ParticipantCompetencyAssessment() {
 
   const handleValidateAndConfirm = () => {
     form.handleSubmit(() => setConfirmOpen(true))();
+  };
+
+  const forceSubmit = async () => {
+    // A version of onSubmit that doesn't rely on the form being valid
+    // It submits whatever answers are currently present.
+    const currentValues = form.getValues();
+    // We pass the current values directly to the main submit handler
+    await onSubmit(currentValues);
+    setLeaveConfirmOpen(false);
+    setTimeUpOpen(false);
   };
 
   const onSubmit = async (values) => {
@@ -557,6 +568,7 @@ export default function ParticipantCompetencyAssessment() {
       return;
     }
     setActiveAssignmentId(assignmentId);
+    form.reset(defaultAnswers); // Reset form when switching
     setAssessmentState('instructions');
   };
 
@@ -786,10 +798,11 @@ export default function ParticipantCompetencyAssessment() {
                         <div className={`flex items-center gap-2 p-2 rounded-md text-sm font-medium ${
                           durationInSeconds && elapsedSeconds > durationInSeconds * 0.9 ? 'bg-destructive/10 text-destructive' :
                           durationInSeconds && elapsedSeconds > durationInSeconds * 0.7 ? 'bg-amber-500/10 text-amber-600' :
+                          !durationInSeconds ? 'bg-muted text-muted-foreground' :
                           'bg-muted text-muted-foreground'
                         }`}>
                           <Timer className="h-4 w-4" />
-                          <span>{formatTime(elapsedSeconds)}</span>
+                          <span>{durationInSeconds ? formatTime(durationInSeconds - elapsedSeconds) : formatTime(elapsedSeconds)}</span>
                           {durationInSeconds && <span>/ {formatTime(durationInSeconds)}</span>}
                         </div>
                       </div>
@@ -916,12 +929,28 @@ export default function ParticipantCompetencyAssessment() {
           <AlertDialogHeader>
             <AlertDialogTitle>Leave this assessment?</AlertDialogTitle>
             <AlertDialogDescription>
-              Your progress is not saved, and the timer will be lost if you leave now. Are you sure you want to continue?
+              If you leave now, your current answers will be submitted automatically, and you will not be able to return. Are you sure you want to exit?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Stay</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { setLeaveConfirmOpen(false); setAssessmentState('instructions'); stopTimer(); /* Add navigation logic here if needed */ }}>
+            <AlertDialogCancel onClick={() => setLeaveConfirmOpen(false)}>Stay</AlertDialogCancel>
+            <AlertDialogAction onClick={forceSubmit}>
+              Leave and Submit
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={timeUpOpen} onOpenChange={setTimeUpOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Time's Up!</AlertDialogTitle>
+            <AlertDialogDescription>
+              The time limit for this assessment has been reached. Your answers will now be submitted automatically.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={forceSubmit}>
               Leave
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -21,7 +21,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { AlertCircle, Check, X, Eye, Download, Percent } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { AlertCircle, Check, X, Eye, Download, Percent, Clock } from "lucide-react";
 
 export default function CompetencyEvaluationReview() {
   const [assessments, setAssessments] = useState([]);
@@ -248,6 +249,26 @@ export default function CompetencyEvaluationReview() {
     });
   };
 
+  const formatTimeTaken = (seconds) => {
+    if (seconds === null || seconds === undefined) return "N/A";
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}m ${secs}s`;
+  };
+
+  const getTimeTakenDisplay = (submission) => {
+    const timeTaken = submission.timeTakenSeconds;
+    const estimatedTime = submission.estimatedTimeSeconds;
+    if (timeTaken === null || timeTaken === undefined) {
+      return <span>{formatTimeTaken(timeTaken)}</span>;
+    }
+    let colorClass = '';
+    if (estimatedTime) {
+        colorClass = timeTaken > estimatedTime ? 'text-red-600' : 'text-green-600';
+    }
+
+    return <span className={colorClass}>{formatTimeTaken(timeTaken)}</span>;
+  };
   if (loading) {
     return (
       <div className="flex items-center justify-center p-8">
@@ -288,13 +309,13 @@ export default function CompetencyEvaluationReview() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {allAssessments.length === 0 ? (
+          {allAssessments.filter(a => a.status === 'published').length === 0 ? (
             <p className="text-sm text-muted-foreground">
               You have not created any competency assessments yet.
             </p>
           ) : (
             <div className="space-y-3">
-              {allAssessments.map((assessment) => (
+              {allAssessments.filter(a => a.status === 'published').map((assessment) => (
                 <div
                   key={assessment.id}
                   className="flex flex-col gap-3 rounded-lg border p-3 md:flex-row md:items-center md:justify-between"
@@ -411,6 +432,7 @@ export default function CompetencyEvaluationReview() {
                       <TableHead>Submitted</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>MC Score</TableHead>
+                      <TableHead>Time Taken</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -422,12 +444,7 @@ export default function CompetencyEvaluationReview() {
                           {submission.participantEmail}
                         </TableCell>
                         <TableCell className="text-sm">
-                          {new Date(submission.submittedAt).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                          {formatDateTime(submission.submittedAt)}
                         </TableCell>
                         <TableCell>{getStatusBadge(submission)}</TableCell>
                         <TableCell>
@@ -436,6 +453,12 @@ export default function CompetencyEvaluationReview() {
                             <span>
                               {calculatePerformance(submission).percentage}%
                             </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1 text-sm">
+                            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                            {getTimeTakenDisplay(submission)}
                           </div>
                         </TableCell>
                         <TableCell className="text-right">
@@ -504,6 +527,12 @@ export default function CompetencyEvaluationReview() {
                       <p className="text-sm font-semibold text-muted-foreground">Status</p>
                       {getStatusBadge(selectedAssignment)}
                     </div>
+                    <div>
+                      <p className="text-sm font-semibold text-muted-foreground">Time Taken</p>
+                      <p className="text-base">
+                        {formatTimeTaken(selectedAssignment.timeTakenSeconds)} / {formatTimeTaken(selectedAssignment.estimatedTimeSeconds)}
+                      </p>
+                    </div>
                   </div>
 
                   {/* Multiple Choice Responses */}
@@ -557,6 +586,21 @@ export default function CompetencyEvaluationReview() {
                       })}
                     </div>
                   )}
+
+                  {/* Reviewer Notes */}
+                  <div className="space-y-2 pt-4">
+                    <label htmlFor="notes" className="text-sm font-semibold">
+                      Reviewer Notes (Optional)
+                    </label>
+                    <Textarea
+                      id="notes"
+                      placeholder="Add notes about this participant's evaluation, reasons for acceptance/rejection, or potential study fit..."
+                      value={dialogReviewerNotes}
+                      onChange={(e) => setDialogReviewerNotes(e.target.value)}
+                      className="text-sm"
+                      rows={3}
+                    />
+                  </div>
                 </div>
               );
             })()

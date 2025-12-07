@@ -2,12 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Plus, Trash2, Save, Upload, Zap, Clock, TrendingUp, Eye, Layers, Users, Search } from 'lucide-react';
+import { Plus, Trash2, Save, Upload, Zap, Clock, TrendingUp, Eye, Layers, Users, Search, FileText, ListChecks } from 'lucide-react';
 import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 
 // --- SHADCN/UI COMPONENTS ---
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -22,6 +22,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { MoreHorizontal } from "lucide-react";
 import { QuestionImportModal } from "./QuestionImportModal";
 import { QuizGenerationModal } from "./QuizGenerationModal";
 import { AssessmentPreviewModal } from "./AssessmentPreviewModal";
@@ -183,9 +200,15 @@ export default function AssessmentCreationPage() {
     const [participants, setParticipants] = useState([]);
     const [participantsError, setParticipantsError] = useState("");
     const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
-    const [selectedParticipants, setSelectedParticipants] = useState([]);
+    const [selectedParticipants, setSelectedParticipants] = useState(new Set());
     const [user, setUser] = useState(null);
     const navigate = useNavigate();
+    const [view, setView] = useState('list'); // 'list' or 'builder'
+    const [assessments, setAssessments] = useState([]);
+    const [isLoadingAssessments, setIsLoadingAssessments] = useState(true);
+    const [editingAssessment, setEditingAssessment] = useState(null);
+    const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+    const [assessmentToDelete, setAssessmentToDelete] = useState(null);
 
     const form = useForm({
         resolver: zodResolver(assessmentSchema),
@@ -206,12 +229,10 @@ export default function AssessmentCreationPage() {
         control: form.control,
         name: "questions",
     });
-    const status = form.watch("status");
 
     const multipleChoiceQuestions = questionFields.map((field, index) => ({ field, index })).filter(({ field }) => field.type === 'multiple_choice');
     const shortAnswerQuestions = questionFields.map((field, index) => ({ field, index })).filter(({ field }) => field.type === 'short_answer');
     const questionIndexMap = useMemo(() => new Map(questionFields.map((field, index) => [field.id, index])), [questionFields]);
-
 
     const questionCount = form.watch("questions")?.length || 0;
 
@@ -233,6 +254,26 @@ export default function AssessmentCreationPage() {
         }
     }, [navigate]);
 
+    const fetchAssessments = async () => {
+        if (!user?.id) return;
+        setIsLoadingAssessments(true);
+        try {
+            const { data } = await api.get('/api/competency/assessments/researcher', {
+                params: { researcherId: user.id }
+            });
+            setAssessments(data.assessments || []);
+        } catch (error) {
+            console.error("Failed to load assessments", error);
+            alert("Could not load your assessments. Please try again later.");
+        } finally {
+            setIsLoadingAssessments(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchAssessments();
+    }, [user]);
+
     useEffect(() => {
         const fetchParticipants = async () => {
             setIsParticipantsLoading(true);
@@ -250,7 +291,7 @@ export default function AssessmentCreationPage() {
         fetchParticipants();
     }, []);
 
-    const onSubmit = async (values) => {
+    const onSubmit = async (values, status = 'published') => {
         setIsSaving(true);
         try {
             if (!user?.id) {
@@ -267,15 +308,27 @@ export default function AssessmentCreationPage() {
                     ...question,
                     options: question.type === "multiple_choice" ? question.options || [] : [],
                 })),
-                status: values.status,
+                status: status,
                 instructions: values.instructions,
                 durationMinutes: Number(values.duration) || null,
                 passingThreshold: Number(values.passingThreshold) || null,
-                invitedParticipants: selectedParticipants,
+                invitedParticipants: Array.from(selectedParticipants),
             };
 
-            await api.post("/api/competency/assessments", payload);
-            alert("✅ Assessment Template Saved Successfully!");
+            if (editingAssessment) {
+                // This is an UPDATE operation
+                await api.put(`/api/competency/assessments/${editingAssessment.id}`, payload);
+            } else {
+                // This is a CREATE operation
+                await api.post("/api/competency/assessments", payload);
+            }
+            if (status === 'published') {
+                alert("✅ Assessment Published Successfully!");
+            } else {
+                alert("✅ Draft Saved Successfully!");
+            }
+            fetchAssessments(); // Re-fetch assessments to update the list
+            setView('list'); // Go back to the list view
         } catch (error) {
             console.error("Save failed:", error);
             alert("❌ Failed to save assessment. Check console for details.");
@@ -283,6 +336,10 @@ export default function AssessmentCreationPage() {
             setIsSaving(false);
         }
     };
+
+    const handleSaveDraft = () => {
+        form.handleSubmit((values) => onSubmit(values, 'draft'))();
+    }
 
     // Placeholder handlers
     const handleGenerateAI = () => {
@@ -358,14 +415,15 @@ export default function AssessmentCreationPage() {
         alert("Define Scoring Rules: Opens a modal to set up detailed scoring/thresholds.");
     };
 
+    const watchedDuration = form.watch("duration");
     const overviewStats = useMemo(() => {
         return [
-            { label: "Status", value: status === "published" ? "Published" : "Draft", badge: status === "published" ? "default" : "secondary" },
+            { label: "Status", value: editingAssessment?.status === "published" ? "Published" : "Draft", badge: editingAssessment?.status === "published" ? "default" : "secondary" },
             { label: "Questions", value: questionCount },
-            { label: "Duration", value: `${form.watch("duration") || 0} min` },
-            { label: "Invitees", value: selectedParticipants.length },
+            { label: "Duration", value: `${watchedDuration || 0} min` },
+            { label: "Invitees", value: selectedParticipants.size },
         ];
-    }, [status, questionCount, form, selectedParticipants.length]);
+    }, [editingAssessment, questionCount, watchedDuration, selectedParticipants.size]);
 
     const filteredParticipants = useMemo(() => {
         if (!participantSearch.trim()) {
@@ -381,35 +439,225 @@ export default function AssessmentCreationPage() {
     }, [participantSearch, participants]);
 
     const toggleParticipant = (participantId) => {
-        setSelectedParticipants((prev) => {
-            const next = prev.includes(participantId)
-                ? prev.filter((id) => id !== participantId)
-                : [...prev, participantId];
-            form.setValue("invitedParticipants", next);
+        setSelectedParticipants(prev => {
+            const next = new Set(prev);
+            if (next.has(participantId)) {
+                next.delete(participantId);
+            } else {
+                next.add(participantId);
+            }
+            form.setValue("invitedParticipants", Array.from(next));
             return next;
         });
     };
 
     const selectAllParticipants = () => {
-        const everyId = participants.map((participant) => participant.id);
+        const everyId = new Set(participants.map((participant) => participant.id));
         setSelectedParticipants(everyId);
-        form.setValue("invitedParticipants", everyId);
+        form.setValue("invitedParticipants", Array.from(everyId));
     };
 
+    const handleCreateNew = () => {
+        setEditingAssessment(null);
+        form.reset({
+            title: "",
+            description: "",
+            duration: "30",
+            passingThreshold: "70",
+            instructions: "",
+            status: "draft",
+            questions: [defaultQuestion],
+            invitedParticipants: [],
+        });
+        setSelectedParticipants(new Set());
+        setView('builder');
+    };
+
+    const handleEditDraft = (assessment) => {
+        setEditingAssessment(assessment);
+        form.reset({
+            ...assessment,
+            duration: String(assessment.criteria?.durationMinutes || 30),
+            passingThreshold: String(assessment.criteria?.passingThreshold || 70),
+            instructions: assessment.metadata?.instructions || "",
+            invitedParticipants: assessment.metadata?.invitedParticipants || [],
+        });
+        setSelectedParticipants(new Set(assessment.metadata?.invitedParticipants || []));
+        setView('builder');
+    };
+
+    const openDeleteDialog = (assessment) => {
+        setAssessmentToDelete(assessment);
+        setIsDeleteDialogOpen(true);
+    };
+
+    const handleDeleteDraft = async () => {
+        if (!assessmentToDelete || !user?.id) return;
+        try {
+            await api.delete(`/api/competency/assessments/${assessmentToDelete.id}`, {
+                data: { researcherId: user.id } // Pass researcherId for authorization
+            });
+            alert(`Draft "${assessmentToDelete.title}" deleted successfully.`);
+            fetchAssessments(); // Refresh the list
+        } catch (error) {
+            console.error("Failed to delete draft", error);
+            alert(error.response?.data?.message || "Could not delete the draft.");
+        } finally {
+            setIsDeleteDialogOpen(false);
+            setAssessmentToDelete(null);
+        }
+    };
+
+    const { draftAssessments, publishedAssessments } = useMemo(() => {
+        const drafts = [];
+        const published = [];
+        assessments.forEach(a => {
+            if (a.status === 'published') {
+                published.push(a);
+            } else {
+                drafts.push(a);
+            }
+        });
+        return { draftAssessments: drafts, publishedAssessments: published };
+    }, [assessments]);
+
+    const getQuestionCounts = (questions = []) => {
+        const mc = questions.filter(q => q.type === 'multiple_choice').length;
+        const sa = questions.filter(q => q.type === 'short_answer').length;
+        return {
+            mc,
+            sa,
+        };
+    };
+
+    if (view === 'list') {
+        return (
+            <div className="container mx-auto max-w-7xl px-4 py-6 space-y-8">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h1 className="text-3xl font-bold">Competency Assessments</h1>
+                        <p className="text-sm text-muted-foreground">Manage, create, and preview your participant quizzes.</p>
+                    </div>
+                    <Button onClick={handleCreateNew}><Plus className="w-4 h-4 mr-2" /> Create New Assessment</Button>
+                </div>
+
+                {/* Published Assessments */}
+                <section className="space-y-4">
+                    <h2 className="text-2xl font-semibold border-b pb-2">Published</h2>
+                    {isLoadingAssessments ? <p>Loading...</p> : publishedAssessments.length === 0 ? <p className="text-sm text-muted-foreground">No published assessments yet.</p> : (
+                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                            {publishedAssessments.map(assessment => (
+                                <Card key={assessment.id} className="flex flex-col">
+                                    <CardHeader>
+                                        <CardTitle className="truncate">{assessment.title}</CardTitle>
+                                        <CardDescription>Published on {new Date(assessment.updatedAt).toLocaleDateString()}</CardDescription>
+                                    </CardHeader>
+                                    <CardContent className="text-sm text-muted-foreground space-y-3 flex-grow">
+                                        <div className="flex items-center gap-2">
+                                            <ListChecks className="h-4 w-4" />
+                                            <span>{getQuestionCounts(assessment.questions).mc} MCQs</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <FileText className="h-4 w-4" />
+                                            <span>{getQuestionCounts(assessment.questions).sa} Short Answers</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Clock className="h-4 w-4" />
+                                            <span>{assessment.criteria?.durationMinutes || 'N/A'} min duration</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Users className="h-4 w-4" />
+                                            <span>{assessment.metadata?.invitedParticipants?.length || 0} Participants Invited</span>
+                                        </div>
+                                    </CardContent>
+                                    <CardFooter className="flex justify-between">
+                                        <Button variant="outline" size="sm" onClick={() => { setEditingAssessment(assessment); setIsPreviewModalOpen(true); }}>
+                                            <Eye className="w-4 h-4 mr-2" /> Preview
+                                        </Button>
+                                    </CardFooter>
+                                </Card>
+                            ))}
+                        </div>
+                    )}
+                </section>
+
+                {/* Draft Assessments */}
+                <section className="space-y-4">
+                    <h2 className="text-2xl font-semibold border-b pb-2">Drafts</h2>
+                    {isLoadingAssessments ? <p>Loading...</p> : draftAssessments.length === 0 ? <p className="text-sm text-muted-foreground">No drafts. Click 'Create New' to start.</p> : (
+                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                            {draftAssessments.map(assessment => (
+                                <Card key={assessment.id} className="flex flex-col">
+                                    <CardHeader>
+                                        <div className="flex justify-between items-start">
+                                            <div className="flex-1">
+                                                <CardTitle className="truncate pr-2">{assessment.title}</CardTitle>
+                                                <CardDescription>Last updated: {new Date(assessment.updatedAt).toLocaleDateString()}</CardDescription>
+                                            </div>
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0">
+                                                        <MoreHorizontal className="h-4 w-4" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuContent align="end">
+                                                    <DropdownMenuItem onClick={() => handleEditDraft(assessment)}>Edit</DropdownMenuItem>
+                                                    <DropdownMenuItem onClick={() => openDeleteDialog(assessment)} className="text-red-600">Delete</DropdownMenuItem>
+                                                </DropdownMenuContent>
+                                            </DropdownMenu>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="text-sm text-muted-foreground space-y-3 flex-grow">
+                                        <div className="flex items-center gap-2"><ListChecks className="h-4 w-4" /><span>{getQuestionCounts(assessment.questions).mc} MCQs</span></div>
+                                        <div className="flex items-center gap-2"><FileText className="h-4 w-4" /><span>{getQuestionCounts(assessment.questions).sa} Short Answers</span></div>
+                                        <div className="flex items-center gap-2"><Clock className="h-4 w-4" /><span>{assessment.criteria?.durationMinutes || 'N/A'} min duration</span></div>
+                                        <div className="flex items-center gap-2"><Users className="h-4 w-4" /><span>{assessment.metadata?.invitedParticipants?.length || 0} Participants</span></div>
+                                    </CardContent>
+                                    <CardFooter className="flex justify-end">
+                                        <Button size="sm" onClick={() => handleEditDraft(assessment)}>Edit Draft</Button>
+                                    </CardFooter>
+                                </Card>
+                            ))}
+                        </div>
+                    )}
+                </section>
+                <AssessmentPreviewModal
+                    isOpen={isPreviewModalOpen}
+                    onClose={() => setIsPreviewModalOpen(false)}
+                    assessmentData={editingAssessment}
+                />
+                <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Are you sure you want to delete this draft?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                This will permanently delete the draft assessment titled "{assessmentToDelete?.title}". This action cannot be undone.
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction onClick={handleDeleteDraft} className="bg-red-600 hover:bg-red-700">
+                                Yes, Delete
+                            </AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
+            </div>
+        );
+    }
 
     return (
         <div className="container mx-auto max-w-7xl px-4 py-6 space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                    <h1 className="text-3xl font-bold">Competency Assessment Builder</h1>
+                    <h1 className="text-3xl font-bold">{editingAssessment ? "Edit Assessment" : "Create New Assessment"}</h1>
                     <p className="text-sm text-muted-foreground">
                         Design quizzes to gate studies and evaluate participant readiness.
                     </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-
-                    <Button type="button" variant="outline" onClick={handleImportQuestions}>
-                        <Upload className="w-4 h-4 mr-2" /> Import bank
+                    <Button type="button" variant="ghost" onClick={() => setView('list')}>
+                        &larr; Back to Assessments
                     </Button>
                 </div>
             </div>
@@ -488,31 +736,6 @@ export default function AssessmentCreationPage() {
                                             </FormItem>
                                         )}
                                     />
-                                    <div className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
-                                        <FormField
-                                            control={form.control}
-                                            name="status"
-                                            render={({ field }) => (
-                                                <FormItem className="w-full sm:w-1/2">
-                                                    <FormLabel>Assessment status</FormLabel>
-                                                    <Select value={field.value} onValueChange={field.onChange}>
-                                                        <FormControl>
-                                                            <SelectTrigger>
-                                                                <SelectValue placeholder="Choose status" />
-                                                            </SelectTrigger>
-                                                        </FormControl>
-                                                        <SelectContent>
-                                                            <SelectItem value="draft">Draft</SelectItem>
-                                                            <SelectItem value="published">Published</SelectItem>
-                                                        </SelectContent>
-                                                    </Select>
-                                                </FormItem>
-                                            )}
-                                        />
-                                        <div className="text-sm text-muted-foreground">
-                                            Toggle to published when you are ready to assign this quiz to participants.
-                                        </div>
-                                    </div>
                                     <Button type="button" variant="outline" className="w-full" onClick={handleDefineScoring}>
                                         Define detailed scoring rules
                                     </Button>
@@ -625,10 +848,10 @@ export default function AssessmentCreationPage() {
 
                             {/* --- SAVE BUTTON --- */}
                             <div className="flex flex-wrap justify-end gap-3 pt-4">
-                                <Button type="button" variant="outline">
+                                <Button type="button" variant="outline" onClick={handleSaveDraft} disabled={isSaving}>
                                     Save draft
                                 </Button>
-                                <Button type="submit" size="lg" disabled={isSaving}>
+                                <Button type="submit" size="lg" disabled={isSaving} onClick={form.handleSubmit((values) => onSubmit(values, 'published'))}>
                                     <Save className="w-5 h-5 mr-2" />
                                     {isSaving ? "Saving Template..." : "Save & Publish"}
                                 </Button>
@@ -692,7 +915,7 @@ export default function AssessmentCreationPage() {
                                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
                                             <Users className="h-4 w-4" />
                                             {isParticipantsLoading
-                                                ? "Loading participants…"
+                                                ? "Loading..."
                                                 : `${selectedParticipants.length} selected`}
                                         </div>
                                         <Button
@@ -725,7 +948,7 @@ export default function AssessmentCreationPage() {
                                             filteredParticipants.map((participant) => (
                                                 <div
                                                     key={participant.id}
-                                                    className={`rounded-md border p-3 text-sm ${selectedParticipants.includes(participant.id) ? "border-primary bg-primary/5" : "border-muted"}`}
+                                                    className={`rounded-md border p-3 text-sm ${selectedParticipants.has(participant.id) ? "border-primary bg-primary/5" : "border-muted"}`}
                                                 >
                                                     <div className="flex flex-col gap-1">
                                                         <div className="flex items-center justify-between gap-3">
@@ -734,7 +957,7 @@ export default function AssessmentCreationPage() {
                                                                 <p className="text-xs text-muted-foreground">{participant.email}</p>
                                                             </div>
                                                             <Checkbox
-                                                                checked={selectedParticipants.includes(participant.id)}
+                                                                checked={selectedParticipants.has(participant.id)}
                                                                 onCheckedChange={() => toggleParticipant(participant.id)}
                                                             />
                                                         </div>
@@ -778,7 +1001,7 @@ export default function AssessmentCreationPage() {
             <AssessmentPreviewModal
                 isOpen={isPreviewModalOpen}
                 onClose={() => setIsPreviewModalOpen(false)}
-                assessmentData={form.getValues()}
+                assessmentData={editingAssessment || form.getValues()}
             />
         </div>
     );

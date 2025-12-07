@@ -21,7 +21,7 @@ router.post('/assessments', async (req, res) => {
       title,
       description,
       researcherId,
-      status = 'draft',
+      status,
       instructions = '',
       durationMinutes,
       passingThreshold,
@@ -61,7 +61,7 @@ router.post('/assessments', async (req, res) => {
       },
       questions: sanitizedQuestions,
       totalScore: 100,
-      status,
+      status: status || 'draft',
       metadata,
     }, { transaction });
 
@@ -93,6 +93,109 @@ router.post('/assessments', async (req, res) => {
     await transaction.rollback();
     console.error('Create competency assessment error', error);
     res.status(500).json({ message: 'Unable to create competency assessment right now.' });
+  }
+});
+
+router.put('/assessments/:id', async (req, res) => {
+  const transaction = await CompetencyAssessment.sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const {
+      title,
+      description,
+      researcherId,
+      status,
+      instructions = '',
+      durationMinutes,
+      passingThreshold,
+      questions = [],
+      invitedParticipants = [],
+    } = req.body;
+
+    const assessment = await CompetencyAssessment.findByPk(id, { transaction });
+    if (!assessment) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    // Basic authorization check
+    if (String(assessment.researcherId) !== String(researcherId)) {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'You are not authorized to edit this assessment.' });
+    }
+
+    const sanitizedQuestions = questions.map((question, index) => ({
+      id: question.id || `question-${index + 1}`,
+      title: question.title,
+      type: question.type,
+      options: question.type === 'multiple_choice' ? question.options || [] : [],
+    }));
+
+    const metadata = {
+      instructions,
+      invitedParticipants: Array.isArray(invitedParticipants) ? invitedParticipants : [],
+    };
+
+    assessment.title = title;
+    assessment.description = description;
+    assessment.status = status || 'draft';
+    assessment.questions = sanitizedQuestions;
+    assessment.criteria = {
+      ...assessment.criteria,
+      durationMinutes: normalizeNumber(durationMinutes),
+      passingThreshold: normalizeNumber(passingThreshold),
+    };
+    assessment.metadata = metadata;
+
+    await assessment.save({ transaction });
+
+    // Here you might want to handle changes to invited participants,
+    // but for now, we'll just update the assessment itself.
+
+    await transaction.commit();
+    res.status(200).json(assessment.get({ plain: true }));
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Update competency assessment error', error);
+    res.status(500).json({ message: 'Unable to update competency assessment right now.' });
+  }
+});
+
+router.delete('/assessments/:id', async (req, res) => {
+  const transaction = await CompetencyAssessment.sequelize.transaction();
+  try {
+    const { id } = req.params;
+    // The user ID should ideally come from an auth middleware (req.user.id)
+    // For now, we'll expect it in the request body for authorization.
+    const { researcherId } = req.body;
+
+    const assessment = await CompetencyAssessment.findByPk(id, { transaction });
+    if (!assessment) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'Assessment not found.' });
+    }
+
+    if (String(assessment.researcherId) !== String(researcherId)) {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'You are not authorized to delete this assessment.' });
+    }
+
+    // Also delete associated pending assignments that were never started
+    await CompetencyAssignment.destroy({
+      where: {
+        assessmentId: id,
+        status: 'pending',
+      },
+      transaction,
+    });
+
+    await assessment.destroy({ transaction });
+    await transaction.commit();
+    res.status(200).json({ message: `Draft assessment "${assessment.title}" deleted successfully.` });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Delete competency assessment error', error);
+    res.status(500).json({ message: 'Unable to delete competency assessment right now.' });
   }
 });
 
@@ -157,6 +260,7 @@ router.get('/assignments', async (req, res) => {
         status,
         isLocked,
         notes: metadata.notes || assessment.description || '',
+        timeTakenSeconds: plain.timeTakenSeconds,
         instructions: instructionList,
         resources,
         assignedAt: plain.createdAt,
@@ -207,17 +311,23 @@ router.get('/assignments/submitted', async (req, res) => {
     const payload = fullySubmitted.map((record) => {
       const plain = record.get({ plain: true });
       const assessment = plain.assessment || {};
+      const criteria = assessment.criteria || {};
       const participant = plain.participant || {};
 
       return {
         id: String(plain.id),
         assessmentId: String(assessment.id),
         title: assessment.title,
+        estimatedTimeSeconds:
+          criteria.durationMinutes && Number(criteria.durationMinutes)
+            ? Number(criteria.durationMinutes) * 60 : null,
         participantName: participant.name,
         participantEmail: participant.email,
         status: plain.status,
         decision: plain.decision,
         submittedAt: plain.submittedAt,
+        timeTakenSeconds: plain.timeTakenSeconds,
+        timeTakenSeconds: plain.timeTakenSeconds,
         responses: plain.responses,
         questions: assessment.questions || [],
       };
@@ -268,6 +378,7 @@ router.get('/assignments/researcher', async (req, res) => {
         decision: plain.decision,
         submittedAt: plain.submittedAt,
         startedAt: plain.startedAt,
+        timeTakenSeconds: plain.timeTakenSeconds,
         createdAt: plain.createdAt,
         updatedAt: plain.updatedAt,
       };
@@ -363,7 +474,7 @@ router.get('/participants/overview', async (req, res) => {
 router.post('/assignments/:id/submit', async (req, res) => {
   try {
     const { id } = req.params;
-    const { responses } = req.body;
+    const { responses, timeTakenSeconds } = req.body;
 
     const assignment = await CompetencyAssignment.findByPk(id);
 
@@ -378,6 +489,7 @@ router.post('/assignments/:id/submit', async (req, res) => {
     assignment.status = 'submitted';
     assignment.submittedAt = new Date();
     assignment.responses = responses;
+    assignment.timeTakenSeconds = timeTakenSeconds;
 
     await assignment.save();
 
