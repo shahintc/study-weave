@@ -733,7 +733,6 @@ export default function ArtifactsComparison() {
   const [patchAreClones, setPatchAreClones] = useState(""); // "yes" | "no"
   const [patchCloneType, setPatchCloneType] = useState(""); // "type1".."type4"
   const [patchCloneComment, setPatchCloneComment] = useState(""); // reasoning
-  const [patchPairLabel, setPatchPairLabel] = useState("");
 
   // Snapshot mode outcome
   const [snapshotOutcome, setSnapshotOutcome] = useState(""); // "failure" | "intended" | "unclear"
@@ -808,7 +807,6 @@ export default function ArtifactsComparison() {
 
   const leftDraftRef = useRef("");
   const rightDraftRef = useRef("");
-  const patchPairInputRef = useRef(null);
 
   const leftCanvasRef = useRef(null);
   const rightCanvasRef = useRef(null);
@@ -1376,30 +1374,6 @@ export default function ArtifactsComparison() {
     const next = (solidRecordIndex + direction + solidRecords.length) %
       solidRecords.length;
     handleSolidRecordChange(next);
-  };
-
-  const handlePatchPairUpload = async (e) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = "";
-    if (files.length < 2) {
-      alert("Select two .patch or .diff files to populate Patch A and Patch B.");
-      return;
-    }
-
-    try {
-      const [first, second] = files;
-      const [textA, textB] = await Promise.all([first.text(), second.text()]);
-      setLeftData({ type: "text", text: numberLines(textA), name: first.name });
-      setRightData({ type: "text", text: numberLines(textB), name: second.name });
-      setLeftAnn([]);
-      setRightAnn([]);
-      setLeftZoom(1);
-      setRightZoom(1);
-      setPatchPairLabel(`${first.name} ↔ ${second.name}`);
-    } catch (err) {
-      console.error("Failed to load patch pair", err);
-      alert("Unable to read one of the selected patch files.");
-    }
   };
 
   const handleDownload = (side) => {
@@ -2252,13 +2226,18 @@ export default function ArtifactsComparison() {
       return;
     }
 
-    const words = (assessmentComment || "").trim().split(/\s+/).filter(Boolean);
+    const commentText = mode === "patch" ? patchCloneComment : assessmentComment;
+    const words = (commentText || "").trim().split(/\s+/).filter(Boolean);
     if (!words.length) {
       setAssessmentError("A comment is required to submit.");
       return;
     }
     if (words.length < 20) {
-      setAssessmentError("Please provide at least 20 words in the comment.");
+      setAssessmentError(
+        mode === "patch"
+          ? "Please provide at least 20 words explaining your clone decision."
+          : "Please provide at least 20 words in the comment."
+      );
       return;
     }
 
@@ -2810,30 +2789,9 @@ export default function ArtifactsComparison() {
           <CardContent className="space-y-6">
             {mode === "patch" ? (
               <>
-                <div className="flex flex-wrap items-center gap-3">
-                  <input
-                    ref={patchPairInputRef}
-                    type="file"
-                    multiple
-                    accept=".patch,.diff,.txt"
-                    className="hidden"
-                    onChange={handlePatchPairUpload}
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => patchPairInputRef.current?.click()}
-                  >
-                    Load patch pair (.diff/.patch)
-                  </Button>
-                  {patchPairLabel && (
-                    <span className="text-[11px] text-gray-500">
-                      Loaded: {patchPairLabel}
-                    </span>
-                  )}
-                </div>
-
+                <p className="text-xs text-gray-500">
+                  Review the two code blocks shown above and determine whether they represent the same logical change (a clone) before answering below.
+                </p>
                 <div className="space-y-2">
                   <Label>Are these two patches code clones?</Label>
                   <RadioGroup
@@ -2902,6 +2860,9 @@ export default function ArtifactsComparison() {
                     rows={3}
                     placeholder="E.g., 'Both patches change the same API call and condition, only variable names differ, so Type-2.'"
                   />
+                  {assessmentError && (
+                    <p className="text-xs text-destructive">{assessmentError}</p>
+                  )}
                 </div>
               </>
             ) : mode === "stage1" ? (
