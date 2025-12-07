@@ -222,6 +222,8 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
       return res.status(403).json({ message: 'Study deadline has passed. You cannot start this task.' });
     }
 
+    const studyMetadata = normalizeJson(study.metadata);
+
     const participantWhere = { studyId };
     if (requestedParticipantId) {
       participantWhere.id = requestedParticipantId;
@@ -255,6 +257,8 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
     if (!studyArtifact || !studyArtifact.artifact) {
       return res.status(404).json({ message: 'Study artifact not found for this study.' });
     }
+
+    const snapshotConfig = normalizeSnapshotArtifactsConfig(studyMetadata.snapshotArtifacts);
 
     const modeCandidates = [
       req.query.mode,
@@ -317,8 +321,9 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
       ],
     });
 
-    const leftPane = await buildPanePayload(studyArtifact, 'primary');
+    let leftPane = await buildPanePayload(studyArtifact, 'primary');
     let rightPane = null;
+    let diffPane = null;
     if (comparison) {
       const isPrimary = Number(comparison.primaryArtifactId) === Number(studyArtifactId);
       const pairedArtifact = isPrimary ? comparison.secondaryArtifact : comparison.primaryArtifact;
@@ -353,6 +358,22 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
       }
     }
 
+    if (resolvedMode === 'snapshot' && snapshotConfig) {
+      const snapshotPanes = await buildSnapshotPanePayloads({
+        studyId,
+        snapshotConfig,
+      });
+      if (snapshotPanes.reference) {
+        leftPane = snapshotPanes.reference;
+      }
+      if (snapshotPanes.failure) {
+        rightPane = snapshotPanes.failure;
+      }
+      if (snapshotPanes.diff) {
+        diffPane = snapshotPanes.diff;
+      }
+    }
+
     const comparisonMeta = comparison
       ? {
           id: String(comparison.id),
@@ -375,6 +396,7 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
         panes: {
           left: leftPane,
           right: rightPane,
+          diff: diffPane,
         },
         comparison: comparisonMeta,
       },
@@ -384,6 +406,57 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
     return res.status(500).json({ message: 'Unable to load the assigned artifact right now.' });
   }
 });
+
+function normalizeSnapshotArtifactsConfig(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const parse = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  };
+  const reference = parse(raw.reference);
+  const failure = parse(raw.failure);
+  const diff = parse(raw.diff);
+  if (!reference || !failure || !diff) {
+    return null;
+  }
+  return { reference, failure, diff };
+}
+
+async function buildSnapshotPanePayloads({ studyId, snapshotConfig }) {
+  const artifactIds = [snapshotConfig.reference, snapshotConfig.failure, snapshotConfig.diff].filter(
+    (value) => Number.isFinite(value),
+  );
+  if (!artifactIds.length) {
+    return {};
+  }
+  const rows = await StudyArtifact.findAll({
+    where: {
+      studyId,
+      artifactId: { [Op.in]: artifactIds },
+    },
+    include: [
+      {
+        model: Artifact,
+        as: 'artifact',
+        attributes: ['id', 'name', 'type', 'filePath', 'fileMimeType', 'fileOriginalName'],
+      },
+    ],
+  });
+  const byArtifactId = new Map(rows.map((row) => [Number(row.artifactId), row]));
+  const panes = {};
+  if (byArtifactId.has(snapshotConfig.reference)) {
+    panes.reference = await buildPanePayload(byArtifactId.get(snapshotConfig.reference), 'primary');
+  }
+  if (byArtifactId.has(snapshotConfig.failure)) {
+    panes.failure = await buildPanePayload(byArtifactId.get(snapshotConfig.failure), 'secondary');
+  }
+  if (byArtifactId.has(snapshotConfig.diff)) {
+    panes.diff = await buildPanePayload(byArtifactId.get(snapshotConfig.diff), 'snapshot_diff');
+  }
+  return panes;
+}
 
 function formatEnrollment(entry) {
   const plain = typeof entry.get === 'function' ? entry.get({ plain: true }) : entry;
