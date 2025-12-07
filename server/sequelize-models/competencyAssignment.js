@@ -80,6 +80,11 @@ const CompetencyAssignment = sequelize.define(
       allowNull: true,
       field: 'reviewer_notes',
     },
+    timeTakenSeconds: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'time_taken_seconds',
+    },
   },
   {
     tableName: 'competency_assignments',

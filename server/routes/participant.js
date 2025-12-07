@@ -436,6 +436,7 @@ function summarizeCompetencyProgress(assignment) {
     statusLabel: statusEntry.label,
     completionPercent: statusEntry.percent,
     requiresAction: statusEntry.requiresAction,
+    timeTakenSeconds: view.timeTakenSeconds, // Add this line
   };
 }
 

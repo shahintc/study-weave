@@ -21,7 +21,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { AlertCircle, Check, X, Eye, Download } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { AlertCircle, Check, X, Eye, Download, Percent, Clock } from "lucide-react";
 
 export default function CompetencyEvaluationReview() {
   const [assessments, setAssessments] = useState([]);
@@ -148,6 +149,35 @@ export default function CompetencyEvaluationReview() {
     }
   };
 
+  const calculatePerformance = (assignment) => {
+    if (!assignment?.questions || !assignment?.responses) {
+      return { score: 0, total: 0, percentage: 0 };
+    }
+
+    const mcQuestions = assignment.questions.filter(
+      (q) => q.type === "multiple_choice" && q.options?.length > 0
+    );
+
+    if (mcQuestions.length === 0) {
+      return { score: 0, total: 0, percentage: 0 };
+    }
+
+    let correctAnswers = 0;
+    mcQuestions.forEach((question) => {
+      const correctOption = question.options.find((opt) => opt.isCorrect);
+      const participantResponse = assignment.responses[question.id];
+      if (correctOption && participantResponse === correctOption.text) {
+        correctAnswers++;
+      }
+    });
+
+    return {
+      score: correctAnswers,
+      total: mcQuestions.length,
+      percentage: Math.round((correctAnswers / mcQuestions.length) * 100),
+    };
+  };
+
   const handleExport = (assessmentId, format) => {
     // Construct an absolute URL to the backend server.
     // This avoids the browser trying to fetch from the frontend dev server's address.
@@ -219,6 +249,26 @@ export default function CompetencyEvaluationReview() {
     });
   };
 
+  const formatTimeTaken = (seconds) => {
+    if (seconds === null || seconds === undefined) return "N/A";
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}m ${secs}s`;
+  };
+
+  const getTimeTakenDisplay = (submission) => {
+    const timeTaken = submission.timeTakenSeconds;
+    const estimatedTime = submission.estimatedTimeSeconds;
+    if (timeTaken === null || timeTaken === undefined) {
+      return <span>{formatTimeTaken(timeTaken)}</span>;
+    }
+    let colorClass = '';
+    if (estimatedTime) {
+        colorClass = timeTaken > estimatedTime ? 'text-red-600' : 'text-green-600';
+    }
+
+    return <span className={colorClass}>{formatTimeTaken(timeTaken)}</span>;
+  };
   if (loading) {
     return (
       <div className="flex items-center justify-center p-8">
@@ -259,13 +309,13 @@ export default function CompetencyEvaluationReview() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {allAssessments.length === 0 ? (
+          {allAssessments.filter(a => a.status === 'published').length === 0 ? (
             <p className="text-sm text-muted-foreground">
               You have not created any competency assessments yet.
             </p>
           ) : (
             <div className="space-y-3">
-              {allAssessments.map((assessment) => (
+              {allAssessments.filter(a => a.status === 'published').map((assessment) => (
                 <div
                   key={assessment.id}
                   className="flex flex-col gap-3 rounded-lg border p-3 md:flex-row md:items-center md:justify-between"
@@ -381,6 +431,8 @@ export default function CompetencyEvaluationReview() {
                       <TableHead>Email</TableHead>
                       <TableHead>Submitted</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>MC Score</TableHead>
+                      <TableHead>Time Taken</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -392,14 +444,23 @@ export default function CompetencyEvaluationReview() {
                           {submission.participantEmail}
                         </TableCell>
                         <TableCell className="text-sm">
-                          {new Date(submission.submittedAt).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
+                          {formatDateTime(submission.submittedAt)}
                         </TableCell>
                         <TableCell>{getStatusBadge(submission)}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1 text-sm">
+                            <Percent className="h-3.5 w-3.5 text-muted-foreground" />
+                            <span>
+                              {calculatePerformance(submission).percentage}%
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1 text-sm">
+                            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                            {getTimeTakenDisplay(submission)}
+                          </div>
+                        </TableCell>
                         <TableCell className="text-right">
                           <Button
                             variant="outline"
@@ -435,71 +496,114 @@ export default function CompetencyEvaluationReview() {
           </DialogHeader>
 
           {selectedAssignment && (
-            <div className="space-y-6">
-              {/* Participant Info */}
-              <div className="grid grid-cols-2 gap-4 p-4 bg-muted rounded-lg">
-                <div>
-                  <p className="text-sm font-semibold text-muted-foreground">Participant</p>
-                  <p className="text-base font-medium">{selectedAssignment.participantName}</p>
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-muted-foreground">Email</p>
-                  <p className="text-base">{selectedAssignment.participantEmail}</p>
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-muted-foreground">Submitted</p>
-                  <p className="text-base">
-                    {new Date(selectedAssignment.submittedAt).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                    })}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-muted-foreground">Status</p>
-                  {getStatusBadge(selectedAssignment)}
-                </div>
-              </div>
+            (() => {
+              const performance = calculatePerformance(selectedAssignment);
+              const mcQuestions = selectedAssignment.questions.filter(q => q.type === 'multiple_choice');
+              const saQuestions = selectedAssignment.questions.filter(q => q.type === 'short_answer');
 
-              {/* Responses */}
-              <div className="space-y-4">
-                <h3 className="font-semibold">Participant Responses</h3>
-                {selectedAssignment.questions &&
-                  selectedAssignment.questions.map((question, index) => {
-                    const response = selectedAssignment.responses?.[question.id || index];
-                    return (
-                      <div
-                        key={question.id || index}
-                        className="p-4 border rounded-lg space-y-2"
-                      >
-                        <p className="font-medium text-sm">
-                          Q{index + 1}: {question.title}
-                        </p>
-                        <div className="p-3 bg-muted rounded text-sm">
-                          <p className="text-muted-foreground">
-                            {response || "(No response provided)"}
-                          </p>
+              return (
+                <div className="space-y-6">
+                  {/* Participant Info */}
+                  <div className="grid grid-cols-2 gap-4 p-4 bg-muted rounded-lg">
+                    <div>
+                      <p className="text-sm font-semibold text-muted-foreground">Participant</p>
+                      <p className="text-base font-medium">{selectedAssignment.participantName}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-muted-foreground">Email</p>
+                      <p className="text-base">{selectedAssignment.participantEmail}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-muted-foreground">Submitted</p>
+                      <p className="text-base">
+                        {new Date(selectedAssignment.submittedAt).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        })}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-muted-foreground">Status</p>
+                      {getStatusBadge(selectedAssignment)}
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-muted-foreground">Time Taken</p>
+                      <p className="text-base">
+                        {formatTimeTaken(selectedAssignment.timeTakenSeconds)} / {formatTimeTaken(selectedAssignment.estimatedTimeSeconds)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Multiple Choice Responses */}
+                  {mcQuestions.length > 0 && (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-semibold">Multiple Choice Responses</h3>
+                        <div className="flex items-center gap-2 p-2 bg-muted rounded-md">
+                          <p className="text-sm font-semibold text-muted-foreground">Performance</p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-base font-medium">{performance.percentage}%</p>
+                            <span className="text-xs text-muted-foreground">
+                              ({performance.score}/{performance.total} correct)
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    );
-                  })}
-              </div>
+                      {mcQuestions.map((question, index) => {
+                        const response = selectedAssignment.responses?.[question.id || index];
+                        const correctOption = question.options.find(opt => opt.isCorrect);
+                        const isCorrect = response === correctOption?.text;
+                        return (
+                          <div key={question.id || index} className="p-4 border rounded-lg space-y-2">
+                            <p className="font-medium text-sm">Q{index + 1}: {question.title}</p>
+                            <div className={`p-3 rounded text-sm ${isCorrect ? 'bg-green-100' : 'bg-red-100'}`}>
+                              <p className="font-semibold">{response || "(No response provided)"}</p>
+                              {!isCorrect && correctOption && (
+                                <p className="text-xs mt-1">Correct answer: <span className="font-semibold">{correctOption.text}</span></p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-              {/* Reviewer Notes */}
-              <div className="space-y-2">
-                <label htmlFor="notes" className="text-sm font-semibold">
-                  Reviewer Notes (Optional)
-                </label> 
-                <Input
-                  id="notes"
-                  placeholder="Add notes about this participant's evaluation, reasons for acceptance/rejection, or potential study fit..."
-                  value={dialogReviewerNotes}
-                  onChange={(e) => setDialogReviewerNotes(e.target.value)}
-                  className="text-sm"
-                /> 
-              </div>
-            </div>
+                  {/* Short Answer Responses */}
+                  {saQuestions.length > 0 && (
+                    <div className="space-y-4">
+                      <h3 className="font-semibold">Short Answer Responses</h3>
+                      {saQuestions.map((question, index) => {
+                        const response = selectedAssignment.responses?.[question.id || index];
+                        return (
+                          <div key={question.id || index} className="p-4 border rounded-lg space-y-2">
+                            <p className="font-medium text-sm">Q{index + 1}: {question.title}</p>
+                            <div className="p-3 bg-muted rounded text-sm">
+                              <p className="text-muted-foreground whitespace-pre-wrap">{response || "(No response provided)"}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Reviewer Notes */}
+                  <div className="space-y-2 pt-4">
+                    <label htmlFor="notes" className="text-sm font-semibold">
+                      Reviewer Notes (Optional)
+                    </label>
+                    <Textarea
+                      id="notes"
+                      placeholder="Add notes about this participant's evaluation, reasons for acceptance/rejection, or potential study fit..."
+                      value={dialogReviewerNotes}
+                      onChange={(e) => setDialogReviewerNotes(e.target.value)}
+                      className="text-sm"
+                      rows={3}
+                    />
+                  </div>
+                </div>
+              );
+            })()
           )}
 
           <DialogFooter className="flex gap-3 justify-end pt-6 border-t">
