@@ -12,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -732,7 +733,6 @@ export default function ArtifactsComparison() {
   const [patchAreClones, setPatchAreClones] = useState(""); // "yes" | "no"
   const [patchCloneType, setPatchCloneType] = useState(""); // "type1".."type4"
   const [patchCloneComment, setPatchCloneComment] = useState(""); // reasoning
-  const [patchPairLabel, setPatchPairLabel] = useState("");
 
   // Snapshot mode outcome
   const [snapshotOutcome, setSnapshotOutcome] = useState(""); // "failure" | "intended" | "unclear"
@@ -741,8 +741,8 @@ export default function ArtifactsComparison() {
   const [snapshotAssets, setSnapshotAssets] = useState({
     reference: null,
     failure: null,
+    diff: null,
   });
-  const [snapshotDiffData, setSnapshotDiffData] = useState(null);
 
   // Generic comment / notes
   const [assessmentComment, setAssessmentComment] = useState("");
@@ -807,8 +807,6 @@ export default function ArtifactsComparison() {
 
   const leftDraftRef = useRef("");
   const rightDraftRef = useRef("");
-  const snapshotDiffInputRef = useRef(null);
-  const patchPairInputRef = useRef(null);
 
   const leftCanvasRef = useRef(null);
   const rightCanvasRef = useRef(null);
@@ -831,6 +829,7 @@ export default function ArtifactsComparison() {
     setActiveAssessmentId(null);
     setAssessmentError("");
     setAssessmentSuccess("");
+    setSnapshotAssets({ reference: null, failure: null, diff: null });
   }, [studyContext.studyId, studyContext.studyArtifactId]);
 
   // 🔹 Initial Load
@@ -993,6 +992,7 @@ export default function ArtifactsComparison() {
         if (panes) {
           const leftPane = normalizeAssignmentPane(panes.left, "Researcher artifact A");
           const rightPane = normalizeAssignmentPane(panes.right, "Researcher artifact B");
+          const diffPane = normalizeAssignmentPane(panes.diff, "Researcher diff artifact");
 
           const shouldHydrateLeft = !assignmentHydratedRef.current || !paneHasContent(leftData);
           const shouldHydrateRight = !assignmentHydratedRef.current || !paneHasContent(rightData);
@@ -1004,11 +1004,13 @@ export default function ArtifactsComparison() {
             setSnapshotAssets((prev) => {
               const nextRef = leftPane || prev.reference;
               const nextFail = rightPane || prev.failure;
+              const nextDiff = diffPane || prev.diff;
               // Avoid unnecessary state churn that would retrigger this effect
               const sameRef = prev.reference?.url === nextRef?.url && prev.reference?.text === nextRef?.text;
               const sameFail = prev.failure?.url === nextFail?.url && prev.failure?.text === nextFail?.text;
-              if (sameRef && sameFail) return prev;
-              return { reference: nextRef, failure: nextFail };
+              const sameDiff = prev.diff?.url === nextDiff?.url && prev.diff?.text === nextDiff?.text;
+              if (sameRef && sameFail && sameDiff) return prev;
+              return { reference: nextRef, failure: nextFail, diff: nextDiff };
             });
           }
 
@@ -1071,7 +1073,7 @@ export default function ArtifactsComparison() {
       snapshotOutcome,
       snapshotChangeType,
       snapshotChangeTypeOther,
-      snapshotDiffData,
+      snapshotDiffData: snapshotAssets.diff,
       assessmentComment,
       evaluationRatings: computeCriteriaScores(),
       evaluationStarRatings: criteriaRatings,
@@ -1103,7 +1105,7 @@ export default function ArtifactsComparison() {
       snapshotOutcome,
       snapshotChangeType,
       snapshotChangeTypeOther,
-      snapshotDiffData,
+      snapshotAssets.diff,
       assessmentComment,
       criteriaRatings,
       computeCriteriaScores,
@@ -1115,36 +1117,39 @@ export default function ArtifactsComparison() {
       if (!payload || typeof payload !== "object") return;
       if (payload.left) setLeftData(payload.left);
       if (payload.right) setRightData(payload.right);
-    if (Array.isArray(payload.leftAnn)) setLeftAnn(payload.leftAnn);
-    if (Array.isArray(payload.rightAnn)) setRightAnn(payload.rightAnn);
-    if (typeof payload.syncScroll === "boolean") setSyncScroll(payload.syncScroll);
-    if (payload.leftSummary) setLeftSummary(payload.leftSummary);
-    if (payload.rightSummary) setRightSummary(payload.rightSummary);
+      if (Array.isArray(payload.leftAnn)) setLeftAnn(payload.leftAnn);
+      if (Array.isArray(payload.rightAnn)) setRightAnn(payload.rightAnn);
+      if (typeof payload.syncScroll === "boolean") setSyncScroll(payload.syncScroll);
+      if (payload.leftSummary) setLeftSummary(payload.leftSummary);
+      if (payload.rightSummary) setRightSummary(payload.rightSummary);
       if (payload.mode && !assignedMode) setMode(payload.mode);
-    if (typeof payload.leftCategory === "string") setLeftCategory(payload.leftCategory);
-    if (typeof payload.rightCategory === "string") setRightCategory(payload.rightCategory);
-    if (typeof payload.matchCorrectness === "string") setMatchCorrectness(payload.matchCorrectness);
-    if (typeof payload.finalCategory === "string") setFinalCategory(payload.finalCategory);
-    if (typeof payload.finalOtherCategory === "string") setFinalOtherCategory(payload.finalOtherCategory);
-    if (Array.isArray(payload.bugCategoryOptions) && payload.bugCategoryOptions.length)
-      setBugCategoryOptions(payload.bugCategoryOptions);
-    if (typeof payload.solidViolation === "string") setSolidViolation(payload.solidViolation);
-    if (typeof payload.solidComplexity === "string") setSolidComplexity(payload.solidComplexity);
-    if (typeof payload.solidFixedCode === "string") setSolidFixedCode(payload.solidFixedCode);
-    if (typeof payload.patchAreClones === "string") setPatchAreClones(payload.patchAreClones);
-    if (typeof payload.patchCloneType === "string") setPatchCloneType(payload.patchCloneType);
-    if (typeof payload.patchCloneComment === "string") setPatchCloneComment(payload.patchCloneComment);
-    if (typeof payload.snapshotOutcome === "string") setSnapshotOutcome(payload.snapshotOutcome);
-    if (typeof payload.snapshotChangeType === "string") setSnapshotChangeType(payload.snapshotChangeType);
-    if (typeof payload.snapshotChangeTypeOther === "string")
-      setSnapshotChangeTypeOther(payload.snapshotChangeTypeOther);
-    if (payload.snapshotDiffData) setSnapshotDiffData(payload.snapshotDiffData);
-    if (typeof payload.assessmentComment === "string") setAssessmentComment(payload.assessmentComment);
-    if (payload.evaluationStarRatings && typeof payload.evaluationStarRatings === "object") {
-      setCriteriaRatings(payload.evaluationStarRatings);
-    } else if (payload.evaluationRatings && typeof payload.evaluationRatings === "object") {
-      pendingCriteriaScoresRef.current = payload.evaluationRatings;
-    }
+      if (typeof payload.leftCategory === "string") setLeftCategory(payload.leftCategory);
+      if (typeof payload.rightCategory === "string") setRightCategory(payload.rightCategory);
+      if (typeof payload.matchCorrectness === "string") setMatchCorrectness(payload.matchCorrectness);
+      if (typeof payload.finalCategory === "string") setFinalCategory(payload.finalCategory);
+      if (typeof payload.finalOtherCategory === "string")
+        setFinalOtherCategory(payload.finalOtherCategory);
+      if (Array.isArray(payload.bugCategoryOptions) && payload.bugCategoryOptions.length)
+        setBugCategoryOptions(payload.bugCategoryOptions);
+      if (typeof payload.solidViolation === "string") setSolidViolation(payload.solidViolation);
+      if (typeof payload.solidComplexity === "string") setSolidComplexity(payload.solidComplexity);
+      if (typeof payload.solidFixedCode === "string") setSolidFixedCode(payload.solidFixedCode);
+      if (typeof payload.patchAreClones === "string") setPatchAreClones(payload.patchAreClones);
+      if (typeof payload.patchCloneType === "string") setPatchCloneType(payload.patchCloneType);
+      if (typeof payload.patchCloneComment === "string") setPatchCloneComment(payload.patchCloneComment);
+      if (typeof payload.snapshotOutcome === "string") setSnapshotOutcome(payload.snapshotOutcome);
+      if (typeof payload.snapshotChangeType === "string") setSnapshotChangeType(payload.snapshotChangeType);
+      if (typeof payload.snapshotChangeTypeOther === "string")
+        setSnapshotChangeTypeOther(payload.snapshotChangeTypeOther);
+      if (payload.snapshotDiffData) {
+        setSnapshotAssets((prev) => ({ ...prev, diff: payload.snapshotDiffData }));
+      }
+      if (typeof payload.assessmentComment === "string") setAssessmentComment(payload.assessmentComment);
+      if (payload.evaluationStarRatings && typeof payload.evaluationStarRatings === "object") {
+        setCriteriaRatings(payload.evaluationStarRatings);
+      } else if (payload.evaluationRatings && typeof payload.evaluationRatings === "object") {
+        pendingCriteriaScoresRef.current = payload.evaluationRatings;
+      }
     },
     [assignedMode],
   );
@@ -1369,56 +1374,6 @@ export default function ArtifactsComparison() {
     const next = (solidRecordIndex + direction + solidRecords.length) %
       solidRecords.length;
     handleSolidRecordChange(next);
-  };
-
-  const handleSnapshotDiffUpload = async (e) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-
-    const isImg = /\.(png|jpg|jpeg)$/i.test(file.name);
-    const isPdf = /\.pdf$/i.test(file.name);
-    if (!(isImg || isPdf)) {
-      alert("Please upload the diff artifact in PNG, JPG, or PDF format.");
-      return;
-    }
-
-    try {
-      const base64Url = await fileToBase64(file);
-      setSnapshotDiffData({
-        type: isImg ? "image" : "pdf",
-        url: base64Url,
-        name: file.name,
-      });
-      resetSnapshotDecisions();
-    } catch (err) {
-      console.error("Snapshot diff upload failed", err);
-      alert("Unable to read the diff artifact.");
-    }
-  };
-
-  const handlePatchPairUpload = async (e) => {
-    const files = Array.from(e.target.files || []);
-    e.target.value = "";
-    if (files.length < 2) {
-      alert("Select two .patch or .diff files to populate Patch A and Patch B.");
-      return;
-    }
-
-    try {
-      const [first, second] = files;
-      const [textA, textB] = await Promise.all([first.text(), second.text()]);
-      setLeftData({ type: "text", text: numberLines(textA), name: first.name });
-      setRightData({ type: "text", text: numberLines(textB), name: second.name });
-      setLeftAnn([]);
-      setRightAnn([]);
-      setLeftZoom(1);
-      setRightZoom(1);
-      setPatchPairLabel(`${first.name} ↔ ${second.name}`);
-    } catch (err) {
-      console.error("Failed to load patch pair", err);
-      alert("Unable to read one of the selected patch files.");
-    }
   };
 
   const handleDownload = (side) => {
@@ -2243,8 +2198,8 @@ export default function ArtifactsComparison() {
         return "Select a clone type before saving.";
       }
     } else if (mode === "snapshot") {
-      if (!snapshotAssets.reference || !snapshotAssets.failure || !snapshotDiffData) {
-        return "Upload the reference, failure, and diff artifacts before saving.";
+      if (!snapshotAssets.reference || !snapshotAssets.failure) {
+        return "Researcher-provided reference and failure artifacts are missing.";
       }
       if (!snapshotOutcome) {
         return "Choose whether this is an actual failure or an intended change.";
@@ -2271,13 +2226,18 @@ export default function ArtifactsComparison() {
       return;
     }
 
-    const words = (assessmentComment || "").trim().split(/\s+/).filter(Boolean);
+    const commentText = mode === "patch" ? patchCloneComment : assessmentComment;
+    const words = (commentText || "").trim().split(/\s+/).filter(Boolean);
     if (!words.length) {
       setAssessmentError("A comment is required to submit.");
       return;
     }
     if (words.length < 20) {
-      setAssessmentError("Please provide at least 20 words in the comment.");
+      setAssessmentError(
+        mode === "patch"
+          ? "Please provide at least 20 words explaining your clone decision."
+          : "Please provide at least 20 words in the comment."
+      );
       return;
     }
 
@@ -2765,43 +2725,31 @@ export default function ArtifactsComparison() {
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-gray-800">
-                  Diff artifact
+                  Diff artifact (researcher provided)
                 </h3>
                 <p className="text-[11px] text-gray-500">
-                  Upload the diff.png image (or PDF) that highlights pixel
-                  differences between the reference and failure snapshots.
+                  Review this diff alongside the reference and failure snapshots. Uploading is no longer required.
                 </p>
               </div>
-              <div>
-                <input
-                  ref={snapshotDiffInputRef}
-                  type="file"
-                  className="hidden"
-                  accept=".png,.jpg,.jpeg,.pdf"
-                  onChange={handleSnapshotDiffUpload}
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => snapshotDiffInputRef.current?.click()}
-                >
-                  {snapshotDiffData ? "Replace diff" : "Upload diff"}
-                </Button>
-              </div>
+              {snapshotAssets.diff?.name && (
+                <Badge variant="outline" className="text-[11px]">
+                  {snapshotAssets.diff.name}
+                </Badge>
+              )}
             </div>
-            {snapshotDiffData ? (
-              snapshotDiffData.type === "image" ? (
+            {snapshotAssets.diff ? (
+              snapshotAssets.diff.type === "image" ? (
                 <img
-                  src={snapshotDiffData.url}
+                  src={snapshotAssets.diff.url}
                   alt="Diff artifact"
-                  className="border rounded-md max-h-[420px] object-contain mx-auto"
+                  className="border rounded-md max-h-[420px] object-contain mx-auto bg-white"
                 />
-              ) : (
+              ) : snapshotAssets.diff.type === "pdf" ? (
                 <object
                   data={
-                    snapshotDiffData.url.startsWith("data:")
-                      ? base64ToBlobUrl(snapshotDiffData.url)
-                      : snapshotDiffData.url
+                    snapshotAssets.diff.url?.startsWith("data:")
+                      ? base64ToBlobUrl(snapshotAssets.diff.url)
+                      : snapshotAssets.diff.url
                   }
                   type="application/pdf"
                   className="w-full h-[420px]"
@@ -2810,10 +2758,14 @@ export default function ArtifactsComparison() {
                     Unable to display PDF diff. Download to view.
                   </div>
                 </object>
+              ) : (
+                <pre className="text-xs bg-white border rounded-md p-3 overflow-auto max-h-[420px]">
+                  {snapshotAssets.diff.text || "Diff artifact attached."}
+                </pre>
               )
             ) : (
               <div className="text-xs text-gray-500 border border-dashed rounded-md p-6 text-center">
-                No diff artifact uploaded yet.
+                No diff artifact was attached by the researcher.
               </div>
             )}
           </div>
@@ -2837,30 +2789,9 @@ export default function ArtifactsComparison() {
           <CardContent className="space-y-6">
             {mode === "patch" ? (
               <>
-                <div className="flex flex-wrap items-center gap-3">
-                  <input
-                    ref={patchPairInputRef}
-                    type="file"
-                    multiple
-                    accept=".patch,.diff,.txt"
-                    className="hidden"
-                    onChange={handlePatchPairUpload}
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="text-xs"
-                    onClick={() => patchPairInputRef.current?.click()}
-                  >
-                    Load patch pair (.diff/.patch)
-                  </Button>
-                  {patchPairLabel && (
-                    <span className="text-[11px] text-gray-500">
-                      Loaded: {patchPairLabel}
-                    </span>
-                  )}
-                </div>
-
+                <p className="text-xs text-gray-500">
+                  Review the two code blocks shown above and determine whether they represent the same logical change (a clone) before answering below.
+                </p>
                 <div className="space-y-2">
                   <Label>Are these two patches code clones?</Label>
                   <RadioGroup
@@ -2929,6 +2860,9 @@ export default function ArtifactsComparison() {
                     rows={3}
                     placeholder="E.g., 'Both patches change the same API call and condition, only variable names differ, so Type-2.'"
                   />
+                  {assessmentError && (
+                    <p className="text-xs text-destructive">{assessmentError}</p>
+                  )}
                 </div>
               </>
             ) : mode === "stage1" ? (

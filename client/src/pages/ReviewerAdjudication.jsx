@@ -203,7 +203,7 @@ export default function ReviewerAdjudication() {
     const summary = answer.summary || payload.summary || "";
     const notes = answer.notes || payload.notes || payload.assessmentComment || "";
     const snapshotDiff = payload.snapshotDiffData
-      ? `Participant uploaded a diff artifact (${payload.snapshotDiffData.name || payload.snapshotDiffData.type || "diff"}).`
+      ? `Diff artifact provided (${payload.snapshotDiffData.name || payload.snapshotDiffData.type || "diff"}).`
       : "";
     lines.push(
       `Participant preference: ${preference}; rating: ${rating}. Summary: ${summary || "—"}. Notes: ${notes || "—"}. ${snapshotDiff}`,

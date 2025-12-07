@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "../api/axios";
 import { Button } from "@/components/ui/button";
@@ -82,6 +82,13 @@ function StudyCreationWizard() {
   const [windowStart, setWindowStart] = useState("");
   const [windowEnd, setWindowEnd] = useState("");
   const [selectedArtifacts, setSelectedArtifacts] = useState([]);
+  const [snapshotArtifacts, setSnapshotArtifacts] = useState({
+    reference: "",
+    failure: "",
+    diff: "",
+  });
+  const lastNonSnapshotArtifactsRef = useRef([]);
+  const wasSnapshotModeRef = useRef(false);
   const [requireAssessment, setRequireAssessment] = useState(true);
   const [selectedAssessment, setSelectedAssessment] = useState("asm-1");
   const [selectedSegment, setSelectedSegment] = useState("seg-1");
@@ -178,6 +185,33 @@ function StudyCreationWizard() {
     fetchParticipants();
   }, [user]);
 
+  useEffect(() => {
+    if (studyMode === "snapshot") {
+      if (!wasSnapshotModeRef.current) {
+        wasSnapshotModeRef.current = true;
+        lastNonSnapshotArtifactsRef.current = selectedArtifacts;
+      }
+    } else if (wasSnapshotModeRef.current) {
+      wasSnapshotModeRef.current = false;
+      if (lastNonSnapshotArtifactsRef.current.length) {
+        setSelectedArtifacts(lastNonSnapshotArtifactsRef.current);
+        lastNonSnapshotArtifactsRef.current = [];
+      }
+      setSnapshotArtifacts({ reference: "", failure: "", diff: "" });
+    }
+  }, [studyMode, selectedArtifacts]);
+
+  useEffect(() => {
+    if (studyMode !== "snapshot") {
+      return;
+    }
+    const picks = Object.values(snapshotArtifacts)
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+    const unique = Array.from(new Set(picks));
+    setSelectedArtifacts(unique);
+  }, [studyMode, snapshotArtifacts]);
+
   const progressPercent = useMemo(() => {
     const progress = ((currentStep + 1) / WIZARD_STEPS.length) * 100;
     return Math.min(100, Math.max(0, Math.round(progress)));
@@ -228,6 +262,9 @@ function StudyCreationWizard() {
   }, [recentlyAssignedParticipants]);
 
   const toggleArtifact = (artifactId) => {
+    if (studyMode === "snapshot") {
+      return;
+    }
     setSelectedArtifacts((prev) =>
       prev.includes(artifactId) ? prev.filter((id) => id !== artifactId) : [...prev, artifactId],
     );
@@ -270,12 +307,31 @@ function StudyCreationWizard() {
     setCriteria((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const handleSnapshotSelect = (role, value) => {
+    setSnapshotArtifacts((prev) => ({
+      ...prev,
+      [role]: value,
+    }));
+  };
+
   const handleCreateStudy = async () => {
     setError(null);
     if (!user?.id) {
       setError("Please sign in as a researcher to create a study.");
       return;
     }
+    if (studyMode === "snapshot" && !validateSnapshotArtifacts()) {
+      return;
+    }
+    const snapshotMeta =
+      studyMode === "snapshot"
+        ? {
+            reference: snapshotArtifacts.reference ? Number(snapshotArtifacts.reference) : null,
+            failure: snapshotArtifacts.failure ? Number(snapshotArtifacts.failure) : null,
+            diff: snapshotArtifacts.diff ? Number(snapshotArtifacts.diff) : null,
+          }
+        : null;
+
     const payload = {
       title,
       description,
@@ -295,11 +351,12 @@ function StudyCreationWizard() {
         selectedAssessment: requireAssessment ? selectedAssessment : null,
         selectedSegment: requireAssessment ? selectedSegment : null,
         autoInvite,
-        selectedArtifacts,
+        selectedArtifacts: Array.from(new Set(selectedArtifacts)),
         selectedParticipants,
         isPublic,
         isBlinded,
         defaultArtifactMode: studyMode,
+        ...(snapshotMeta ? { snapshotArtifacts: snapshotMeta } : {}),
       },
     };
 
@@ -427,6 +484,23 @@ function StudyCreationWizard() {
     return true;
   };
 
+  const validateSnapshotArtifacts = () => {
+    if (studyMode !== "snapshot") {
+      return true;
+    }
+    const { reference, failure, diff } = snapshotArtifacts;
+    if (!reference || !failure || !diff) {
+      setError("Select reference, failure, and diff artifacts for this snapshot study.");
+      return false;
+    }
+    const unique = new Set([reference, failure, diff]);
+    if (unique.size !== 3) {
+      setError("Reference, failure, and diff artifacts must be different.");
+      return false;
+    }
+    return true;
+  };
+
   const validateCriteriaBeforeNext = () => {
     if (criteria.length === 0) {
       setError("You must create at least one evaluation criterion before continuing.");
@@ -454,6 +528,7 @@ function StudyCreationWizard() {
     }
     if (currentStep === 1) {
       if (!validateCriteriaBeforeNext()) return;
+      if (!validateSnapshotArtifacts()) return;
     }
     if (currentStep === 2) {
       if (selectedParticipants.length) {
@@ -645,7 +720,9 @@ function StudyCreationWizard() {
               <div className="space-y-2">
                 <Label>Artifact selection</Label>
                 <p className="text-sm text-muted-foreground">
-                  Choose the artifacts for this study. You can upload more from the artifacts page.
+                  {studyMode === "snapshot"
+                    ? "Pick which artifacts serve as the reference, failure, and diff for this snapshot task."
+                    : "Choose the artifacts for this study. You can upload more from the artifacts page."}
                 </p>
                 {artifactsError ? (
                   <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
@@ -657,6 +734,45 @@ function StudyCreationWizard() {
                 ) : artifacts.length === 0 ? (
                   <div className="rounded-md border p-3 text-sm text-muted-foreground">
                     No artifacts found. Upload artifacts first from the Artifacts page.
+                  </div>
+                ) : studyMode === "snapshot" ? (
+                  <div className="space-y-4 rounded-md border p-4">
+                    <p className="text-xs text-muted-foreground">
+                      Reference = intended UI, Failure = regression screenshot, Diff = researcher-provided highlight.
+                    </p>
+                    <div className="grid gap-4 md:grid-cols-3">
+                      {[
+                        { key: "reference", label: "Reference artifact" },
+                        { key: "failure", label: "Failure artifact" },
+                        { key: "diff", label: "Diff artifact" },
+                      ].map((role) => (
+                        <div key={role.key} className="space-y-2">
+                          <Label className="text-xs text-muted-foreground">{role.label}</Label>
+                          <Select
+                            value={snapshotArtifacts[role.key]}
+                            onValueChange={(value) => handleSnapshotSelect(role.key, value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Choose artifact" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {artifacts.map((artifact) => {
+                                const value = String(artifact.id);
+                                const isTaken = Object.entries(snapshotArtifacts).some(
+                                  ([otherRole, otherValue]) =>
+                                    otherRole !== role.key && otherValue && otherValue === value,
+                                );
+                                return (
+                                  <SelectItem key={artifact.id} value={value} disabled={isTaken}>
+                                    {artifact.name || `Artifact ${artifact.id}`}
+                                  </SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   <div className="space-y-3">
