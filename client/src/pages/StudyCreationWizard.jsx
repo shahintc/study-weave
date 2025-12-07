@@ -93,6 +93,7 @@ function StudyCreationWizard() {
   const [participantsError, setParticipantsError] = useState("");
   const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
   const [selectedParticipants, setSelectedParticipants] = useState([]);
+  const [recentlyAssignedParticipants, setRecentlyAssignedParticipants] = useState([]);
   const [isSuccessDialogOpen, setIsSuccessDialogOpen] = useState(false);
   const [newlyCreatedStudy, setNewlyCreatedStudy] = useState(null);
   const [expandedParticipants, setExpandedParticipants] = useState([]);
@@ -199,6 +200,32 @@ function StudyCreationWizard() {
     windowEnd,
     requireAssessment,
   ]);
+
+  const assignedParticipantSummary = useMemo(() => {
+    if (!recentlyAssignedParticipants.length) {
+      return "";
+    }
+    const names = recentlyAssignedParticipants.map((participant) => {
+      if (participant.name?.trim()) {
+        return participant.name.trim();
+      }
+      if (participant.email?.trim()) {
+        return participant.email.trim();
+      }
+      return participant.id;
+    });
+    if (names.length === 1) {
+      return names[0];
+    }
+    if (names.length === 2) {
+      return `${names[0]} and ${names[1]}`;
+    }
+    if (names.length === 3) {
+      return `${names[0]}, ${names[1]}, and ${names[2]}`;
+    }
+    const remaining = names.length - 2;
+    return `${names[0]}, ${names[1]} and ${remaining} more`;
+  }, [recentlyAssignedParticipants]);
 
   const toggleArtifact = (artifactId) => {
     setSelectedArtifacts((prev) =>
@@ -415,6 +442,9 @@ function StudyCreationWizard() {
 
   const goBack = () => {
     setError(null);
+    if (currentStep === 3) {
+      setRecentlyAssignedParticipants([]);
+    }
     setCurrentStep((prev) => Math.max(0, prev - 1));
   };
   const goNext = () => {
@@ -424,6 +454,21 @@ function StudyCreationWizard() {
     }
     if (currentStep === 1) {
       if (!validateCriteriaBeforeNext()) return;
+    }
+    if (currentStep === 2) {
+      if (selectedParticipants.length) {
+        const snapshot = selectedParticipants.map((participantId) => {
+          const participant = participants.find((p) => p.id === participantId);
+          return {
+            id: participantId,
+            name: participant?.name || "",
+            email: participant?.email || "",
+          };
+        });
+        setRecentlyAssignedParticipants(snapshot);
+      } else {
+        setRecentlyAssignedParticipants([]);
+      }
     }
     setCurrentStep((prev) => Math.min(WIZARD_STEPS.length - 1, prev + 1));
   };
@@ -785,6 +830,7 @@ function StudyCreationWizard() {
                                     <Checkbox
                                       checked={selectedParticipants.includes(participant.id)}
                                       onCheckedChange={() => toggleParticipant(participant.id)}
+                                      aria-label={`Select ${participant.name || participant.email || `participant ${participant.id}`}`}
                                     />
                                   </div>
                                 </div>
@@ -840,6 +886,15 @@ function StudyCreationWizard() {
 
           {currentStep === 3 ? (
             <>
+              {recentlyAssignedParticipants.length > 0 ? (
+                <div
+                  className="space-y-1 rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900"
+                  data-testid="participant-assignment-summary"
+                >
+                  <p className="font-semibold text-emerald-900">Participants assigned</p>
+                  <p>You assigned {assignedParticipantSummary} to this study.</p>
+                </div>
+              ) : null}
               <div className="space-y-2">
                 <Label>Launch notes</Label>
                 <Textarea

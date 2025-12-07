@@ -117,6 +117,21 @@ function NotificationBell({ count = 0, notifications = [] }) {
     }
   };
 
+  const resolveTitle = (type) => {
+    switch (type) {
+      case "warning":
+        return "⚠ Last day";
+      case "info":
+        return "ℹ Reminder";
+      case "assignment":
+        return "📄 New study";
+      case "competency":
+        return "🧠 New competency";
+      default:
+        return "Notification";
+    }
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -142,15 +157,7 @@ function NotificationBell({ count = 0, notifications = [] }) {
               <DropdownMenuItem key={n.id} className="whitespace-normal text-sm">
                 <div className="flex flex-col gap-0.5">
                   <div className="flex items-start justify-between gap-2">
-                    <span className="font-medium">
-                      {n.type === "warning"
-                        ? "⚠ Last day"
-                        : n.type === "info"
-                        ? "ℹ Reminder"
-                        : n.type === "assignment"
-                        ? "📄 New study"
-                        : "Notification"}
-                    </span>
+                    <span className="font-medium">{resolveTitle(n.type)}</span>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -163,6 +170,11 @@ function NotificationBell({ count = 0, notifications = [] }) {
                   <span className="text-muted-foreground text-xs">{n.message}</span>
                   {n.studyId ? (
                     <span className="text-[11px] text-muted-foreground">Study #{n.studyId}</span>
+                  ) : null}
+                  {n.type === "competency" && n.assignmentId ? (
+                    <span className="text-[11px] text-muted-foreground">
+                      Competency #{n.assignmentId}
+                    </span>
                   ) : null}
                 </div>
               </DropdownMenuItem>

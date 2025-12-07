@@ -1,6 +1,15 @@
 const express = require('express');
+const { Op } = require('sequelize');
 const router = express.Router();
-const { sequelize, Study, CompetencyAssignment, StudyArtifact, StudyParticipant } = require('../models');
+const {
+  sequelize,
+  Study,
+  CompetencyAssignment,
+  StudyArtifact,
+  StudyParticipant,
+  User,
+} = require('../models');
+const { sendEmail, isEmailConfigured } = require('../services/emailService');
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: 'stage1', label: 'Bug labeling – Stage 1' },
@@ -198,6 +207,16 @@ router.post('/', async (req, res) => {
 
     await transaction.commit();
 
+    try {
+      await sendStudyAssignmentInvitations({
+        participantIds: sanitizedParticipants,
+        researcherId,
+        studyTitle: newStudy.title,
+      });
+    } catch (notificationError) {
+      console.error('Failed to send study assignment notifications:', notificationError);
+    }
+
     res.status(201).json({
       study: newStudy.get({ plain: true }),
       competencyAssignments: assignments.map((entry) => entry.get({ plain: true })),
@@ -210,6 +229,75 @@ router.post('/', async (req, res) => {
     res.status(500).json({ message: 'Server error while creating study' });
   }
 });
+
+async function sendStudyAssignmentInvitations({ participantIds, researcherId, studyTitle }) {
+  if (!Array.isArray(participantIds) || !participantIds.length) {
+    return;
+  }
+
+  if (!isEmailConfigured()) {
+    return;
+  }
+
+  const uniqueParticipantIds = Array.from(
+    new Set(
+      participantIds
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value)),
+    ),
+  );
+  if (!uniqueParticipantIds.length) {
+    return;
+  }
+
+  const [researcher, participants] = await Promise.all([
+    typeof researcherId !== 'undefined'
+      ? User.findByPk(researcherId, { attributes: ['id', 'name'], raw: true })
+      : null,
+    User.findAll({
+      where: { id: { [Op.in]: uniqueParticipantIds } },
+      attributes: ['id', 'name', 'email'],
+      raw: true,
+    }),
+  ]);
+
+  const researcherName = (researcher && researcher.name) || 'a StudyWeave researcher';
+  const validRecipients = participants.filter((participant) => Boolean(participant?.email));
+  if (!validRecipients.length) {
+    return;
+  }
+
+  const subject = `You've been assigned to "${studyTitle}"`;
+  await Promise.all(
+    validRecipients.map((participant) => {
+      const text = buildStudyAssignmentEmailText({
+        participantName: participant.name,
+        researcherName,
+        studyTitle,
+      });
+      return sendEmail({
+        to: participant.email,
+        subject,
+        text,
+      });
+    }),
+  );
+}
+
+function buildStudyAssignmentEmailText({ participantName, researcherName, studyTitle }) {
+  const greeting = participantName ? `Hello ${participantName},` : 'Hello,';
+  const normalizedResearcher = researcherName || 'a StudyWeave researcher';
+  const messageLines = [
+    greeting,
+    '',
+    `Researcher ${normalizedResearcher} assigned you to the study "${studyTitle}".`,
+    'Sign in to StudyWeave when you are ready to get started - this is just a reminder, so no direct link is included yet.',
+    '',
+    'Thanks,',
+    'The StudyWeave Team',
+  ];
+  return messageLines.join('\n');
+}
 
 // We must export the router, just like in your other files
 module.exports = router;
