@@ -141,7 +141,7 @@ router.patch('/adjudications/:id', authMiddleware, async (req, res) => {
 
 function buildIncludes() {
   return [
-    { model: Study, as: 'study', attributes: ['id', 'title', 'researcherId'] },
+    { model: Study, as: 'study', attributes: ['id', 'title', 'researcherId', 'metadata'] },
     {
       model: StudyParticipant,
       as: 'studyParticipant',
@@ -187,13 +187,13 @@ function canReviewStudy(user, study) {
 function formatAdjudication(evaluationInstance) {
   const evaluation = evaluationInstance.get({ plain: true });
   const comparisonMeta = formatComparison(evaluation.comparison);
-  const participant = formatParticipant(evaluation);
+  const studyMeta = evaluation.study ? formatStudy(evaluation.study) : null;
+  const participant = formatParticipant(evaluation, { isBlinded: Boolean(studyMeta?.isBlinded) });
+  const isBlinded = Boolean(studyMeta?.isBlinded);
 
   return {
     id: String(evaluation.id),
-    study: evaluation.study
-      ? { id: String(evaluation.study.id), title: evaluation.study.title }
-      : null,
+    study: studyMeta,
     participant,
     status: evaluation.status,
     review: {
@@ -218,9 +218,28 @@ function formatAdjudication(evaluationInstance) {
   };
 }
 
-function formatParticipant(evaluation) {
+function formatStudy(study) {
+  const metadata = normalizeJson(study.metadata) || {};
+  return {
+    id: String(study.id),
+    title: study.title,
+    isBlinded: Boolean(metadata.isBlinded),
+  };
+}
+
+function formatParticipant(evaluation, { isBlinded = false } = {}) {
   const studyParticipant = evaluation.studyParticipant || {};
   const participantUser = studyParticipant.participant || evaluation.participantEvaluator;
+  if (isBlinded) {
+    return {
+      id: null,
+      name: buildBlindedParticipantLabel(evaluation, studyParticipant),
+      email: null,
+      studyParticipantId: studyParticipant.id ? String(studyParticipant.id) : null,
+      blinded: true,
+    };
+  }
+
   if (!participantUser) {
     return null;
   }
@@ -229,7 +248,31 @@ function formatParticipant(evaluation) {
     name: participantUser.name,
     email: participantUser.email,
     studyParticipantId: studyParticipant.id ? String(studyParticipant.id) : null,
+    blinded: false,
   };
+}
+
+function buildBlindedParticipantLabel(evaluation, studyParticipant) {
+  const seeds = [];
+  if (studyParticipant?.id) {
+    seeds.push(String(studyParticipant.id));
+  }
+  if (evaluation?.id) {
+    seeds.push(String(evaluation.id));
+  }
+  if (evaluation?.participantEvaluator?.id) {
+    seeds.push(String(evaluation.participantEvaluator.id));
+  }
+  if (!seeds.length) {
+    return 'Blinded participant';
+  }
+  const raw = seeds.join('-');
+  let hash = 7;
+  for (let idx = 0; idx < raw.length; idx += 1) {
+    hash = (hash * 31 + raw.charCodeAt(idx)) % 10000;
+  }
+  const code = String(Math.abs(hash)).padStart(4, '0');
+  return `Participant ${code}`;
 }
 
 function formatComparison(comparison) {

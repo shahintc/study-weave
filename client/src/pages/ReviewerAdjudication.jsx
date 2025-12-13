@@ -48,6 +48,7 @@ const STAGE_LABELS = {
 };
 
 const getStageLabel = (mode) => STAGE_LABELS[mode] || mode || "—";
+const BLINDED_PLACEHOLDER = "Hidden for blinded review";
 
 const normalizeCriteriaRatings = (payload) => {
   if (!payload || typeof payload !== "object") return [];
@@ -183,8 +184,12 @@ export default function ReviewerAdjudication() {
     lines.push(
       `Study: ${entry.study?.title || "Study"} (id: ${entry.study?.id || "n/a"})`,
     );
+    const isBlindedStudy = Boolean(entry.study?.isBlinded);
+    const participantName = entry.participant?.name || "Participant";
+    const participantEmail = isBlindedStudy ? BLINDED_PLACEHOLDER : entry.participant?.email || "n/a";
+    const submittedStamp = formatDateTime(entry.submittedAt);
     lines.push(
-      `Participant: ${entry.participant?.name || "Participant"} (${entry.participant?.email || "n/a"}); submitted at ${formatDateTime(entry.submittedAt)}.`,
+      `Participant: ${participantName} (${participantEmail}); submitted at ${submittedStamp}.`,
     );
     lines.push(
       `Review status: ${entry.review?.status || "pending"}; decision: ${entry.review?.decision || "none"}; adjudicated label: ${entry.review?.adjudicatedLabel || "n/a"}.`,
@@ -492,6 +497,7 @@ export default function ReviewerAdjudication() {
   }
 
   const hasRows = adjudications.length > 0;
+  const selectedParticipantDisplay = selected ? getParticipantDisplayMeta(selected) : null;
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6 p-6 md:p-10">
@@ -592,28 +598,36 @@ export default function ReviewerAdjudication() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {adjudications.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell className="font-medium">
-                      {entry.participant?.name || "Participant"}
-                      <p className="text-xs text-muted-foreground">{entry.participant?.email || ""}</p>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {entry.study?.title || "Study"}
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {formatDateTime(entry.submittedAt)}
-                    </TableCell>
-                    <TableCell>{getStatusBadge(entry.review?.status)}</TableCell>
-                    <TableCell>{getDecisionBadge(entry.review?.decision)}</TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="outline" size="sm" onClick={() => openDialog(entry)}>
-                        <Eye className="mr-2 h-4 w-4" />
-                        Review
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {adjudications.map((entry) => {
+                  const participantDisplay = getParticipantDisplayMeta(entry);
+                  return (
+                    <TableRow key={entry.id}>
+                      <TableCell className="font-medium">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <span>{participantDisplay.name}</span>
+                            {participantDisplay.isBlinded ? <Badge variant="outline">Blinded</Badge> : null}
+                          </div>
+                          <p className="text-xs text-muted-foreground">{participantDisplay.email}</p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {entry.study?.title || "Study"}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {participantDisplay.submittedLabel}
+                      </TableCell>
+                      <TableCell>{getStatusBadge(entry.review?.status)}</TableCell>
+                      <TableCell>{getDecisionBadge(entry.review?.decision)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button variant="outline" size="sm" onClick={() => openDialog(entry)}>
+                          <Eye className="mr-2 h-4 w-4" />
+                          Review
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </CardContent>
@@ -633,9 +647,16 @@ export default function ReviewerAdjudication() {
               <DialogHeader>
                 <DialogTitle>Adjudicate evaluation</DialogTitle>
                 <DialogDescription>
-                  {selected.participant?.name || "Participant"} • {selected.study?.title || "Study"}
+                  {selectedParticipantDisplay?.name || selected.participant?.name || "Participant"} •{" "}
+                  {selected.study?.title || "Study"}
                 </DialogDescription>
               </DialogHeader>
+
+              {selectedParticipantDisplay?.isBlinded ? (
+                <div className="mb-3 rounded-md border border-dashed border-muted px-3 py-2 text-xs text-muted-foreground">
+                  Participant identity is hidden for this blinded evaluation.
+                </div>
+              ) : null}
 
               <section className="space-y-4">
                 <h3 className="text-sm font-semibold text-muted-foreground">Comparison overview</h3>
@@ -722,9 +743,14 @@ export default function ReviewerAdjudication() {
                   <div className="rounded-lg border p-3 bg-muted/40">
                     <p className="text-xs font-semibold text-muted-foreground mb-1">Participant</p>
                     <p className="text-sm">
-                      {selected.participant?.name || "Participant"} · {formatDateTime(selected.submittedAt)}
+                      {selectedParticipantDisplay?.name || selected.participant?.name || "Participant"} ·{" "}
+                      {selectedParticipantDisplay?.submittedLabel || formatDateTime(selected.submittedAt)}
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">Reviewed above</p>
+                    {selectedParticipantDisplay?.isBlinded ? (
+                      <p className="text-xs text-muted-foreground mt-1">Identity hidden for blinded review.</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1">Reviewed above</p>
+                    )}
                   </div>
                   <div className="rounded-lg border p-3 border-dashed">
                     <p className="text-xs font-semibold text-muted-foreground mb-1">AI evaluation</p>
@@ -879,6 +905,22 @@ function formatDateTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function getParticipantDisplayMeta(entry) {
+  if (!entry) {
+    return {
+      isBlinded: false,
+      name: "Participant",
+      email: "",
+      submittedLabel: formatDateTime(null),
+    };
+  }
+  const isBlinded = Boolean(entry.study?.isBlinded);
+  const name = entry.participant?.name || "Participant";
+  const email = isBlinded ? BLINDED_PLACEHOLDER : entry.participant?.email || "";
+  const submittedLabel = formatDateTime(entry.submittedAt);
+  return { isBlinded, name, email, submittedLabel };
 }
 
 function ComparisonSummary({ comparison }) {
