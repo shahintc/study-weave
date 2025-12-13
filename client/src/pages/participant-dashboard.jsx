@@ -16,7 +16,6 @@ import {
 
 const ARTIFACT_MODE_LABELS = {
   stage1: "Stage 1 bug labeling",
-  stage2: "Stage 2 adjudication",
   solid: "SOLID review",
   clone: "Patch clone check",
   snapshot: "Snapshot intent",

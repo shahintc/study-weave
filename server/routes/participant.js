@@ -17,7 +17,6 @@ const {
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: 'stage1', label: 'Bug labeling – Stage 1' },
-  { value: 'stage2', label: 'Bug adjudication – Stage 2' },
   { value: 'solid', label: 'SOLID review' },
   { value: 'clone', label: 'Patch clone check' },
   { value: 'snapshot', label: 'Snapshot intent' },
@@ -764,10 +763,7 @@ function resolveModeKey(assessment) {
   }
   const type = assessment.assessmentType;
   if (type === 'bug_stage') {
-    const payload = assessment.payload && typeof assessment.payload === 'string'
-      ? safeJsonParse(assessment.payload)
-      : assessment.payload || {};
-    return payload.mode === 'stage1' ? 'stage1' : 'stage2';
+    return 'stage1';
   }
   if (type === 'solid') {
     return 'solid';

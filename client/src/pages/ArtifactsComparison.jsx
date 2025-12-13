@@ -81,14 +81,14 @@ const SNAPSHOT_CHANGE_TYPES = [
 
 const SERVER_MODE_TO_UI = {
   clone: "patch",
+  stage2: "stage1",
 };
 
-const SUPPORTED_UI_MODES = new Set(["stage1", "stage2", "solid", "patch", "snapshot"]);
-const SYNC_SWAP_MODES = new Set(["stage2", "patch", "snapshot"]);
+const SUPPORTED_UI_MODES = new Set(["stage1", "solid", "patch", "snapshot"]);
+const SYNC_SWAP_MODES = new Set(["patch", "snapshot"]);
 
 const MODE_LABELS = {
   stage1: "Stage 1: Participant Bug Labeling",
-  stage2: "Stage 2: Reviewer Bug Label Comparison",
   solid: "SOLID Violations: Code & Complexity",
   patch: "Patch Mode: Code Diff / Clone Detection",
   snapshot: "Snapshot Study: UI Change vs Failure",
@@ -669,11 +669,10 @@ export default function ArtifactsComparison() {
 
   // ===== GLOBAL MODES =====
   // stage1: participant labels a single bug report
-  // stage2: reviewer compares two labels (participant vs participant/AI)
   // solid: participant labels SOLID violation + complexity for a code snippet
   // patch: compare two patches and classify clone type
   // snapshot: participant decides if screenshot case is failure vs intended UI change
-  const [mode, setMode] = useState(assignedMode || "stage2");
+  const [mode, setMode] = useState(assignedMode || "stage1");
 
   useEffect(() => {
     if (assignedMode) {
@@ -713,11 +712,7 @@ export default function ArtifactsComparison() {
   const [rightSummaryStatus, setRightSummaryStatus] = useState("idle");
 
   // Labeling states for bug tasks
-  const [leftCategory, setLeftCategory] = useState(""); // participant 1 or stage1 label
-  const [rightCategory, setRightCategory] = useState(""); // participant 2 or AI label
-  const [matchCorrectness, setMatchCorrectness] = useState(""); // "correct" | "incorrect" | ""
-  const [finalCategory, setFinalCategory] = useState(""); // final choice in stage2
-  const [finalOtherCategory, setFinalOtherCategory] = useState(""); // if reviewer chooses "other"
+  const [leftCategory, setLeftCategory] = useState(""); // participant label for bug category
   const [bugCategoryOptions, setBugCategoryOptions] = useState(BUG_CATEGORIES);
 
   // SOLID mode classification
@@ -858,14 +853,6 @@ export default function ArtifactsComparison() {
 
             if (typeof saved.leftCategory === "string")
               setLeftCategory(saved.leftCategory);
-            if (typeof saved.rightCategory === "string")
-              setRightCategory(saved.rightCategory);
-            if (typeof saved.matchCorrectness === "string")
-              setMatchCorrectness(saved.matchCorrectness);
-            if (typeof saved.finalCategory === "string")
-              setFinalCategory(saved.finalCategory);
-            if (typeof saved.finalOtherCategory === "string")
-              setFinalOtherCategory(saved.finalOtherCategory);
             if (
               Array.isArray(saved.bugCategoryOptions) &&
               saved.bugCategoryOptions.length
@@ -1059,10 +1046,6 @@ export default function ArtifactsComparison() {
       leftSummary,
       rightSummary,
       leftCategory,
-      rightCategory,
-      matchCorrectness,
-      finalCategory,
-      finalOtherCategory,
       bugCategoryOptions,
       solidViolation,
       solidComplexity,
@@ -1091,10 +1074,6 @@ export default function ArtifactsComparison() {
       leftSummary,
       rightSummary,
       leftCategory,
-      rightCategory,
-      matchCorrectness,
-      finalCategory,
-      finalOtherCategory,
       bugCategoryOptions,
       solidViolation,
       solidComplexity,
@@ -1124,11 +1103,6 @@ export default function ArtifactsComparison() {
       if (payload.rightSummary) setRightSummary(payload.rightSummary);
       if (payload.mode && !assignedMode) setMode(payload.mode);
       if (typeof payload.leftCategory === "string") setLeftCategory(payload.leftCategory);
-      if (typeof payload.rightCategory === "string") setRightCategory(payload.rightCategory);
-      if (typeof payload.matchCorrectness === "string") setMatchCorrectness(payload.matchCorrectness);
-      if (typeof payload.finalCategory === "string") setFinalCategory(payload.finalCategory);
-      if (typeof payload.finalOtherCategory === "string")
-        setFinalOtherCategory(payload.finalOtherCategory);
       if (Array.isArray(payload.bugCategoryOptions) && payload.bugCategoryOptions.length)
         setBugCategoryOptions(payload.bugCategoryOptions);
       if (typeof payload.solidViolation === "string") setSolidViolation(payload.solidViolation);
@@ -2072,9 +2046,6 @@ export default function ArtifactsComparison() {
     );
   };
 
-  const labelsMatch =
-    leftCategory && rightCategory && leftCategory === rightCategory;
-
   const currentSolidRecord =
     solidRecords.length > 0
       ? solidRecords[
@@ -2169,22 +2140,6 @@ export default function ArtifactsComparison() {
     if (mode === "stage1") {
       if (!leftCategory) {
         return "Please choose a category for the bug report before saving.";
-      }
-    } else if (mode === "stage2") {
-      if (!leftCategory || !rightCategory) {
-        return "Please record both participant labels first.";
-      }
-      if (labelsMatch) {
-        if (!matchCorrectness) {
-          return "Confirm whether the matching labels are correct.";
-        }
-        if (matchCorrectness === "incorrect" && !finalCategory) {
-          return "Select the corrected bug category.";
-        }
-      } else if (!finalCategory) {
-        return "Resolve the mismatch by selecting the final category.";
-      } else if (finalCategory === "other" && !finalOtherCategory) {
-        return "Choose which category should replace both labels.";
       }
     } else if (mode === "solid") {
       if (!solidViolation || !solidComplexity) {
@@ -2460,9 +2415,6 @@ export default function ArtifactsComparison() {
                       const tS = leftSummary;
                       setLeftSummary(rightSummary);
                       setRightSummary(tS);
-                      const tC = leftCategory;
-                      setLeftCategory(rightCategory);
-                      setRightCategory(tC);
                     }}
                   >
                     Swap Sides
@@ -2694,8 +2646,8 @@ export default function ArtifactsComparison() {
             <AISummary side="left" />
           </div>
 
-          {/* RIGHT pane: Stage 2, Patch & Snapshot */}
-          {(mode === "stage2" || mode === "patch" || mode === "snapshot") && (
+          {/* RIGHT pane: Patch & Snapshot */}
+          {(mode === "patch" || mode === "snapshot") && (
             <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
               <PaneToolbar
                 side="right"
@@ -2777,8 +2729,6 @@ export default function ArtifactsComparison() {
             <CardTitle className="text-lg">
               {mode === "stage1"
                 ? "Stage 1: Participant Bug Label"
-                : mode === "stage2"
-                ? "Stage 2: Reviewer Bug Label Comparison"
                 : mode === "solid"
                 ? "SOLID Violations: Code & Complexity Labeling"
                 : mode === "snapshot"
@@ -2859,44 +2809,6 @@ export default function ArtifactsComparison() {
                     onChange={(e) => setPatchCloneComment(e.target.value)}
                     rows={3}
                     placeholder="E.g., 'Both patches change the same API call and condition, only variable names differ, so Type-2.'"
-                  />
-                  {assessmentError && (
-                    <p className="text-xs text-destructive">{assessmentError}</p>
-                  )}
-                </div>
-              </>
-            ) : mode === "stage1" ? (
-              <>
-                <div className="space-y-2">
-                  <Label>Select bug category for this report</Label>
-                  <select
-                    value={leftCategory}
-                    onChange={(e) => setLeftCategory(e.target.value)}
-                    className="border rounded px-2 py-1 text-sm w-full bg-white"
-                  >
-                    <option value="">Choose category...</option>
-                    {bugCategoryOptions.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[11px] text-gray-400">
-                    Participant labels the bug report using the provided
-                    taxonomy.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="overall-comment-stage1">
-                    Optional comment (why did you choose this category?)
-                  </Label>
-                  <Textarea
-                    id="overall-comment-stage1"
-                    value={assessmentComment}
-                    onChange={(e) => setAssessmentComment(e.target.value)}
-                    rows={3}
-                    placeholder="E.g., 'The description mentions UI layout breaking after resize, so I chose GUI.'"
                   />
                   {assessmentError && (
                     <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3089,168 +3001,36 @@ export default function ArtifactsComparison() {
               </>
             ) : (
               <>
-                {/* Stage 2: Reviewer sees two labels */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Participant 1 Label (Artifact A)</Label>
-                    <select
-                      value={leftCategory}
-                      onChange={(e) => setLeftCategory(e.target.value)}
-                      className="border rounded px-2 py-1 text-sm w-full bg-white"
-                    >
-                      <option value="">Select...</option>
-                      {bugCategoryOptions.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Participant 2 / AI Label (Artifact B)</Label>
-                    <select
-                      value={rightCategory}
-                      onChange={(e) => setRightCategory(e.target.value)}
-                      className="border rounded px-2 py-1 text-sm w-full bg-white"
-                    >
-                      <option value="">Select...</option>
-                      {bugCategoryOptions.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div className="space-y-2">
+                  <Label>Select bug category for this report</Label>
+                  <select
+                    value={leftCategory}
+                    onChange={(e) => setLeftCategory(e.target.value)}
+                    className="border rounded px-2 py-1 text-sm w-full bg-white"
+                  >
+                    <option value="">Choose category...</option>
+                    {bugCategoryOptions.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-400">
+                    Participant labels the bug report using the provided
+                    taxonomy.
+                  </p>
                 </div>
 
-                {leftCategory && rightCategory && (
-                  <>
-                    {labelsMatch ? (
-                      <div className="space-y-3">
-                        <div className="space-y-1">
-                          <Label>
-                            The two labels match ({leftCategory}). Is this
-                            category correct?
-                          </Label>
-                          <RadioGroup
-                            value={matchCorrectness}
-                            onValueChange={(v) => {
-                              setMatchCorrectness(v);
-                              if (v === "correct") {
-                                setFinalCategory(leftCategory);
-                                setFinalOtherCategory("");
-                              } else {
-                                setFinalCategory("");
-                                setFinalOtherCategory("");
-                              }
-                            }}
-                            className="flex gap-4 mt-1"
-                          >
-                            <div className="flex items-center space-x-2">
-                              <RadioGroupItem
-                                value="correct"
-                                id="match-correct"
-                                className={radioClass}
-                              />
-                              <Label htmlFor="match-correct">Correct</Label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <RadioGroupItem
-                                value="incorrect"
-                                id="match-incorrect"
-                                className={radioClass}
-                              />
-                              <Label htmlFor="match-incorrect">
-                                Incorrect
-                              </Label>
-                            </div>
-                          </RadioGroup>
-                        </div>
-
-                        {matchCorrectness === "incorrect" && (
-                          <div className="space-y-2">
-                            <Label>Select the correct category</Label>
-                            <select
-                              value={finalCategory}
-                              onChange={(e) => {
-                                setFinalCategory(e.target.value);
-                                setFinalOtherCategory("");
-                              }}
-                              className="border rounded px-2 py-1 text-sm w-full bg-white"
-                            >
-                              <option value="">Choose category...</option>
-                              {bugCategoryOptions.map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <Label>
-                          The labels differ ({leftCategory} vs {rightCategory}).
-                          Choose a final category:
-                        </Label>
-                        <select
-                          value={finalCategory}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setFinalCategory(val);
-                            if (val !== "other") {
-                              setFinalOtherCategory("");
-                            }
-                          }}
-                          className="border rounded px-2 py-1 text-sm w-full bg-white"
-                        >
-                          <option value="">Select...</option>
-                          <option value={leftCategory}>
-                            Accept Participant 1: {leftCategory}
-                          </option>
-                          <option value={rightCategory}>
-                            Accept Participant 2 / AI: {rightCategory}
-                          </option>
-                          <option value="other">
-                            Neither – choose another category
-                          </option>
-                        </select>
-
-                        {finalCategory === "other" && (
-                          <div className="space-y-2">
-                            <Label>Choose alternative category</Label>
-                            <select
-                              value={finalOtherCategory}
-                              onChange={(e) =>
-                                setFinalOtherCategory(e.target.value)
-                              }
-                              className="border rounded px-2 py-1 text-sm w-full bg-white"
-                            >
-                              <option value="">Select...</option>
-                              {bugCategoryOptions.map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-
                 <div className="space-y-2">
-                  <Label htmlFor="overall-comment-stage2">
-                    Reviewer notes (brief explanation of your decision)
+                  <Label htmlFor="overall-comment-stage1">
+                    Optional comment (why did you choose this category?)
                   </Label>
                   <Textarea
-                    id="overall-comment-stage2"
+                    id="overall-comment-stage1"
                     value={assessmentComment}
                     onChange={(e) => setAssessmentComment(e.target.value)}
                     rows={3}
-                    placeholder="E.g., 'Although both labeled it as Performance, the description mentions incorrect configuration of environment variables, so I chose Configuration.'"
+                    placeholder="E.g., 'The description mentions UI layout breaking after resize, so I chose GUI.'"
                   />
                   {assessmentError && (
                     <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3424,7 +3204,7 @@ export default function ArtifactsComparison() {
                 {mode !== "patch" && <AnnotationList side="left" />}
                 <AISummary side="left" />
               </div>
-              {(mode === "stage2" || mode === "patch" || mode === "snapshot") && (
+              {(mode === "patch" || mode === "snapshot") && (
                 <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
                   <PaneToolbar
                     side="right"

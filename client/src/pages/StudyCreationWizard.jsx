@@ -56,7 +56,6 @@ const PARTICIPANT_SEGMENTS = [
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: "stage1", label: "Stage 1 – Participant bug labeling" },
-  { value: "stage2", label: "Stage 2 – Reviewer bug comparison" },
   { value: "solid", label: "SOLID violations" },
   { value: "clone", label: "Patch clone detection" },
   { value: "snapshot", label: "Snapshot change vs failure" },

@@ -41,13 +41,13 @@ const DECISION_OPTIONS = [
 
 const STAGE_LABELS = {
   stage1: "Stage 1: Bug labeling",
-  stage2: "Stage 2: Adjudication",
   solid: "SOLID review",
   patch: "Patch/Clone check",
   snapshot: "Snapshot intent",
 };
 
-const getStageLabel = (mode) => STAGE_LABELS[mode] || mode || "—";
+const getStageLabel = (mode) =>
+  mode === "stage2" ? STAGE_LABELS.stage1 : STAGE_LABELS[mode] || mode || "—";
 const BLINDED_PLACEHOLDER = "Hidden for blinded review";
 
 const normalizeCriteriaRatings = (payload) => {
@@ -247,6 +247,7 @@ export default function ReviewerAdjudication() {
     const answer = entry.participantAnswer || {};
     const payload = answer.payload || {};
     const mode = payload.mode || answer.mode || null;
+    const normalizedMode = mode === "stage2" ? "stage1" : mode;
     const metrics = answer.metrics || {};
     const preference = answer.preference || payload.preference || "n/a";
     const rating = (answer.rating ?? payload.rating ?? "n/a");
@@ -258,33 +259,23 @@ export default function ReviewerAdjudication() {
     lines.push(
       `Participant preference: ${preference}; rating: ${rating}. Summary: ${summary || "—"}. Notes: ${notes || "—"}. ${snapshotDiff}`,
     );
-    lines.push(`Stage: ${getStageLabel(mode)}`);
+    lines.push(`Stage: ${getStageLabel(normalizedMode)}`);
     // Include stage-specific answers
-    if (mode === "stage1") {
+    if (normalizedMode === "stage1") {
       lines.push(`Bug category: ${payload.leftCategory || "—"}`);
       if (payload.assessmentComment) lines.push(`Notes: ${payload.assessmentComment}`);
-    } else if (mode === "stage2") {
-      lines.push(`Participant A label: ${payload.leftCategory || "—"}`);
-      lines.push(`Participant B/AI label: ${payload.rightCategory || "—"}`);
-      lines.push(`Labels match? ${payload.matchCorrectness || "—"}`);
-      const finalCat =
-        payload.finalCategory === "other"
-          ? payload.finalOtherCategory || "Other (unspecified)"
-          : payload.finalCategory || "—";
-      lines.push(`Final category: ${finalCat}`);
-      if (payload.assessmentComment) lines.push(`Notes: ${payload.assessmentComment}`);
-    } else if (mode === "solid") {
+    } else if (normalizedMode === "solid") {
       lines.push(`Violation: ${payload.solidViolation || payload.solid_violation || "—"}`);
       lines.push(`Complexity: ${payload.solidComplexity || payload.solid_complexity || "—"}`);
       lines.push(`Refactor: ${payload.solidFixedCode || payload.solid_fixed_code || "—"}`);
       if (payload.assessmentComment) lines.push(`Notes: ${payload.assessmentComment}`);
-    } else if (mode === "patch") {
+    } else if (normalizedMode === "patch") {
       lines.push(`Are patches clones? ${payload.patchAreClones || "—"}`);
       if (payload.patchAreClones === "yes") {
         lines.push(`Clone type: ${payload.patchCloneType || "—"}`);
       }
       if (payload.patchCloneComment) lines.push(`Notes: ${payload.patchCloneComment}`);
-    } else if (mode === "snapshot") {
+    } else if (normalizedMode === "snapshot") {
       lines.push(`Outcome: ${payload.snapshotOutcome || "—"}`);
       const changeType =
         payload.snapshotChangeType === "other"
@@ -1286,6 +1277,7 @@ function AnswerSummary({ answer }) {
 
   const payload = answer.payload || {};
   const mode = payload.mode || answer.mode || null;
+  const normalizedMode = mode === "stage2" ? "stage1" : mode;
   const solidViolation = payload.solidViolation || payload.solid_violation;
   const solidComplexity = payload.solidComplexity || payload.solid_complexity;
   const solidFixedCode = payload.solidFixedCode || payload.solid_fixed_code;
@@ -1297,33 +1289,21 @@ function AnswerSummary({ answer }) {
   const criteriaSummary = summarizeCriteriaRatings(criteriaRatings);
 
   const qa = [];
-  if (mode === "stage1") {
+  if (normalizedMode === "stage1") {
     qa.push({ q: "Bug category", a: payload.leftCategory || "—" });
     if (payload.assessmentComment) qa.push({ q: "Notes", a: payload.assessmentComment });
-  } else if (mode === "stage2") {
-    qa.push({ q: "Participant A label", a: payload.leftCategory || "—" });
-    qa.push({ q: "Participant B/AI label", a: payload.rightCategory || "—" });
-    qa.push({ q: "Labels match?", a: payload.matchCorrectness || "—" });
-    qa.push({
-      q: "Final category",
-      a:
-        payload.finalCategory === "other"
-          ? payload.finalOtherCategory || "Other (unspecified)"
-          : payload.finalCategory || "—",
-    });
-    if (payload.assessmentComment) qa.push({ q: "Notes", a: payload.assessmentComment });
-  } else if (mode === "solid") {
+  } else if (normalizedMode === "solid") {
     qa.push({ q: "Violation", a: solidViolation || "—" });
     qa.push({ q: "Complexity", a: solidComplexity || "—" });
     qa.push({ q: "Refactor", a: solidFixedCode || "—" });
     if (solidComment) qa.push({ q: "Notes", a: solidComment });
-  } else if (mode === "patch") {
+  } else if (normalizedMode === "patch") {
     qa.push({ q: "Are patches clones?", a: payload.patchAreClones || "—" });
     if (payload.patchAreClones === "yes") {
       qa.push({ q: "Clone type", a: payload.patchCloneType || "—" });
     }
     if (payload.patchCloneComment) qa.push({ q: "Notes", a: payload.patchCloneComment });
-  } else if (mode === "snapshot") {
+  } else if (normalizedMode === "snapshot") {
     qa.push({ q: "Outcome", a: payload.snapshotOutcome || "—" });
     qa.push({
       q: "Change type",
