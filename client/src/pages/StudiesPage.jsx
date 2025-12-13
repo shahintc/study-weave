@@ -147,6 +147,11 @@ function StudiesPage({ archived = false }) {
             >
               {study.status}
             </Badge>
+            {study.allowReviewers ? (
+              <Badge variant="secondary" className="bg-slate-900 text-white">
+                Reviewers enabled
+              </Badge>
+            ) : null}
           </div>
           <p className="text-sm text-muted-foreground">{study.description}</p>
           <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">

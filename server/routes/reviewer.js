@@ -8,6 +8,7 @@ const {
   StudyArtifact,
   Artifact,
   User,
+  ReviewerNote,
 } = require('../models');
 
 const router = express.Router();
@@ -18,7 +19,7 @@ const REVIEW_DECISION_VALUES = new Set(['participant_correct', 'llm_correct', 'i
 router.get('/adjudications', authMiddleware, async (req, res) => {
   try {
     if (!canReview(req.user)) {
-      return res.status(403).json({ message: 'Only researchers and admins can review adjudications.' });
+      return res.status(403).json({ message: 'Only reviewers, researchers, and admins can review adjudications.' });
     }
 
     const { studyId, status = 'pending', limit = 200 } = req.query;
@@ -51,7 +52,7 @@ router.get('/adjudications', authMiddleware, async (req, res) => {
 router.patch('/adjudications/:id', authMiddleware, async (req, res) => {
   try {
     if (!canReview(req.user)) {
-      return res.status(403).json({ message: 'Only researchers and admins can record reviewer decisions.' });
+      return res.status(403).json({ message: 'Only reviewers, researchers, and admins can record reviewer decisions.' });
     }
 
     const evaluationId = Number(req.params.id);
@@ -60,7 +61,7 @@ router.patch('/adjudications/:id', authMiddleware, async (req, res) => {
     }
 
     const evaluation = await Evaluation.findByPk(evaluationId, {
-      include: [{ model: Study, as: 'study', attributes: ['id', 'researcherId', 'title'] }],
+      include: [{ model: Study, as: 'study', attributes: ['id', 'researcherId', 'title', 'allowReviewers'] }],
     });
 
     if (!evaluation) {
@@ -78,55 +79,103 @@ router.patch('/adjudications/:id', authMiddleware, async (req, res) => {
       adjudicatedLabel,
       participantPayload,
       groundTruthPayload,
+      reviewerComment,
+      reviewerRating,
     } = req.body || {};
+
+    const isReviewerOnly = req.user.role === 'reviewer';
+    if (
+      isReviewerOnly &&
+      (typeof reviewStatus !== 'undefined' ||
+        typeof decision !== 'undefined' ||
+        typeof adjudicatedLabel !== 'undefined' ||
+        typeof participantPayload !== 'undefined' ||
+        typeof groundTruthPayload !== 'undefined' ||
+        typeof notes !== 'undefined')
+    ) {
+      return res.status(403).json({ message: 'Reviewers can only leave comments and ratings.' });
+    }
+
+    if (!isReviewerOnly && (typeof reviewerComment !== 'undefined' || typeof reviewerRating !== 'undefined')) {
+      return res.status(403).json({ message: 'Only reviewers can leave reviewer comments or ratings.' });
+    }
 
     const updates = {};
     let touched = false;
 
-    if (reviewStatus) {
-      if (!REVIEW_STATUS_VALUES.has(reviewStatus)) {
-        return res.status(400).json({ message: 'Invalid reviewStatus provided.' });
+    if (!isReviewerOnly) {
+      if (reviewStatus) {
+        if (!REVIEW_STATUS_VALUES.has(reviewStatus)) {
+          return res.status(400).json({ message: 'Invalid reviewStatus provided.' });
+        }
+        updates.reviewStatus = reviewStatus;
+        touched = true;
       }
-      updates.reviewStatus = reviewStatus;
-      touched = true;
-    }
 
-    if (decision) {
-      if (!REVIEW_DECISION_VALUES.has(decision)) {
-        return res.status(400).json({ message: 'Invalid reviewer decision provided.' });
+      if (decision) {
+        if (!REVIEW_DECISION_VALUES.has(decision)) {
+          return res.status(400).json({ message: 'Invalid reviewer decision provided.' });
+        }
+        updates.reviewerDecision = decision;
+        touched = true;
       }
-      updates.reviewerDecision = decision;
-      touched = true;
+
+      if (typeof notes === 'string') {
+        updates.reviewerNotes = notes;
+        touched = true;
+      }
+
+      if (typeof adjudicatedLabel === 'string' || adjudicatedLabel === null) {
+        updates.adjudicatedLabel = adjudicatedLabel;
+        touched = true;
+      }
+
+      if (typeof participantPayload !== 'undefined') {
+        updates.participantPayload = sanitizeJsonInput(participantPayload);
+        touched = true;
+      }
+
+      if (typeof groundTruthPayload !== 'undefined') {
+        updates.groundTruthPayload = sanitizeJsonInput(groundTruthPayload);
+        touched = true;
+      }
     }
 
-    if (typeof notes === 'string') {
-      updates.reviewerNotes = notes;
-      touched = true;
-    }
+    if (isReviewerOnly) {
+      if (typeof reviewerComment === 'string') {
+        updates.reviewerComment = reviewerComment;
+        updates.reviewerId = req.user.id;
+        updates.reviewerSubmittedAt = new Date();
+        touched = true;
+      }
 
-    if (typeof adjudicatedLabel === 'string' || adjudicatedLabel === null) {
-      updates.adjudicatedLabel = adjudicatedLabel;
-      touched = true;
-    }
-
-    if (typeof participantPayload !== 'undefined') {
-      updates.participantPayload = sanitizeJsonInput(participantPayload);
-      touched = true;
-    }
-
-    if (typeof groundTruthPayload !== 'undefined') {
-      updates.groundTruthPayload = sanitizeJsonInput(groundTruthPayload);
-      touched = true;
+      if (typeof reviewerRating !== 'undefined') {
+        if (reviewerRating === null || reviewerRating === '') {
+          updates.reviewerRating = null;
+          touched = true;
+        } else {
+          const parsed = Number(reviewerRating);
+          if (!Number.isFinite(parsed) || parsed < 1 || parsed > 5) {
+            return res.status(400).json({ message: 'reviewerRating must be between 1 and 5.' });
+          }
+          updates.reviewerRating = parsed;
+          updates.reviewerId = req.user.id;
+          updates.reviewerSubmittedAt = new Date();
+          touched = true;
+        }
+      }
     }
 
     if (!touched) {
       return res.status(400).json({ message: 'No updates were provided.' });
     }
 
-    if (updates.reviewStatus === 'resolved' || updates.reviewerDecision) {
-      updates.reviewedAt = new Date();
-    } else if (updates.reviewStatus && updates.reviewStatus !== 'resolved') {
-      updates.reviewedAt = null;
+    if (!isReviewerOnly) {
+      if (updates.reviewStatus === 'resolved' || updates.reviewerDecision) {
+        updates.reviewedAt = new Date();
+      } else if (updates.reviewStatus && updates.reviewStatus !== 'resolved') {
+        updates.reviewedAt = null;
+      }
     }
 
     await evaluation.update(updates);
@@ -139,15 +188,125 @@ router.patch('/adjudications/:id', authMiddleware, async (req, res) => {
   }
 });
 
+router.post('/adjudications/:id/notes', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || req.user.role !== 'reviewer') {
+      return res.status(403).json({ message: 'Only reviewers can post notes.' });
+    }
+
+    const evaluationId = Number(req.params.id);
+    if (Number.isNaN(evaluationId)) {
+      return res.status(400).json({ message: 'Invalid evaluation id provided.' });
+    }
+
+    const evaluation = await Evaluation.findByPk(evaluationId, {
+      include: [{ model: Study, as: 'study', attributes: ['id', 'allowReviewers'] }],
+    });
+    if (!evaluation) {
+      return res.status(404).json({ message: 'Evaluation not found.' });
+    }
+    if (!evaluation.study?.allowReviewers) {
+      return res.status(403).json({ message: 'Reviewer notes are disabled for this study.' });
+    }
+
+    const existing = await ReviewerNote.findOne({
+      where: { evaluationId, reviewerId: req.user.id },
+    });
+    if (existing) {
+      return res.status(409).json({ message: 'You have already submitted feedback for this evaluation.' });
+    }
+
+    const { comment, rating } = req.body || {};
+    if (!comment && (rating === undefined || rating === null)) {
+      return res.status(400).json({ message: 'Provide a comment or rating.' });
+    }
+    let normalizedRating = null;
+    if (typeof rating !== 'undefined' && rating !== null) {
+      const parsed = Number(rating);
+      if (!Number.isFinite(parsed) || parsed < 1 || parsed > 5) {
+        return res.status(400).json({ message: 'Rating must be between 1 and 5.' });
+      }
+      normalizedRating = parsed;
+    }
+
+    const note = await ReviewerNote.create({
+      evaluationId,
+      reviewerId: req.user.id,
+      comment: comment || null,
+      rating: normalizedRating,
+    });
+
+    const saved = await ReviewerNote.findByPk(note.id, {
+      include: [{ model: User, as: 'author', attributes: ['id', 'name', 'email'] }],
+    });
+
+    return res.status(201).json({
+      note: {
+        id: String(saved.id),
+        comment: saved.comment,
+        rating: saved.rating,
+        createdAt: saved.createdAt,
+        reviewer: saved.author
+          ? { id: String(saved.author.id), name: saved.author.name, email: saved.author.email }
+          : null,
+      },
+    });
+  } catch (error) {
+    console.error('Reviewer note create error', error);
+    return res.status(500).json({ message: 'Unable to save reviewer note right now.' });
+  }
+});
+
+router.delete('/adjudications/:id/notes/:noteId', authMiddleware, async (req, res) => {
+  try {
+    const evaluationId = Number(req.params.id);
+    const noteId = Number(req.params.noteId);
+    if (Number.isNaN(evaluationId) || Number.isNaN(noteId)) {
+      return res.status(400).json({ message: 'Invalid evaluation or note id provided.' });
+    }
+
+    const note = await ReviewerNote.findByPk(noteId, {
+      include: [
+        { model: Evaluation, as: 'evaluation', include: [{ model: Study, as: 'study', attributes: ['id', 'researcherId'] }] },
+      ],
+    });
+
+    if (!note || note.evaluationId !== evaluationId) {
+      return res.status(404).json({ message: 'Reviewer note not found.' });
+    }
+
+    const studyOwnerId = note.evaluation?.study?.researcherId;
+    const isOwnerReviewer = req.user.role === 'reviewer' && Number(note.reviewerId) === Number(req.user.id);
+    const isStudyResearcher = req.user.role === 'researcher' && Number(studyOwnerId) === Number(req.user.id);
+    const isAdmin = req.user.role === 'admin';
+
+    if (!isOwnerReviewer && !isStudyResearcher && !isAdmin) {
+      return res.status(403).json({ message: 'You are not allowed to delete this reviewer note.' });
+    }
+
+    await note.destroy();
+    return res.status(204).send();
+  } catch (error) {
+    console.error('Reviewer note delete error', error);
+    return res.status(500).json({ message: 'Unable to delete reviewer note right now.' });
+  }
+});
+
 function buildIncludes() {
   return [
-    { model: Study, as: 'study', attributes: ['id', 'title', 'researcherId', 'metadata'] },
+    { model: Study, as: 'study', attributes: ['id', 'title', 'researcherId', 'allowReviewers'] },
     {
       model: StudyParticipant,
       as: 'studyParticipant',
       include: [{ model: User, as: 'participant', attributes: ['id', 'name', 'email'] }],
     },
     { model: User, as: 'participantEvaluator', attributes: ['id', 'name', 'email'] },
+    { model: User, as: 'reviewer', attributes: ['id', 'name', 'email'] },
+    {
+      model: ReviewerNote,
+      as: 'reviewerNotesList',
+      include: [{ model: User, as: 'author', attributes: ['id', 'name', 'email'] }],
+    },
     {
       model: StudyComparison,
       as: 'comparison',
@@ -168,7 +327,7 @@ function buildIncludes() {
 }
 
 function canReview(user) {
-  return Boolean(user && (user.role === 'researcher' || user.role === 'admin'));
+  return Boolean(user && (user.role === 'researcher' || user.role === 'admin' || user.role === 'reviewer'));
 }
 
 function canReviewStudy(user, study) {
@@ -181,7 +340,11 @@ function canReviewStudy(user, study) {
   if (user.role === 'admin') {
     return true;
   }
-  return Number(user.id) === Number(study.researcherId);
+  if (user.role === 'researcher') {
+    return Number(user.id) === Number(study.researcherId);
+  }
+  // reviewer role
+  return Boolean(study.allowReviewers);
 }
 
 function formatAdjudication(evaluationInstance) {
@@ -193,7 +356,14 @@ function formatAdjudication(evaluationInstance) {
 
   return {
     id: String(evaluation.id),
-    study: studyMeta,
+    study: evaluation.study
+      ? {
+          id: String(evaluation.study.id),
+          title: evaluation.study.title,
+          allowReviewers: Boolean(evaluation.study.allowReviewers),
+          researcherId: evaluation.study.researcherId ? String(evaluation.study.researcherId) : null,
+        }
+      : null,
     participant,
     status: evaluation.status,
     review: {
@@ -202,6 +372,29 @@ function formatAdjudication(evaluationInstance) {
       notes: evaluation.reviewerNotes,
       adjudicatedLabel: evaluation.adjudicatedLabel,
       reviewedAt: evaluation.reviewedAt,
+      comment: evaluation.reviewerComment,
+      rating: evaluation.reviewerRating,
+      reviewer:
+        evaluation.reviewer ||
+        (evaluation.reviewerId
+          ? { id: String(evaluation.reviewerId), name: null, email: null }
+          : null),
+      reviewerSubmittedAt: evaluation.reviewerSubmittedAt,
+      comments: Array.isArray(evaluation.reviewerNotesList)
+        ? evaluation.reviewerNotesList.map((note) => ({
+            id: String(note.id),
+            comment: note.comment,
+            rating: note.rating,
+            createdAt: note.createdAt,
+            reviewer: note.author
+              ? {
+                  id: String(note.author.id),
+                  name: note.author.name,
+                  email: note.author.email,
+                }
+              : null,
+          }))
+        : [],
     },
     participantAnswer: {
       preference: evaluation.preference,

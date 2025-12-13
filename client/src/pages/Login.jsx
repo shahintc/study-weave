@@ -40,11 +40,9 @@ export default function Login() {
       localStorage.setItem("user", JSON.stringify(res.data.user));
 
       const role = res.data.user?.role;
-      if (role === "researcher") {
-        navigate("/researcher");
-      } else {
-        navigate("/participant");
-      }
+      if (role === "researcher") navigate("/researcher");
+      else if (role === "reviewer") navigate("/researcher/reviewer");
+      else navigate("/participant");
     } catch (err) {
       const msg = err.response?.data?.message || "Login failed";
       setError(msg);
@@ -72,11 +70,9 @@ export default function Login() {
       localStorage.setItem("user", JSON.stringify(res.data.user));
 
       const role = res.data.user?.role;
-      if (role === "researcher") {
-        navigate("/researcher");
-      } else {
-        navigate("/participant");
-      }
+      if (role === "researcher") navigate("/researcher");
+      else if (role === "reviewer") navigate("/researcher/reviewer");
+      else navigate("/participant");
     } catch (err) {
       setError(err.response?.data?.message || "Verification failed");
     } finally {

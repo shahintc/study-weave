@@ -127,6 +127,32 @@ const Evaluation = sequelize.define(
       allowNull: true,
       field: 'reviewed_at',
     },
+    reviewerComment: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'reviewer_comment',
+    },
+    reviewerRating: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: 'reviewer_rating',
+    },
+    reviewerId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'id',
+      },
+      field: 'reviewer_id',
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
+    },
+    reviewerSubmittedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'reviewer_submitted_at',
+    },
   },
   {
     tableName: 'evaluations',
