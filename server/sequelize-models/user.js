@@ -38,6 +38,11 @@ const User = sequelize.define(
       allowNull: false,
       defaultValue: 'participant',
     },
+    avatarUrl: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'avatar_url',
+    },
     emailVerified: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

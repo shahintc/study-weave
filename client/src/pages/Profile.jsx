@@ -1,218 +1,593 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import axios from "../api/axios";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { Spinner } from "@/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AlertCircle, ArrowLeft, CheckCircle2, RefreshCcw, ShieldCheck, UploadCloud, UserRound } from "lucide-react";
 
+const StatusBanner = ({ type, message }) => {
+  if (!message) return null;
+  const tone =
+    type === "error"
+      ? "border-destructive/40 bg-destructive/10 text-destructive"
+      : "border-emerald-200 bg-emerald-50 text-emerald-800";
+  const Icon = type === "error" ? AlertCircle : CheckCircle2;
+  return (
+    <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${tone}`}>
+      <Icon className="size-4" />
+      <span>{message}</span>
+    </div>
+  );
+};
+
+const formatDate = (value) => {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+};
+
+const resolveAvatarUrl = (value) => {
+  if (!value) return "";
+  try {
+    const base = axios.defaults.baseURL || (typeof window !== "undefined" ? window.location.origin : "");
+    return new URL(value, base).href;
+  } catch {
+    return value;
+  }
+};
 
 export default function Profile() {
-  const [users, setUsers] = useState([]);
-  const [editingUser, setEditingUser] = useState(null);
-  const [form, setForm] = useState({ name: "", email: "", password: "" });
-  const [loading, setLoading] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [error, setError] = useState("");
+  const fileInputRef = useRef(null);
+  const navigate = useNavigate();
 
-  // fetching all users from the database
-  const fetchUsers = async () => {
+  const [accountForm, setAccountForm] = useState({ name: "", email: "" });
+  const [accountStatus, setAccountStatus] = useState({ type: "", message: "" });
+  const [savingAccount, setSavingAccount] = useState(false);
+
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [avatarStatus, setAvatarStatus] = useState({ type: "", message: "" });
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [deleteStatus, setDeleteStatus] = useState({ type: "", message: "" });
+  const [deletingAccount, setDeletingAccount] = useState(false);
+
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [passwordStatus, setPasswordStatus] = useState({ type: "", message: "" });
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  const initials = useMemo(() => {
+    if (profile?.name) {
+      return profile.name
+        .split(" ")
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0].toUpperCase())
+        .join("");
+    }
+    if (profile?.email) return profile.email[0].toUpperCase();
+    return "?";
+  }, [profile]);
+
+  const loadProfile = async () => {
+    setLoadingProfile(true);
+    setError("");
+    setAccountStatus({ type: "", message: "" });
+    setAvatarStatus({ type: "", message: "" });
     try {
-      // create a new endpoint to get all users
-      const response = await axios.get("/api/auth/users");
-      setUsers(response.data.users);
+      const res = await axios.get("/api/auth/me");
+      setProfile(res.data.user);
+      setAccountForm({
+        name: res.data.user?.name || "",
+        email: res.data.user?.email || "",
+      });
+      const resolvedAvatar = resolveAvatarUrl(res.data.user?.avatarUrl);
+      setAvatarUrl(resolvedAvatar);
+      if (typeof window !== "undefined" && res.data.user) {
+        window.localStorage.setItem("user", JSON.stringify(res.data.user));
+      }
     } catch (err) {
-      console.error("Error fetching users:", err);
-      alert("Failed to load users");
+      setError(err.response?.data?.message || "Failed to load profile.");
+    } finally {
+      setLoadingProfile(false);
     }
   };
 
-  // so we use useEffect to prevent recursive calls due to useState like setUser...but if we don’t use useState, then no need to define it here
   useEffect(() => {
-    fetchUsers();
+    loadProfile();
   }, []);
 
-  const handleEdit = (user) => {
-    setEditingUser(user);
-    setForm({
-      name: user.name,
-      email: user.email,
-      password: "" 
-    });
-  };
-
-  const handleUpdate = async (e) => {
+  const handleAccountSubmit = async (e) => {
     e.preventDefault();
-    if (!editingUser) return;
-
-    setLoading(true);
+    if (!profile) return;
+    setAccountStatus({ type: "", message: "" });
+    setSavingAccount(true);
     try {
-      const response = await axios.put("/api/auth/update", {
-        id: editingUser.id,
-        name: form.name,
-        email: form.email,
-        password: form.password || undefined
+      const res = await axios.put("/api/auth/update", {
+        id: profile.id,
+        name: accountForm.name.trim(),
       });
-      
-      alert("Update successful!");
-      console.log("Updated user:", response.data.user);
-      
-      // Refresh the users list
-      fetchUsers();
-      // Reset form
-      setEditingUser(null);
-      setForm({ name: "", email: "", password: "" });
+      setProfile((prev) => ({ ...prev, ...res.data.user }));
+      if (typeof window !== "undefined" && res.data.user) {
+        window.localStorage.setItem("user", JSON.stringify(res.data.user));
+      }
+      setAccountStatus({ type: "success", message: "Profile updated successfully." });
     } catch (err) {
-      alert(err.response?.data?.message || "Update failed");
+      setAccountStatus({
+        type: "error",
+        message: err.response?.data?.message || "Could not update profile.",
+      });
     } finally {
-      setLoading(false);
+      setSavingAccount(false);
     }
   };
 
-  const handleDelete = async (userId) => {
-    if (!window.confirm("Are you sure you want to delete this user? This cannot be undone.")) {
+  const handlePasswordSubmit = async (e) => {
+    e.preventDefault();
+    setPasswordStatus({ type: "", message: "" });
+
+    if (!passwordForm.currentPassword || !passwordForm.newPassword) {
+      setPasswordStatus({ type: "error", message: "Please fill out all password fields." });
       return;
     }
-    
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordStatus({ type: "error", message: "New passwords do not match." });
+      return;
+    }
+
+    setSavingPassword(true);
     try {
-      await axios.delete("/api/auth/delete", {
-        data: { id: userId }
+      await axios.post("/api/auth/change-password", {
+        currentPassword: passwordForm.currentPassword,
+        newPassword: passwordForm.newPassword,
       });
-      alert("User deleted successfully!");
-      
-      // Refresh the users list
-      fetchUsers();
+      setPasswordStatus({ type: "success", message: "Password updated successfully." });
+      setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
     } catch (err) {
-      alert(err.response?.data?.message || "Delete failed");
+      setPasswordStatus({
+        type: "error",
+        message: err.response?.data?.message || "Could not change password.",
+      });
+    } finally {
+      setSavingPassword(false);
     }
   };
 
-  const cancelEdit = () => {
-    setEditingUser(null);
-    setForm({ name: "", email: "", password: "" });
+  const handleAvatarFile = async (file) => {
+    if (!file) return;
+    setAvatarStatus({ type: "", message: "" });
+    setUploadingAvatar(true);
+    const formData = new FormData();
+    formData.append("avatar", file);
+    try {
+      const res = await axios.post("/api/auth/avatar", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      const updated = res.data?.user;
+      const resolved = resolveAvatarUrl(updated?.avatarUrl);
+      setProfile((prev) => ({ ...prev, ...updated }));
+      setAvatarUrl(resolved);
+      if (typeof window !== "undefined" && updated) {
+        window.localStorage.setItem("user", JSON.stringify(updated));
+      }
+      setAvatarStatus({ type: "success", message: "Profile picture updated." });
+    } catch (err) {
+      setAvatarStatus({
+        type: "error",
+        message: err.response?.data?.message || "Could not update avatar.",
+      });
+    } finally {
+      setUploadingAvatar(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
   };
 
+  const handleAvatarRemove = async () => {
+    setAvatarStatus({ type: "", message: "" });
+    setUploadingAvatar(true);
+    try {
+      const res = await axios.delete("/api/auth/avatar");
+      const updated = res.data?.user;
+      setProfile((prev) => ({ ...prev, ...updated }));
+      setAvatarUrl("");
+      if (typeof window !== "undefined" && updated) {
+        window.localStorage.setItem("user", JSON.stringify(updated));
+      }
+      setAvatarStatus({ type: "success", message: "Profile picture removed." });
+    } catch (err) {
+      setAvatarStatus({
+        type: "error",
+        message: err.response?.data?.message || "Could not remove avatar.",
+      });
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleteStatus({ type: "", message: "" });
+    const confirmed =
+      typeof window === "undefined"
+        ? true
+        : window.confirm(
+            "Delete your account? This removes your profile and you will be logged out. This cannot be undone.",
+          );
+    if (!confirmed) return;
+    setDeletingAccount(true);
+    try {
+      await axios.delete("/api/auth/account");
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("token");
+        window.localStorage.removeItem("user");
+      }
+      setDeleteStatus({ type: "success", message: "Account deleted. Redirecting to login..." });
+      navigate("/login", { replace: true });
+    } catch (err) {
+      setDeleteStatus({
+        type: "error",
+        message: err.response?.data?.message || "Could not delete account.",
+      });
+    } finally {
+      setDeletingAccount(false);
+    }
+  };
+
+  const triggerAvatarSelect = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const isBusy = loadingProfile && !profile;
+  const profileLoaded = Boolean(profile);
+  const dashboardPath = profile?.role === "researcher" ? "/researcher" : "/participant";
+
   return (
-    <div className="profile-container">
-      <h2>User Management Dashboard</h2>
-      <p>View, edit, and delete users from the database</p>
-
-      {/* Edit Form */}
-      {editingUser && (
-        <div className="edit-form" style={{ 
-          border: '2px solid #007bff', 
-          padding: '20px', 
-          borderRadius: '8px', 
-          marginBottom: '20px',
-          backgroundColor: '#f8f9fa'
-        }}>
-          <h3>Editing User: {editingUser.name}</h3>
-          <form onSubmit={handleUpdate} className="auth-form">
-            <input 
-              name="name" 
-              placeholder="Full name" 
-              value={form.name}
-              onChange={(e) => setForm({...form, name: e.target.value})} 
-              required
-            />
-            <input 
-              name="email" 
-              type="email" 
-              placeholder="Email" 
-              value={form.email}
-              onChange={(e) => setForm({...form, email: e.target.value})} 
-              required
-            />
-            <input 
-              name="password" 
-              type="password" 
-              placeholder="New Password (leave blank to keep current)" 
-              value={form.password}
-              onChange={(e) => setForm({...form, password: e.target.value})} 
-            />
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button type="submit" disabled={loading}>
-                {loading ? "Updating..." : "Update User"}
-              </button>
-              <button type="button" onClick={cancelEdit} style={{ backgroundColor: '#6c757d' }}>
-                Cancel
-              </button>
-            </div>
-          </form>
+    <div className="min-h-screen bg-muted/20 py-10">
+      <div className="mx-auto max-w-5xl space-y-6 px-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm text-muted-foreground">Account</p>
+            <h1 className="text-3xl font-semibold tracking-tight">Profile</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" asChild>
+              <Link to={dashboardPath}>
+                <ArrowLeft className="mr-2 size-4" />
+                Back to dashboard
+              </Link>
+            </Button>
+            <Button variant="outline" onClick={loadProfile} disabled={loadingProfile}>
+              {loadingProfile ? <Spinner className="mr-2" /> : <RefreshCcw className="mr-2 size-4" />}
+              Refresh
+            </Button>
+          </div>
         </div>
-      )}
 
-      {/* Users Table */}
-      <div className="users-table">
-        <h3>Users in Database</h3>
-        {users.length === 0 ? (
-          <p>No users found in the database.</p>
+        {error ? <StatusBanner type="error" message={error} /> : null}
+
+        {isBusy ? (
+          <Card>
+            <CardContent className="flex items-center justify-center py-12">
+              <Spinner className="size-6" />
+              <span className="ml-3 text-sm text-muted-foreground">Loading profile...</span>
+            </CardContent>
+          </Card>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#f8f9fa' }}>
-                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>ID</th>
-                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>Name</th>
-                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>Email</th>
-                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>Role</th>
-                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>Created At</th>
-                <th style={{ padding: '12px', border: '1px solid #ddd', textAlign: 'left' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map(user => (
-                <tr key={user.id}>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>{user.id}</td>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>{user.name}</td>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>{user.email}</td>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>{user.role}</td>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                    {new Date(user.created_at).toLocaleString()}
-                  </td>
-                  <td style={{ padding: '12px', border: '1px solid #ddd' }}>
-                    <button 
-                      onClick={() => handleEdit(user)}
-                      style={{ 
-                        marginRight: '10px', 
-                        padding: '5px 10px',
-                        backgroundColor: '#007bff',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Edit
-                    </button>
-                    <button 
-                      onClick={() => handleDelete(user.id)}
-                      style={{ 
-                        padding: '5px 10px',
-                        backgroundColor: '#dc3545',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+          <>
+            <Card>
+              <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-4">
+                  <Avatar className="h-14 w-14">
+                    {avatarUrl ? <AvatarImage src={avatarUrl} alt={profile?.name || "Avatar"} /> : null}
+                    <AvatarFallback className="text-lg font-semibold">{initials}</AvatarFallback>
+                  </Avatar>
+                  <div>
+                    <CardTitle className="text-xl">{profile?.name || "Your profile"}</CardTitle>
+                    <CardDescription>{profile?.email}</CardDescription>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge variant="secondary" className="capitalize">
+                        {profile?.role || "member"}
+                      </Badge>
+                      <Badge variant={profile?.emailVerified ? "default" : "outline"}>
+                        {profile?.emailVerified ? "Email verified" : "Email not verified"}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  <UserRound className="size-4" />
+                  <span>Member since {formatDate(profile?.createdAt)}</span>
+                </div>
+              </CardHeader>
+              <CardContent className="grid gap-4 sm:grid-cols-2">
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">User ID</p>
+                  <p className="mt-1 font-mono text-sm">{profile?.id}</p>
+                </div>
+                <div className="rounded-lg border bg-muted/30 p-4">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Role</p>
+                  <p className="mt-1 font-medium capitalize">{profile?.role || "member"}</p>
+                </div>
+              </CardContent>
+            </Card>
 
-      {/* Refresh Button */}
-      <div style={{ marginTop: '20px' }}>
-        <button 
-          onClick={fetchUsers}
-          style={{ 
-            padding: '10px 20px',
-            backgroundColor: '#28a745',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer'
-          }}
-        >
-          Refresh Users List
-        </button>
+            <Tabs defaultValue="account" className="w-full">
+              <div className="flex items-center justify-between">
+                <TabsList>
+                  <TabsTrigger value="account">Account</TabsTrigger>
+                  <TabsTrigger value="security">Security</TabsTrigger>
+                </TabsList>
+              </div>
+              <Separator className="my-4" />
+
+              <TabsContent value="account" className="grid gap-4 lg:grid-cols-2">
+                <Card className="h-full">
+                  <CardHeader>
+                    <CardTitle>Profile details</CardTitle>
+                    <CardDescription>Update your name. Email is read-only.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <StatusBanner type={accountStatus.type} message={accountStatus.message} />
+                    <form onSubmit={handleAccountSubmit} className="space-y-4">
+                      <div className="space-y-2">
+                        <Label>Profile picture</Label>
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-12 w-12">
+                            {avatarUrl ? (
+                              <AvatarImage src={avatarUrl} alt={profile?.name || "Avatar"} />
+                            ) : null}
+                            <AvatarFallback className="font-medium">{initials}</AvatarFallback>
+                          </Avatar>
+                          <div className="flex items-center gap-2">
+                            <input
+                              ref={fileInputRef}
+                              id="avatarUpload"
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handleAvatarFile(e.target.files?.[0])}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="flex items-center gap-2"
+                              onClick={triggerAvatarSelect}
+                              disabled={!profileLoaded || uploadingAvatar}
+                            >
+                              {uploadingAvatar ? <Spinner className="size-4" /> : <UploadCloud className="size-4" />}
+                              {uploadingAvatar ? "Uploading..." : "Upload"}
+                            </Button>
+                            {avatarUrl ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                onClick={handleAvatarRemove}
+                                disabled={!profileLoaded || uploadingAvatar}
+                              >
+                                Remove
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Stored on the server for your account. Re-upload to change.
+                        </p>
+                        <StatusBanner type={avatarStatus.type} message={avatarStatus.message} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="name">Name</Label>
+                        <Input
+                          id="name"
+                          value={accountForm.name}
+                          onChange={(e) =>
+                            setAccountForm((prev) => ({ ...prev, name: e.target.value }))
+                          }
+                          placeholder="Your full name"
+                          required
+                          disabled={!profileLoaded || savingAccount}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="email">Email</Label>
+                        <Input
+                          id="email"
+                          type="email"
+                          value={accountForm.email}
+                          readOnly
+                          disabled
+                        />
+                        <p className="text-xs text-muted-foreground">Email cannot be changed here.</p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="submit" disabled={!profileLoaded || savingAccount}>
+                          {savingAccount ? (
+                            <>
+                              <Spinner className="mr-2" />
+                              Saving...
+                            </>
+                          ) : (
+                            "Save changes"
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() =>
+                            setAccountForm({
+                              name: profile?.name || "",
+                              email: profile?.email || "",
+                            })
+                          }
+                          disabled={!profileLoaded || savingAccount}
+                        >
+                          Reset
+                        </Button>
+                      </div>
+                    </form>
+                  </CardContent>
+                </Card>
+
+                <Card className="h-full">
+                  <CardHeader>
+                    <CardTitle>Profile status</CardTitle>
+                    <CardDescription>Key info about your account.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="rounded-lg border bg-muted/40 p-4">
+                      <div className="flex items-center gap-3">
+                        <ShieldCheck className="size-5 text-emerald-600" />
+                        <div>
+                          <p className="font-medium">
+                            {profile?.emailVerified ? "Verified email" : "Verification pending"}
+                          </p>
+                          <p className="text-sm text-muted-foreground">
+                            {profile?.emailVerified
+                              ? "You are verified and can access secured areas."
+                              : "Verify your email to unlock all features."}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-lg border bg-muted/40 p-4">
+                      <p className="text-xs uppercase tracking-wide text-muted-foreground">Role</p>
+                      <p className="mt-1 font-medium capitalize">{profile?.role || "member"}</p>
+                      <p className="text-sm text-muted-foreground">
+                        Role is assigned by administrators and cannot be changed here.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </TabsContent>
+
+              <TabsContent value="security">
+                <div className="grid gap-4">
+                  <Card className="w-full">
+                    <CardHeader>
+                      <CardTitle>Change password</CardTitle>
+                      <CardDescription>Keep your account secure with a strong password.</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <StatusBanner type={passwordStatus.type} message={passwordStatus.message} />
+                      <form onSubmit={handlePasswordSubmit} className="space-y-4">
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="currentPassword">Current password</Label>
+                            <Input
+                              id="currentPassword"
+                              type="password"
+                              autoComplete="current-password"
+                              value={passwordForm.currentPassword}
+                              onChange={(e) =>
+                                setPasswordForm((prev) => ({ ...prev, currentPassword: e.target.value }))
+                              }
+                              required
+                              disabled={!profileLoaded || savingPassword}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="newPassword">New password</Label>
+                            <Input
+                              id="newPassword"
+                              type="password"
+                              autoComplete="new-password"
+                              minLength={6}
+                              value={passwordForm.newPassword}
+                              onChange={(e) =>
+                                setPasswordForm((prev) => ({ ...prev, newPassword: e.target.value }))
+                              }
+                              placeholder="At least 6 chars, 1 uppercase"
+                              required
+                              disabled={!profileLoaded || savingPassword}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="confirmPassword">Confirm new password</Label>
+                            <Input
+                              id="confirmPassword"
+                              type="password"
+                              autoComplete="new-password"
+                              value={passwordForm.confirmPassword}
+                              onChange={(e) =>
+                                setPasswordForm((prev) => ({ ...prev, confirmPassword: e.target.value }))
+                              }
+                              required
+                              disabled={!profileLoaded || savingPassword}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button type="submit" disabled={!profileLoaded || savingPassword}>
+                            {savingPassword ? (
+                              <>
+                                <Spinner className="mr-2" />
+                                Updating...
+                              </>
+                            ) : (
+                              "Update password"
+                            )}
+                          </Button>
+                          <Button variant="link" asChild>
+                            <Link to="/forgot-password" state={{ from: "/profile" }}>
+                              Forgot password?
+                            </Link>
+                          </Button>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Password must be at least 6 characters and include one uppercase letter.
+                        </p>
+                      </form>
+                    </CardContent>
+                  </Card>
+                  <Card className="w-full border-destructive/40">
+                    <CardHeader>
+                      <CardTitle className="text-destructive">Delete account</CardTitle>
+                      <CardDescription>
+                        Permanently remove your account and sign out from this device.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <StatusBanner type={deleteStatus.type} message={deleteStatus.message} />
+                      <p className="text-sm text-muted-foreground">
+                        This action cannot be undone. Your account and profile data will be removed.
+                      </p>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        disabled={!profileLoaded || deletingAccount}
+                        onClick={handleDeleteAccount}
+                      >
+                        {deletingAccount ? (
+                          <>
+                            <Spinner className="mr-2" />
+                            Deleting...
+                          </>
+                        ) : (
+                          "Delete my account"
+                        )}
+                      </Button>
+                    </CardContent>
+                  </Card>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </>
+        )}
       </div>
     </div>
   );
