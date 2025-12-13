@@ -698,11 +698,14 @@ function buildNotifications(studies = []) {
     const updatedStamp = normalizeTimestamp(
       study.lastUpdatedAt || study.timelineStart || new Date().toISOString(),
     );
+    const sanitizedCta = sanitizeNotificationCta(study.cta);
     items.push({
       id: `${study.studyParticipantId}-assigned`,
       type: 'assignment',
       message: `You were assigned to ${study.title}.`,
       studyId: study.studyId,
+      studyParticipantId: study.studyParticipantId ? String(study.studyParticipantId) : null,
+      cta: sanitizedCta,
       createdAt: updatedStamp,
     });
 
@@ -712,6 +715,8 @@ function buildNotifications(studies = []) {
         type: 'info',
         message: `${study.title} starts today. You can begin your tasks.`,
         studyId: study.studyId,
+        studyParticipantId: study.studyParticipantId ? String(study.studyParticipantId) : null,
+        cta: sanitizedCta,
         createdAt: normalizeTimestamp(study.timelineStart),
       });
     }
@@ -722,6 +727,8 @@ function buildNotifications(studies = []) {
         type: 'warning',
         message: `${study.title} ends today. Last chance to submit your work.`,
         studyId: study.studyId,
+        studyParticipantId: study.studyParticipantId ? String(study.studyParticipantId) : null,
+        cta: sanitizedCta,
         createdAt: normalizeTimestamp(study.timelineEnd),
       });
     }
@@ -729,6 +736,21 @@ function buildNotifications(studies = []) {
     // Suppress other notification types; only keep assignment/start/end per request.
   });
   return items;
+}
+
+function sanitizeNotificationCta(cta) {
+  if (!cta || typeof cta !== 'object') {
+    return null;
+  }
+  return {
+    type: cta.type || null,
+    buttonLabel: cta.buttonLabel || null,
+    studyId: cta.studyId ? String(cta.studyId) : null,
+    studyParticipantId: cta.studyParticipantId ? String(cta.studyParticipantId) : null,
+    studyArtifactId: cta.studyArtifactId ? String(cta.studyArtifactId) : null,
+    mode: cta.mode || null,
+    assignmentId: cta.assignmentId ? String(cta.assignmentId) : null,
+  };
 }
 
 function buildCompetencyNotifications(assignments = []) {

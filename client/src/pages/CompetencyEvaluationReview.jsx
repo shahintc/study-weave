@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import axios from "../api/axios";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { AlertCircle, Check, X, Eye, Download, Percent, Clock } from "lucide-react";
 
 export default function CompetencyEvaluationReview() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [assessments, setAssessments] = useState([]);
   const [assignmentStatuses, setAssignmentStatuses] = useState([]);
   const [selectedAssignment, setSelectedAssignment] = useState(null);
@@ -39,6 +42,17 @@ export default function CompetencyEvaluationReview() {
   const [allAssessments, setAllAssessments] = useState([]);
   // State for reviewer notes is now managed inside the dialog
   const [dialogReviewerNotes, setDialogReviewerNotes] = useState("");
+  const [pendingAssignmentId, setPendingAssignmentId] = useState(() => {
+    const stateId = location.state?.openAssignmentId;
+    return stateId ? String(stateId) : null;
+  });
+
+  useEffect(() => {
+    if (location.state?.openAssignmentId) {
+      setPendingAssignmentId(String(location.state.openAssignmentId));
+      navigate(location.pathname, { replace: true });
+    }
+  }, [location.state?.openAssignmentId, location.pathname, navigate]);
 
   const loadAssignments = useCallback(async () => {
     if (!researcherId) {
@@ -84,6 +98,19 @@ export default function CompetencyEvaluationReview() {
   useEffect(() => {
     loadAssignments();
   }, [loadAssignments]);
+
+  useEffect(() => {
+    if (!pendingAssignmentId || !assessments.length) {
+      return;
+    }
+    const match = assessments
+      .flatMap((assessment) => assessment.submissions || [])
+      .find((submission) => String(submission.id) === String(pendingAssignmentId));
+    if (match) {
+      handleViewEvaluation(match);
+      setPendingAssignmentId(null);
+    }
+  }, [pendingAssignmentId, assessments]);
 
   const groupByAssessment = (assignments) => {
     const fullySubmitted = assignments.filter((assignment) => {

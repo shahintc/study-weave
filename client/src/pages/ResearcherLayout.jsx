@@ -146,22 +146,74 @@ function resolveAvatarUrl(value) {
 }
 
 function NotificationBell({ count = 0, notifications = [] }) {
-  const markRead = (id) => {
-    if (!id) return;
+  const navigate = useNavigate();
+
+  const persistState = (nextList, readIds) => {
+    window.localStorage.setItem("researcherNotificationsList", JSON.stringify(nextList));
+    window.localStorage.setItem("researcherNotificationsCount", String(nextList.length));
+    if (readIds) {
+      window.localStorage.setItem("researcherNotificationsReadIds", JSON.stringify([...readIds]));
+    }
+    window.dispatchEvent(new Event("storage"));
+  };
+
+  const markNotifications = (ids = []) => {
+    if (!ids.length) return;
     try {
       const rawRead = window.localStorage.getItem("researcherNotificationsReadIds");
       const readIds = new Set(JSON.parse(rawRead || "[]"));
-      readIds.add(id);
-      window.localStorage.setItem("researcherNotificationsReadIds", JSON.stringify([...readIds]));
-
-      const nextList = notifications.filter((n) => n.id !== id);
-      window.localStorage.setItem("researcherNotificationsList", JSON.stringify(nextList));
-      window.localStorage.setItem("researcherNotificationsCount", String(nextList.length));
-
-      window.dispatchEvent(new Event("storage"));
-    } catch (error) {
-      // Ignore storage errors; UI will refresh on next fetch
+      ids.forEach((id) => {
+        if (id) readIds.add(id);
+      });
+      const remaining = notifications.filter((n) => !ids.includes(n.id));
+      persistState(remaining, readIds);
+    } catch {
+      // Ignore storage errors
     }
+  };
+
+  const handleNotificationClick = (notification) => {
+    if (!notification) return;
+    markNotifications([notification.id]);
+    navigateForNotification(notification);
+  };
+
+  const navigateForNotification = (notification) => {
+    if (!notification) return;
+
+    if (notification.type === "study_submission") {
+      navigate("/researcher/reviewer", {
+        state: {
+          openEvaluationId: notification.evaluationId ? String(notification.evaluationId) : null,
+          fallbackStudyId: notification.studyId ? String(notification.studyId) : null,
+          participantId: notification.participantId ? String(notification.participantId) : null,
+        },
+      });
+      return;
+    }
+
+    if (notification.type === "competency_complete") {
+      navigate("/researcher/competency-review", {
+        state: {
+          openAssignmentId: notification.assignmentId ? String(notification.assignmentId) : null,
+          participantId: notification.participantId ? String(notification.participantId) : null,
+        },
+      });
+      return;
+    }
+
+    if (notification.type === "study_complete" && notification.studyId) {
+      navigate("/researcher/studies", {
+        state: { highlightStudyId: String(notification.studyId) },
+      });
+      return;
+    }
+
+    navigate("/researcher");
+  };
+
+  const handleMarkAll = () => {
+    markNotifications(notifications.map((n) => n.id));
   };
 
   const labelForType = (type) => {
@@ -190,26 +242,27 @@ function NotificationBell({ count = 0, notifications = [] }) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel>Notifications</DropdownMenuLabel>
+        <DropdownMenuLabel className="flex items-center justify-between">
+          <span>Notifications</span>
+          {notifications.length ? (
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={handleMarkAll}>
+              Mark all read
+            </Button>
+          ) : null}
+        </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuGroup className="max-h-80 overflow-auto">
           {notifications.length === 0 ? (
             <DropdownMenuItem className="text-sm text-muted-foreground">You're all caught up.</DropdownMenuItem>
           ) : (
             notifications.map((n) => (
-              <DropdownMenuItem key={n.id} className="whitespace-normal text-sm">
+              <DropdownMenuItem
+                key={n.id}
+                className="whitespace-normal text-sm cursor-pointer"
+                onSelect={() => handleNotificationClick(n)}
+              >
                 <div className="flex flex-col gap-0.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="font-medium">{labelForType(n.type)}</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs"
-                      onClick={() => markRead(n.id)}
-                    >
-                      Mark read
-                    </Button>
-                  </div>
+                  <span className="font-medium">{labelForType(n.type)}</span>
                   <span className="text-xs text-muted-foreground">{n.message}</span>
                   {n.studyTitle ? (
                     <span className="text-[11px] text-muted-foreground">{n.studyTitle}</span>

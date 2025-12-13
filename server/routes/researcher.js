@@ -641,19 +641,19 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
     }
 
     const assignment = plain.sourceAssignment;
-    if (assignment && (assignment.status === 'submitted' || assignment.status === 'reviewed')) {
+    if (assignment && assignment.status === 'submitted') {
       const occurredAt =
         toIso(assignment.reviewedAt) || toIso(assignment.submittedAt) || toIso(plain.updatedAt) || toIso(new Date());
       const id = `study-${studyId || 'unknown'}-participant-${participantId || 'unknown'}-competency-${assignment.status}`;
-      const verb = assignment.status === 'reviewed' ? 'finished' : 'submitted';
       dedup.set(id, {
         id,
         type: 'competency_complete',
-        message: `${participantName} ${verb} the competency for "${studyTitle}".`,
+        message: `${participantName} submitted the competency for "${studyTitle}".`,
         studyId,
         participantId: participantId ? String(participantId) : null,
         participantName,
         studyTitle,
+        assignmentId: assignment.id ? String(assignment.id) : null,
         occurredAt,
       });
     }
@@ -666,6 +666,9 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
     const participantId = participant.id || assignment.participantId || null;
     const participantName = participant.name || (participantId ? `Participant ${participantId}` : 'Participant');
     const status = assignment.status;
+    if (status !== 'submitted') {
+      return;
+    }
     const occurredAt =
       toIso(assignment.reviewedAt) ||
       toIso(assignment.submittedAt) ||
@@ -674,15 +677,15 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
 
     const id = `competency-${assignment.id}-${status}`;
     if (!dedup.has(id)) {
-      const verb = status === 'reviewed' ? 'finished' : 'submitted';
       dedup.set(id, {
         id,
         type: 'competency_complete',
-        message: `${participantName} ${verb} the competency "${assessment.title || 'Assessment'}".`,
+        message: `${participantName} submitted the competency "${assessment.title || 'Assessment'}".`,
         studyId: null,
         participantId: participantId ? String(participantId) : null,
         participantName,
         studyTitle: assessment.title || 'Competency',
+        assignmentId: assignment.id ? String(assignment.id) : null,
         occurredAt,
       });
     }
@@ -714,6 +717,8 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
         participantId: participantId ? String(participantId) : null,
         participantName,
         studyTitle,
+        evaluationId: submission.sourceEvaluationId ? String(submission.sourceEvaluationId) : null,
+        artifactAssessmentId: submission.id ? String(submission.id) : null,
         occurredAt,
       });
     }
