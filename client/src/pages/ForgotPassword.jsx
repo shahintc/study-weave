@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import axios from "../api/axios";
 
 const PASSWORD_POLICY = /^(?=.*[A-Z]).{6,}$/;
@@ -14,6 +14,8 @@ export default function ForgotPassword() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = location.state?.from || "/login";
 
   const handleRequest = async (e) => {
     e.preventDefault();
@@ -49,7 +51,7 @@ export default function ForgotPassword() {
         password,
       });
       setMessage(res.data?.message || "Password reset successful.");
-      navigate("/login");
+      navigate(returnTo);
     } catch (err) {
       setError(err.response?.data?.message || "Failed to reset password");
     } finally {
@@ -117,7 +119,7 @@ export default function ForgotPassword() {
         </form>
       )}
       <p>
-        <Link to="/login">Back to login</Link>
+        <Link to={returnTo}>Back</Link>
       </p>
     </div>
   );

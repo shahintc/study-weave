@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
+import axios from "../api/axios";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Bell } from "lucide-react";
@@ -17,6 +18,7 @@ export default function ParticipantLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [user, setUser] = useState(null);
+  const [avatarUrl, setAvatarUrl] = useState("");
   const [notificationCount, setNotificationCount] = useState(0);
   const [notifications, setNotifications] = useState([]);
 
@@ -29,6 +31,7 @@ export default function ParticipantLayout() {
     try {
       const u = JSON.parse(raw);
       setUser(u);
+      setAvatarUrl(resolveAvatarUrl(u?.avatarUrl));
       if (u.role !== "participant") {
         navigate("/researcher");
       }
@@ -36,6 +39,30 @@ export default function ParticipantLayout() {
       navigate("/login");
     }
   }, [navigate]);
+
+  useEffect(() => {
+    const syncUser = () => {
+      try {
+        const raw = window.localStorage.getItem("user");
+        if (!raw) {
+          setAvatarUrl("");
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        setUser(parsed);
+        setAvatarUrl(resolveAvatarUrl(parsed?.avatarUrl));
+      } catch {
+        setAvatarUrl("");
+      }
+    };
+    const handler = (event) => {
+      if (!event || event.key === null || event.key === "user") {
+        syncUser();
+      }
+    };
+    window.addEventListener("storage", handler);
+    return () => window.removeEventListener("storage", handler);
+  }, []);
 
   useEffect(() => {
     const readCount = () => {
@@ -76,7 +103,7 @@ export default function ParticipantLayout() {
         <h1 className="text-2xl font-semibold tracking-tight">Study Weave (Participant)</h1>
         <div className="flex items-center gap-3">
           <NotificationBell count={notificationCount} notifications={notifications} />
-          <UserNav displayName={user?.name || "Participant"} onLogout={handleLogout} />
+          <UserNav displayName={user?.name || "Participant"} avatarUrl={avatarUrl} onLogout={handleLogout} />
         </div>
       </header>
 
@@ -96,6 +123,16 @@ export default function ParticipantLayout() {
       <Outlet />
     </div>
   );
+}
+
+function resolveAvatarUrl(value) {
+  if (!value) return "";
+  try {
+    const base = axios.defaults.baseURL || window.location.origin;
+    return new URL(value, base).href;
+  } catch {
+    return value;
+  }
 }
 
 function NotificationBell({ count = 0, notifications = [] }) {
@@ -186,13 +223,13 @@ function NotificationBell({ count = 0, notifications = [] }) {
   );
 }
 
-function UserNav({ displayName = "Participant", onLogout }) {
+function UserNav({ displayName = "Participant", avatarUrl = "", onLogout }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="flex items-center gap-2">
           <Avatar className="h-8 w-8">
-            <AvatarImage src="https://github.com/shadcn.png" alt="@user" />
+            {avatarUrl ? <AvatarImage src={avatarUrl} alt={displayName} /> : null}
             <AvatarFallback>{displayName?.[0] || "U"}</AvatarFallback>
           </Avatar>
           <span className="hidden sm:inline">{displayName}</span>
@@ -201,8 +238,12 @@ function UserNav({ displayName = "Participant", onLogout }) {
       <DropdownMenuContent align="end">
         <DropdownMenuLabel>My Account</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem>Profile</DropdownMenuItem>
-        <DropdownMenuItem>Settings</DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/profile">Profile</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link to="/profile">Settings</Link>
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={onLogout}>Logout</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

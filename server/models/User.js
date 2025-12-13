@@ -3,7 +3,7 @@ const SequelizeUser = require('../sequelize-models/user');
 
 class User {
   static async create(userData) {
-    const { name, email, password, role, roleId, ...rest } = userData;
+    const { name, email, password, role, roleId, avatarUrl, ...rest } = userData;
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await SequelizeUser.create({
       name,
@@ -11,6 +11,7 @@ class User {
       password: hashedPassword,
       role,
       roleId,
+      avatarUrl,
       ...rest,
     });
     const plain = user.get({ plain: true });
@@ -20,6 +21,7 @@ class User {
       email: plain.email,
       role: plain.role,
       roleId: plain.roleId,
+      avatarUrl: plain.avatarUrl,
       emailVerified: plain.emailVerified,
       created_at: plain.created_at,
     };
@@ -32,9 +34,23 @@ class User {
 
   static async findById(id) {
     const user = await SequelizeUser.findByPk(id, {
-      attributes: ['id', 'name', 'email', 'role', 'roleId', 'created_at', 'emailVerified'],
+      attributes: [
+        'id',
+        'name',
+        'email',
+        'role',
+        'roleId',
+        'avatarUrl',
+        'created_at',
+        'emailVerified',
+      ],
       raw: true,
     });
+    return user || null;
+  }
+
+  static async findByIdWithPassword(id) {
+    const user = await SequelizeUser.findByPk(id, { raw: true });
     return user || null;
   }
 
@@ -45,6 +61,7 @@ class User {
       password,
       role,
       roleId,
+      avatarUrl,
       emailVerified,
       verificationCode,
       verificationExpires,
@@ -57,6 +74,7 @@ class User {
     if (typeof email !== 'undefined') user.email = email;
     if (typeof role !== 'undefined') user.role = role;
     if (typeof roleId !== 'undefined') user.roleId = roleId;
+    if (typeof avatarUrl !== 'undefined') user.avatarUrl = avatarUrl;
     if (typeof emailVerified !== 'undefined') user.emailVerified = emailVerified;
     if (typeof verificationCode !== 'undefined') user.verificationCode = verificationCode;
     if (typeof verificationExpires !== 'undefined') user.verificationExpires = verificationExpires;
@@ -74,7 +92,9 @@ class User {
       email: plain.email,
       role: plain.role,
       roleId: plain.roleId,
+      avatarUrl: plain.avatarUrl,
       emailVerified: plain.emailVerified,
+      created_at: plain.created_at,
     };
   }
 
