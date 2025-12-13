@@ -294,7 +294,7 @@ router.delete('/adjudications/:id/notes/:noteId', authMiddleware, async (req, re
 
 function buildIncludes() {
   return [
-    { model: Study, as: 'study', attributes: ['id', 'title', 'researcherId', 'allowReviewers'] },
+    { model: Study, as: 'study', attributes: ['id', 'title', 'researcherId', 'allowReviewers', 'metadata'] },
     {
       model: StudyParticipant,
       as: 'studyParticipant',
@@ -362,6 +362,7 @@ function formatAdjudication(evaluationInstance) {
           title: evaluation.study.title,
           allowReviewers: Boolean(evaluation.study.allowReviewers),
           researcherId: evaluation.study.researcherId ? String(evaluation.study.researcherId) : null,
+          isBlinded,
         }
       : null,
     participant,
