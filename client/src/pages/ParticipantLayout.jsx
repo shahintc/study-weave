@@ -136,22 +136,108 @@ function resolveAvatarUrl(value) {
 }
 
 function NotificationBell({ count = 0, notifications = [] }) {
-  const markRead = (id) => {
-    if (!id) return;
+  const navigate = useNavigate();
+
+  const persistState = (nextList, readIds) => {
+    window.localStorage.setItem("participantNotificationsList", JSON.stringify(nextList));
+    window.localStorage.setItem("participantNotificationsCount", String(nextList.length));
+    if (readIds) {
+      window.localStorage.setItem("participantNotificationsReadIds", JSON.stringify([...readIds]));
+    }
+    window.dispatchEvent(new Event("storage"));
+  };
+
+  const markNotifications = (ids = []) => {
+    if (!ids.length) return;
     try {
       const rawRead = window.localStorage.getItem("participantNotificationsReadIds");
       const readIds = new Set(JSON.parse(rawRead || "[]"));
-      readIds.add(id);
-      window.localStorage.setItem("participantNotificationsReadIds", JSON.stringify([...readIds]));
-
-      const nextList = notifications.filter((n) => n.id !== id);
-      window.localStorage.setItem("participantNotificationsList", JSON.stringify(nextList));
-      window.localStorage.setItem("participantNotificationsCount", String(nextList.length));
-
-      window.dispatchEvent(new Event("storage"));
+      ids.forEach((id) => {
+        if (id) readIds.add(id);
+      });
+      const remaining = notifications.filter((n) => !ids.includes(n.id));
+      persistState(remaining, readIds);
     } catch {
       // ignore storage errors
     }
+  };
+
+  const handleNotificationClick = (notification) => {
+    if (!notification) return;
+    markNotifications([notification.id]);
+    navigateForNotification(notification);
+  };
+
+  const navigateForNotification = (notification) => {
+    if (!notification) return;
+
+    if (notification.type === "info") {
+      // Reminder notifications are informational only; no navigation.
+      return;
+    }
+
+    if (
+      notification.type === "assignment" &&
+      notification.cta &&
+      notification.cta.type === "artifact" &&
+      notification.cta.studyArtifactId &&
+      notification.cta.mode
+    ) {
+      const params = new URLSearchParams();
+      if (notification.cta.studyId) params.set("studyId", notification.cta.studyId);
+      if (notification.cta.studyParticipantId) params.set("studyParticipantId", notification.cta.studyParticipantId);
+      params.set("studyArtifactId", notification.cta.studyArtifactId);
+      params.set("mode", notification.cta.mode);
+      const search = params.toString();
+      navigate(`/participant/artifacts-comparison?${search}`, {
+        state: {
+          studyId: notification.cta.studyId ? Number(notification.cta.studyId) : undefined,
+          studyParticipantId: notification.cta.studyParticipantId
+            ? Number(notification.cta.studyParticipantId)
+            : undefined,
+          studyArtifactId: Number(notification.cta.studyArtifactId),
+          assignedMode: notification.cta.mode,
+        },
+      });
+      return;
+    }
+
+    if (notification.type === "competency" && notification.assignmentId) {
+      navigate("/participant/competency", {
+        state: {
+          assignmentId: Number(notification.assignmentId),
+          studyId: notification.studyId ? Number(notification.studyId) : undefined,
+        },
+      });
+      return;
+    }
+
+    if (notification.studyId) {
+      const params = new URLSearchParams();
+      params.set("studyId", notification.studyId);
+      if (notification.studyParticipantId) {
+        params.set("studyParticipantId", notification.studyParticipantId);
+      }
+      const search = params.toString();
+      navigate(
+        `/participant/artifacts-comparison${search ? `?${search}` : ""}`,
+        {
+          state: {
+            studyId: Number(notification.studyId),
+            studyParticipantId: notification.studyParticipantId
+              ? Number(notification.studyParticipantId)
+              : undefined,
+          },
+        },
+      );
+      return;
+    }
+
+    navigate("/participant");
+  };
+
+  const handleMarkAll = () => {
+    markNotifications(notifications.map((n) => n.id));
   };
 
   const resolveTitle = (type) => {
@@ -182,7 +268,14 @@ function NotificationBell({ count = 0, notifications = [] }) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel>Notifications</DropdownMenuLabel>
+        <DropdownMenuLabel className="flex items-center justify-between">
+          <span>Notifications</span>
+          {notifications.length ? (
+            <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={handleMarkAll}>
+              Mark all read
+            </Button>
+          ) : null}
+        </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuGroup className="max-h-80 overflow-auto">
           {notifications.length === 0 ? (
@@ -191,19 +284,13 @@ function NotificationBell({ count = 0, notifications = [] }) {
             </DropdownMenuItem>
           ) : (
             notifications.map((n) => (
-              <DropdownMenuItem key={n.id} className="whitespace-normal text-sm">
+              <DropdownMenuItem
+                key={n.id}
+                className="whitespace-normal text-sm cursor-pointer"
+                onSelect={() => handleNotificationClick(n)}
+              >
                 <div className="flex flex-col gap-0.5">
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="font-medium">{resolveTitle(n.type)}</span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 text-xs"
-                      onClick={() => markRead(n.id)}
-                    >
-                      Mark read
-                    </Button>
-                  </div>
+                  <span className="font-medium">{resolveTitle(n.type)}</span>
                   <span className="text-muted-foreground text-xs">{n.message}</span>
                   {n.studyId ? (
                     <span className="text-[11px] text-muted-foreground">Study #{n.studyId}</span>

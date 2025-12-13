@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import api from "@/api/axios";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -138,6 +138,7 @@ const summarizeCriteriaRatings = (criteria = []) => {
 
 export default function ReviewerAdjudication() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [user, setUser] = useState(null);
   const [authToken, setAuthToken] = useState(null);
   const [adjudications, setAdjudications] = useState([]);
@@ -161,6 +162,26 @@ export default function ReviewerAdjudication() {
     primary: { text: "", loading: false, error: "" },
     secondary: { text: "", loading: false, error: "" },
   });
+  const [pendingEvaluationId, setPendingEvaluationId] = useState(() => {
+    const stateId = location.state?.openEvaluationId;
+    return stateId ? String(stateId) : null;
+  });
+  const [pendingStudyId, setPendingStudyId] = useState(() => {
+    const studyId = location.state?.fallbackStudyId;
+    return studyId ? String(studyId) : null;
+  });
+
+  useEffect(() => {
+    if (location.state?.openEvaluationId || location.state?.fallbackStudyId) {
+      setPendingEvaluationId(
+        location.state?.openEvaluationId ? String(location.state.openEvaluationId) : null,
+      );
+      setPendingStudyId(
+        location.state?.fallbackStudyId ? String(location.state.fallbackStudyId) : null,
+      );
+      navigate(location.pathname, { replace: true });
+    }
+  }, [location.state, location.pathname, navigate]);
 
   const buildReviewSummaryPrompt = useCallback((entry) => {
     if (!entry) return "";
@@ -313,6 +334,29 @@ export default function ReviewerAdjudication() {
   useEffect(() => {
     fetchAdjudications();
   }, [fetchAdjudications]);
+
+  useEffect(() => {
+    if (pendingEvaluationId && adjudications.length) {
+      const entry = adjudications.find(
+        (item) => String(item.id) === String(pendingEvaluationId),
+      );
+      if (entry) {
+        openDialog(entry);
+        setPendingEvaluationId(null);
+        setPendingStudyId(null);
+        return;
+      }
+    }
+    if (pendingStudyId && adjudications.length && !pendingEvaluationId) {
+      const entry = adjudications.find(
+        (item) => item.study && String(item.study.id) === String(pendingStudyId),
+      );
+      if (entry) {
+        openDialog(entry);
+        setPendingStudyId(null);
+      }
+    }
+  }, [pendingEvaluationId, pendingStudyId, adjudications]);
 
   const studyOptions = useMemo(() => {
     const uniq = new Map();
