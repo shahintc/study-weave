@@ -13,6 +13,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export default function ParticipantLayout() {
   const navigate = useNavigate();
@@ -56,6 +64,7 @@ export default function ParticipantLayout() {
       }
     }
   }, [navigate, user]);
+  const [showGuestCompetencyModal, setShowGuestCompetencyModal] = useState(false);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -67,7 +76,7 @@ export default function ParticipantLayout() {
       const u = JSON.parse(raw);
       setUser(u);
       setAvatarUrl(resolveAvatarUrl(u?.avatarUrl));
-      if (u.role !== "participant") {
+      if (u.role !== "participant" && u.role !== "guest") {
         navigate("/researcher");
       }
     } catch {
@@ -139,35 +148,73 @@ export default function ParticipantLayout() {
   };
 
   const nav = [
-    { to: "/participant", label: "Dashboard" },
-    { to: "/participant/artifacts-comparison", label: "Artifacts Comparison" },
-    { to: "/participant/competency", label: "Competency" },
+    { to: "/participant", label: "Dashboard", key: "dashboard" },
+    { to: "/participant/artifacts-comparison", label: "Artifacts Comparison", key: "artifacts" },
+    { to: "/participant/competency", label: "Competency", key: "competency" },
   ];
+
+  const isGuest = user?.role === "guest";
+
+  const handleNavClick = (itemTo) => {
+    if (itemTo === "/participant/competency" && isGuest) {
+      setShowGuestCompetencyModal(true);
+      return;
+    }
+    navigate(itemTo);
+  };
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
       <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Study Weave (Participant)</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Study Weave ({isGuest ? "Guest Participant" : "Participant"})
+        </h1>
         <div className="flex items-center gap-3">
-          <NotificationBell count={notificationCount} notifications={notifications} />
-          <UserNav displayName={user?.name || "Participant"} avatarUrl={avatarUrl} onLogout={handleLogout} />
+          {!isGuest ? (
+            <NotificationBell count={notificationCount} notifications={notifications} />
+          ) : null}
+          <UserNav displayName={user?.name || (isGuest ? "Guest Participant" : "Participant")} avatarUrl={avatarUrl} onLogout={handleLogout} />
         </div>
       </header>
 
       <nav className="flex items-center gap-2 border-b pb-4">
         {nav.map((item) => (
           <Button
-            key={item.to}
-            asChild
+            key={item.key}
             variant={location.pathname === item.to ? "secondary" : "ghost"}
             className="rounded-full"
+            onClick={() => handleNavClick(item.to)}
           >
-            <Link to={item.to}>{item.label}</Link>
+            {item.label}
           </Button>
         ))}
       </nav>
 
       <Outlet />
+
+      <Dialog open={showGuestCompetencyModal} onOpenChange={setShowGuestCompetencyModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Sign in required</DialogTitle>
+            <DialogDescription>
+              Guest sessions can view public studies only. To take competency assessments, please sign in with a full participant account.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-col items-stretch gap-2 sm:flex-row sm:justify-end sm:gap-2">
+            <Button variant="outline" onClick={() => setShowGuestCompetencyModal(false)}>
+              Stay on dashboard
+            </Button>
+            <Button
+              onClick={() => {
+                setShowGuestCompetencyModal(false);
+                handleLogout();
+              }}
+            >
+              Go to login
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

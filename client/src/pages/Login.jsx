@@ -23,6 +23,7 @@ export default function Login() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [verifying, setVerifying] = useState(false);
+  const [guestLoading, setGuestLoading] = useState(false);
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -95,6 +96,23 @@ export default function Login() {
     }
   };
 
+  const handleGuestLogin = async () => {
+    setError("");
+    setMessage("");
+    setNeedsVerification(false);
+    setGuestLoading(true);
+    try {
+      const res = await axios.post("/api/auth/guest-login");
+      localStorage.setItem("token", res.data.token);
+      localStorage.setItem("user", JSON.stringify(res.data.user));
+      navigate("/participant");
+    } catch (err) {
+      setError(err.response?.data?.message || "Unable to start guest session");
+    } finally {
+      setGuestLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen w-full flex items-center justify-center px-4">
       <Card className="w-full max-w-md">
@@ -140,6 +158,17 @@ export default function Login() {
               {loading ? "Logging in..." : "Login"}
             </Button>
           </form>
+          <div className="mt-4 grid gap-2">
+            <div className="text-center text-xs uppercase tracking-wide text-muted-foreground">
+              or
+            </div>
+            <Button type="button" variant="outline" onClick={handleGuestLogin} disabled={guestLoading} className="w-full">
+              {guestLoading ? "Starting guest session..." : "Login as guest"}
+            </Button>
+            <p className="text-xs text-muted-foreground text-center">
+              Guest sessions last 4 hours and only access public studies.
+            </p>
+          </div>
 
           {needsVerification ? (
             <div className="mt-6 rounded-md border bg-muted/30 p-4">

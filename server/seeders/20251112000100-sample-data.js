@@ -16,6 +16,7 @@ module.exports = {
           { key: 'admin', name: 'Admin', description: 'Administrator', createdAt: now, updatedAt: now },
           { key: 'researcher', name: 'Researcher', description: 'Creates studies', createdAt: now, updatedAt: now },
           { key: 'participant', name: 'Participant', description: 'Participates in studies', createdAt: now, updatedAt: now },
+          { key: 'guest', name: 'Guest', description: 'Temporary guest participant sessions', createdAt: now, updatedAt: now },
           { key: 'reviewer', name: 'Reviewer', description: 'Reviews participant work', createdAt: now, updatedAt: now },
         ],
         { transaction: t }
