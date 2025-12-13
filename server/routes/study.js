@@ -10,6 +10,7 @@ const {
   User,
 } = require('../models');
 const { sendEmail, isEmailConfigured } = require('../services/emailService');
+const authMiddleware = require('../middleware/auth');
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: 'stage1', label: 'Bug labeling – Stage 1' },
@@ -29,7 +30,78 @@ const resolveDefaultArtifactMode = (value) => {
   return DEFAULT_ARTIFACT_MODE;
 };
 
-// const authMiddleware = require('../middleware/auth'); // We will add security to this later
+router.get('/public', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || !['guest', 'participant', 'researcher', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Unauthorized to view public studies.' });
+    }
+
+    const studies = await Study.findAll({
+      where: {
+        status: { [Op.ne]: 'archived' },
+        [Op.or]: [
+          { isPublic: true },
+          sequelize.where(sequelize.literal("(metadata->>'isPublic')::boolean"), true),
+        ],
+      },
+      attributes: [
+        'id',
+        'title',
+        'description',
+        'timelineStart',
+        'timelineEnd',
+        'status',
+        'isPublic',
+        'metadata',
+      ],
+      include: [
+        { model: User, as: 'researcher', attributes: ['id', 'name'] },
+        {
+          model: StudyArtifact,
+          as: 'studyArtifacts',
+          attributes: ['id', 'label', 'orderIndex'],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+    });
+
+    const payload = studies.map((study) => {
+      const plain = study.get({ plain: true });
+      const artifacts = Array.isArray(plain.studyArtifacts) ? [...plain.studyArtifacts] : [];
+      artifacts.sort((a, b) => {
+        const aIndex = typeof a.orderIndex === 'number' ? a.orderIndex : Number(a.orderIndex) || 0;
+        const bIndex = typeof b.orderIndex === 'number' ? b.orderIndex : Number(b.orderIndex) || 0;
+        return aIndex - bIndex;
+      });
+      const safeMetadata = {};
+      const metadata = plain.metadata && typeof plain.metadata === 'object' ? plain.metadata : {};
+      if (typeof metadata.defaultArtifactMode !== 'undefined') {
+        safeMetadata.defaultArtifactMode = metadata.defaultArtifactMode;
+      }
+      if (typeof metadata.isBlinded !== 'undefined') {
+        safeMetadata.isBlinded = metadata.isBlinded;
+      }
+      return {
+        id: plain.id,
+        title: plain.title,
+        description: plain.description,
+        timelineStart: plain.timelineStart,
+        timelineEnd: plain.timelineEnd,
+        status: plain.status,
+        isPublic: Boolean(plain.isPublic),
+        researcher: plain.researcher ? { id: plain.researcher.id, name: plain.researcher.name } : null,
+        artifactCount: artifacts.length,
+        firstStudyArtifactId: artifacts.length ? artifacts[0].id : null,
+        metadata: safeMetadata,
+      };
+    });
+
+    return res.json({ studies: payload });
+  } catch (error) {
+    console.error('Public studies fetch error', error);
+    return res.status(500).json({ message: 'Unable to load public studies right now.' });
+  }
+});
 
 // ---
 // CREATE A NEW STUDY (POST /)

@@ -91,6 +91,21 @@ const StudyParticipant = sequelize.define(
       onUpdate: 'CASCADE',
       onDelete: 'SET NULL',
     },
+    source: {
+      type: DataTypes.ENUM('invited', 'public_guest'),
+      allowNull: false,
+      defaultValue: 'invited',
+    },
+    guestSessionId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: 'guest_session_id',
+    },
+    expiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'expires_at',
+    },
   },
   {
     tableName: 'study_participants',

@@ -4,7 +4,7 @@ const SequelizeUser = require('../sequelize-models/user');
 class User {
   static async create(userData) {
     const { name, email, password, role, roleId, avatarUrl, ...rest } = userData;
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
     const user = await SequelizeUser.create({
       name,
       email,
@@ -23,6 +23,9 @@ class User {
       roleId: plain.roleId,
       avatarUrl: plain.avatarUrl,
       emailVerified: plain.emailVerified,
+      isGuest: plain.isGuest,
+      guestSessionId: plain.guestSessionId,
+      guestExpiresAt: plain.guestExpiresAt,
       created_at: plain.created_at,
     };
   }
@@ -43,6 +46,9 @@ class User {
         'avatarUrl',
         'created_at',
         'emailVerified',
+        'isGuest',
+        'guestSessionId',
+        'guestExpiresAt',
       ],
       raw: true,
     });
@@ -67,6 +73,9 @@ class User {
       verificationExpires,
       resetCode,
       resetExpires,
+      isGuest,
+      guestSessionId,
+      guestExpiresAt,
     } = updates;
     const user = await SequelizeUser.findByPk(id);
     if (!user) return null;
@@ -80,6 +89,9 @@ class User {
     if (typeof verificationExpires !== 'undefined') user.verificationExpires = verificationExpires;
     if (typeof resetCode !== 'undefined') user.resetCode = resetCode;
     if (typeof resetExpires !== 'undefined') user.resetExpires = resetExpires;
+    if (typeof isGuest !== 'undefined') user.isGuest = isGuest;
+    if (typeof guestSessionId !== 'undefined') user.guestSessionId = guestSessionId;
+    if (typeof guestExpiresAt !== 'undefined') user.guestExpiresAt = guestExpiresAt;
     if (password) {
       const hashedPassword = await bcrypt.hash(password, 10);
       user.password = hashedPassword;
@@ -95,6 +107,9 @@ class User {
       avatarUrl: plain.avatarUrl,
       emailVerified: plain.emailVerified,
       created_at: plain.created_at,
+      isGuest: plain.isGuest,
+      guestSessionId: plain.guestSessionId,
+      guestExpiresAt: plain.guestExpiresAt,
     };
   }
 
@@ -104,6 +119,9 @@ class User {
   }
 
   static async comparePassword(plainPassword, hashedPassword) {
+    if (!hashedPassword) {
+      return false;
+    }
     return await bcrypt.compare(plainPassword, hashedPassword);
   }
 }

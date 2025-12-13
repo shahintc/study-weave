@@ -21,6 +21,9 @@ const sanitizeUser = (user) => ({
   role: user.role,
   roleId: user.roleId,
   avatarUrl: user.avatarUrl || null,
+  isGuest: Boolean(user.isGuest ?? user.is_guest),
+  guestSessionId: user.guestSessionId || user.guest_session_id || null,
+  guestExpiresAt: user.guestExpiresAt || user.guest_expires_at || null,
   emailVerified: Boolean(user.emailVerified ?? user.email_verified),
   createdAt: user.created_at || user.createdAt,
 });
@@ -331,6 +334,41 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ message: 'Server error during login' });
+  }
+});
+
+// Guest Login
+router.post('/guest-login', async (req, res) => {
+  try {
+    const guestSessionId = crypto.randomBytes(16).toString('hex');
+    const guestExpiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000); // 4 hours from now
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    
+    const user = await User.create({
+      name: `Guest ${randomSuffix}`,
+      role: 'guest',
+      isGuest: true,
+      guestSessionId,
+      guestExpiresAt,
+      emailVerified: true, // Guests don't verify email
+      email: null,
+      password: null,
+    });
+
+    const token = jwt.sign(
+      { userId: user.id, role: 'guest', guestSessionId },
+      process.env.JWT_SECRET || 'fallback_secret',
+      { expiresIn: '4h' }
+    );
+
+    res.json({
+      message: 'Guest login successful',
+      token,
+      user: sanitizeUser(user),
+    });
+  } catch (error) {
+    console.error('Guest login error:', error);
+    res.status(500).json({ message: 'Server error during guest login' });
   }
 });
 

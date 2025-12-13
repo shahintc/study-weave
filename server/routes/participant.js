@@ -117,15 +117,89 @@ async function buildPanePayload(studyArtifactEntry, role = 'primary') {
     fileOriginalName: artifact.fileOriginalName,
     encoding,
     content,
-  };
+};
 }
+
+router.post('/join-public', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || req.user.role !== 'guest') {
+      return res.status(403).json({ message: 'Only guest users can join public studies.' });
+    }
+    const studyId = Number(req.body.studyId);
+    if (!Number.isFinite(studyId)) {
+      return res.status(400).json({ message: 'A valid studyId is required.' });
+    }
+
+    const study = await Study.findByPk(studyId, {
+      include: [
+        {
+          model: StudyArtifact,
+          as: 'studyArtifacts',
+          attributes: ['id', 'orderIndex'],
+        },
+      ],
+    });
+    const metadata = normalizeJson(study?.metadata);
+    const isPublic = study?.isPublic || Boolean(metadata.isPublic);
+    if (!study || !isPublic) {
+      return res.status(404).json({ message: 'Public study not found.' });
+    }
+    if (study.status === 'archived') {
+      return res.status(400).json({ message: 'This study is archived.' });
+    }
+    if (computeDeadlinePassed(study.timelineEnd)) {
+      return res.status(403).json({ message: 'This study has already ended.' });
+    }
+
+    const existing = await StudyParticipant.findOne({
+      where: { studyId, participantId: req.user.id },
+    });
+    if (existing) {
+      return res.json({ participant: existing.get ? existing.get({ plain: true }) : existing });
+    }
+
+    const artifacts = Array.isArray(study.studyArtifacts) ? [...study.studyArtifacts] : [];
+    artifacts.sort((a, b) => {
+      const aIndex = typeof a.orderIndex === 'number' ? a.orderIndex : Number(a.orderIndex) || 0;
+      const bIndex = typeof b.orderIndex === 'number' ? b.orderIndex : Number(b.orderIndex) || 0;
+      return aIndex - bIndex;
+    });
+    const nextArtifact = artifacts.length ? artifacts[0] : null;
+    if (!nextArtifact) {
+      return res.status(400).json({ message: 'This study does not have any artifacts yet.' });
+    }
+
+    const defaultMode = resolveArtifactMode(metadata.defaultArtifactMode);
+
+    const participant = await StudyParticipant.create({
+      studyId,
+      participantId: req.user.id,
+      competencyAssignmentId: null,
+      invitationStatus: 'accepted',
+      participationStatus: 'in_progress',
+      progressPercent: 0,
+      startedAt: new Date(),
+      completedAt: null,
+      lastCheckpoint: null,
+      nextArtifactMode: defaultMode,
+      nextStudyArtifactId: nextArtifact.id,
+      source: 'public_guest',
+      guestSessionId: req.user.guestSessionId || null,
+      expiresAt: req.user.guestExpiresAt ? new Date(req.user.guestExpiresAt) : null,
+    });
+
+    return res.status(201).json({
+      participant: participant.get ? participant.get({ plain: true }) : participant,
+    });
+  } catch (error) {
+    console.error('Join public study error', error);
+    return res.status(500).json({ message: 'Unable to join this study right now.' });
+  }
+});
 
 router.get('/assignments', authMiddleware, async (req, res) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ message: 'Authentication required.' });
-    }
-    if (req.user.role !== 'participant') {
+    if (!req.user || !['participant', 'guest'].includes(req.user.role)) {
       return res.status(403).json({ message: 'Only participants can view these assignments.' });
     }
 
@@ -198,7 +272,12 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
     if (!req.user) {
       return res.status(401).json({ message: 'Authentication required.' });
     }
-    if (req.user.role !== 'participant' && req.user.role !== 'researcher' && req.user.role !== 'admin') {
+    if (
+      req.user.role !== 'participant' &&
+      req.user.role !== 'researcher' &&
+      req.user.role !== 'admin' &&
+      req.user.role !== 'guest'
+    ) {
       return res.status(403).json({ message: 'Only participants can open assigned artifacts.' });
     }
 
@@ -218,14 +297,22 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
       return res.status(404).json({ message: 'Study not found.' });
     }
 
+    const studyMetadata = normalizeJson(study.metadata);
+    const isPublicStudy = study.isPublic || Boolean(studyMetadata.isPublic);
+
+    if (req.user.role === 'guest' && !isPublicStudy) {
+      return res.status(403).json({ message: 'This study is not available for guests.' });
+    }
+
     if (computeDeadlinePassed(study.timelineEnd)) {
       return res.status(403).json({ message: 'Study deadline has passed. You cannot start this task.' });
     }
 
-    const studyMetadata = normalizeJson(study.metadata);
-
     const participantWhere = { studyId };
-    if (requestedParticipantId) {
+    if (req.user.role === 'guest') {
+      participantWhere.participantId = req.user.id;
+      participantWhere.guestSessionId = req.user.guestSessionId || null;
+    } else if (requestedParticipantId) {
       participantWhere.id = requestedParticipantId;
     } else if (req.user.role === 'participant') {
       participantWhere.participantId = req.user.id;
@@ -234,6 +321,18 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
     const participant = await StudyParticipant.findOne({ where: participantWhere });
     if (!participant) {
       return res.status(404).json({ message: 'No matching study assignment found for this participant.' });
+    }
+    if (req.user.role === 'guest') {
+      if (participant.participantId !== req.user.id) {
+        return res.status(403).json({ message: 'You cannot open another participant assignment.' });
+      }
+      const enrollmentExpiresAt = participant.expiresAt || req.user.guestExpiresAt;
+      if (enrollmentExpiresAt && new Date(enrollmentExpiresAt).getTime() < Date.now()) {
+        return res.status(403).json({ message: 'Your guest enrollment has expired.' });
+      }
+      if (participant.source && participant.source !== 'public_guest') {
+        return res.status(403).json({ message: 'Guest access is limited to public studies.' });
+      }
     }
 
     const studyArtifact = await StudyArtifact.findOne({
@@ -463,6 +562,7 @@ function formatEnrollment(entry) {
   const study = plain.study || {};
   const lookup = buildArtifactLookup(study.studyArtifacts || []);
   const metadata = normalizeJson(study.metadata);
+  const isPublic = Boolean(study.isPublic || metadata.isPublic);
   const defaultMode = resolveArtifactMode(metadata.defaultArtifactMode);
   const competency = summarizeCompetencyProgress(plain.sourceAssignment);
   const artifactProgress = summarizeArtifactProgress(plain.artifactAssessments || []);
@@ -486,6 +586,7 @@ function formatEnrollment(entry) {
     title: study.title || 'Study',
     description: study.description || '',
     researcher: study.researcher ? { id: String(study.researcher.id), name: study.researcher.name } : null,
+    isPublic,
     participationStatus: plain.participationStatus,
     progressPercent: plain.progressPercent || 0,
     competency,

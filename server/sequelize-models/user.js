@@ -15,12 +15,12 @@ const User = sequelize.define(
     },
     email: {
       type: DataTypes.STRING,
-      allowNull: false,
+      allowNull: true,
       unique: true,
     },
     password: {
       type: DataTypes.STRING,
-      allowNull: false,
+      allowNull: true,
     },
     roleId: {
       type: DataTypes.INTEGER,
@@ -42,6 +42,23 @@ const User = sequelize.define(
       type: DataTypes.STRING,
       allowNull: true,
       field: 'avatar_url',
+    },
+    isGuest: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'is_guest',
+    },
+    guestSessionId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      unique: true,
+      field: 'guest_session_id',
+    },
+    guestExpiresAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'guest_expires_at',
     },
     emailVerified: {
       type: DataTypes.BOOLEAN,
