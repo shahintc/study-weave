@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, CheckCircle2, Eye, RefreshCcw, Timer, Sparkles, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Eye, RefreshCcw, Timer, Sparkles, Loader2, Trash2 } from "lucide-react";
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All" },
@@ -140,6 +140,7 @@ export default function ReviewerAdjudication() {
   const navigate = useNavigate();
   const location = useLocation();
   const [user, setUser] = useState(null);
+  const isReviewer = user?.role === "reviewer";
   const [authToken, setAuthToken] = useState(null);
   const [adjudications, setAdjudications] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -153,6 +154,9 @@ export default function ReviewerAdjudication() {
     adjudicatedLabel: "",
     notes: "",
   });
+  const [feedbackForm, setFeedbackForm] = useState({ comment: "", rating: "none" });
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [deletingNoteId, setDeletingNoteId] = useState(null);
   const [formError, setFormError] = useState("");
   const [savingDecision, setSavingDecision] = useState(false);
   const [aiSummary, setAiSummary] = useState("");
@@ -182,6 +186,26 @@ export default function ReviewerAdjudication() {
       navigate(location.pathname, { replace: true });
     }
   }, [location.state, location.pathname, navigate]);
+  const hasSubmittedNote = useMemo(() => {
+    if (!isReviewer || !selected || !user?.id) return false;
+    const comments = Array.isArray(selected.review?.comments) ? selected.review.comments : [];
+    return comments.some((note) => String(note.reviewer?.id || "") === String(user.id));
+  }, [isReviewer, selected, user?.id]);
+
+  const canDeleteNote = useCallback(
+    (note) => {
+      if (!note) return false;
+      const reviewerId = note.reviewer?.id || note.reviewerId;
+      if (isReviewer && reviewerId && String(reviewerId) === String(user?.id)) {
+        return true;
+      }
+      if ((user?.role === "researcher" || user?.role === "admin") && selected?.study?.researcherId) {
+        return String(selected.study.researcherId) === String(user.id);
+      }
+      return user?.role === "admin";
+    },
+    [isReviewer, selected?.study?.researcherId, user?.id, user?.role],
+  );
 
   const buildReviewSummaryPrompt = useCallback((entry) => {
     if (!entry) return "";
@@ -289,8 +313,8 @@ export default function ReviewerAdjudication() {
     }
     try {
       const parsed = JSON.parse(rawUser);
-      if (parsed.role !== "researcher" && parsed.role !== "admin") {
-        navigate("/participant");
+      if (parsed.role !== "researcher" && parsed.role !== "admin" && parsed.role !== "reviewer") {
+        navigate("/login");
         return;
       }
       setUser(parsed);
@@ -381,11 +405,28 @@ export default function ReviewerAdjudication() {
 
   const openDialog = (entry) => {
     setSelected(entry);
+    const existingNote =
+      isReviewer && user?.id
+        ? (entry.review?.comments || []).find(
+            (note) => String(note.reviewer?.id || "") === String(user.id),
+          )
+        : null;
     setDecisionForm({
       status: entry.review?.status || "pending",
       decision: entry.review?.decision || "__none",
       adjudicatedLabel: entry.review?.adjudicatedLabel || "",
       notes: entry.review?.notes || "",
+    });
+    setFeedbackForm({
+      comment: existingNote?.comment || entry.review?.comment || "",
+      rating:
+        existingNote?.rating != null
+          ? String(existingNote.rating)
+          : isReviewer
+            ? "none"
+            : entry.review?.rating != null
+              ? String(entry.review.rating)
+              : "none",
     });
     setFormError("");
     setAiSummary("");
@@ -402,10 +443,17 @@ export default function ReviewerAdjudication() {
     setDialogOpen(false);
     setSelected(null);
     setFormError("");
+    setFeedbackForm({ comment: "", rating: "none" });
+    setNoteSaving(false);
+    setDeletingNoteId(null);
   };
 
   const handleDecisionChange = (field, value) => {
     setDecisionForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleFeedbackChange = (field, value) => {
+    setFeedbackForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleGenerateAiSummary = async () => {
@@ -484,20 +532,33 @@ export default function ReviewerAdjudication() {
     setSavingDecision(true);
     setFormError("");
     try {
-      await api.patch(
-        `/api/reviewer/adjudications/${selected.id}`,
-        {
-          reviewStatus: decisionForm.status,
-          decision: decisionForm.decision === "__none" ? undefined : decisionForm.decision,
-          adjudicatedLabel: decisionForm.adjudicatedLabel || null,
-          notes: decisionForm.notes || "",
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
+      if (isReviewer) {
+        if (hasSubmittedNote) {
+          setFormError("You already submitted feedback for this evaluation.");
+          setSavingDecision(false);
+          return;
         }
-      );
+        setNoteSaving(true);
+        await api.post(
+          `/api/reviewer/adjudications/${selected.id}/notes`,
+          {
+            comment: feedbackForm.comment || "",
+            rating: feedbackForm.rating === "none" ? null : Number(feedbackForm.rating),
+          },
+          { headers: { Authorization: `Bearer ${authToken}` } }
+        );
+      } else {
+        await api.patch(
+          `/api/reviewer/adjudications/${selected.id}`,
+          {
+            reviewStatus: decisionForm.status,
+            decision: decisionForm.decision === "__none" ? undefined : decisionForm.decision,
+            adjudicatedLabel: decisionForm.adjudicatedLabel || null,
+            notes: decisionForm.notes || "",
+          },
+          { headers: { Authorization: `Bearer ${authToken}` } }
+        );
+      }
       await fetchAdjudications();
       closeDialog();
     } catch (err) {
@@ -506,10 +567,37 @@ export default function ReviewerAdjudication() {
       setFormError(message);
     } finally {
       setSavingDecision(false);
+      setNoteSaving(false);
     }
   };
 
   const handleRefresh = () => fetchAdjudications();
+
+  const handleDeleteNote = useCallback(
+    async (noteId) => {
+      if (!selected || !authToken || !noteId) return;
+      setDeletingNoteId(noteId);
+      setFormError("");
+      try {
+        await api.delete(`/api/reviewer/adjudications/${selected.id}/notes/${noteId}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        });
+        setSelected((prev) => {
+          if (!prev || !prev.review) return prev;
+          const nextComments = (prev.review.comments || []).filter((note) => note.id !== noteId);
+          return { ...prev, review: { ...prev.review, comments: nextComments } };
+        });
+        await fetchAdjudications();
+      } catch (err) {
+        console.error("Failed to delete reviewer note", err);
+        const message = err.response?.data?.message || "Unable to delete reviewer note right now.";
+        setFormError(message);
+      } finally {
+        setDeletingNoteId(null);
+      }
+    },
+    [selected, authToken, fetchAdjudications],
+  );
 
   if (!user) {
     return null;
@@ -549,6 +637,9 @@ export default function ReviewerAdjudication() {
         <h1 className="text-3xl font-semibold">Reviewer adjudication</h1>
         <p className="text-sm text-muted-foreground">
           Compare participant submissions against LLM ground truth and record the final decision for each evaluation.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          You will only see studies where the researcher enabled reviewer feedback.
         </p>
       </div>
 
@@ -682,7 +773,7 @@ export default function ReviewerAdjudication() {
         <DialogContent className="max-w-3xl max-h-[95vh] overflow-y-auto">
           {selected && (
             <>
-              {selected.review?.status === "resolved" && (
+              {selected.review?.status === "resolved" && !isReviewer && (
                 <div className="mb-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
                   This review is already completed. Edits are disabled.
                 </div>
@@ -815,83 +906,171 @@ export default function ReviewerAdjudication() {
 
               <Separator className="my-4" />
 
-              <section className="space-y-4">
-                <h3 className="text-sm font-semibold text-muted-foreground">Reviewer decision</h3>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="flex flex-col gap-2">
-                    <label className="text-sm font-medium">Review status</label>
-                    <Select
-                      value={decisionForm.status}
-                      onValueChange={(value) => handleDecisionChange("status", value)}
-                      disabled={selected.review?.status === "resolved"}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Status" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {STATUS_OPTIONS.filter((opt) => opt.value !== "all").map((opt) => (
-                          <SelectItem key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <label className="text-sm font-medium">Decision</label>
-                    <Select
-                      value={decisionForm.decision}
-                      onValueChange={(value) => handleDecisionChange("decision", value)}
-                      disabled={selected.review?.status === "resolved"}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select decision" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none">No decision</SelectItem>
-                        {DECISION_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <label className="text-sm font-medium">Adjudicated label</label>
-                  <Input
-                    value={decisionForm.adjudicatedLabel}
-                    onChange={(event) => handleDecisionChange("adjudicatedLabel", event.target.value)}
-                    disabled={selected.review?.status === "resolved"}
-                    placeholder="e.g., GUI regression"
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <label className="text-sm font-medium">Reviewer notes</label>
-                  <Textarea
-                    value={decisionForm.notes}
-                    onChange={(event) => handleDecisionChange("notes", event.target.value)}
-                    rows={4}
-                    disabled={selected.review?.status === "resolved"}
-                    placeholder="Explain why you sided with the participant or LLM."
-                  />
-                </div>
-                {formError && (
-                  <p className="text-sm text-red-600">{formError}</p>
-                )}
-              </section>
+              {isReviewer ? (
+                <>
+                  <section className="space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-sm font-semibold text-muted-foreground">Reviewer feedback</h3>
+                        <p className="text-xs text-muted-foreground">
+                          Share a quick rating and comment that the researcher will see.
+                        </p>
+                      </div>
+                      {selected.review?.reviewerSubmittedAt ? (
+                        <p className="text-xs text-muted-foreground">
+                          Last saved {formatDateTime(selected.review.reviewerSubmittedAt)}
+                        </p>
+                      ) : null}
+                    </div>
+                    <ReviewerCommentsThread
+                      comments={selected.review?.comments}
+                      onDelete={handleDeleteNote}
+                      canDelete={canDeleteNote}
+                      deletingNoteId={deletingNoteId}
+                    />
+                    {hasSubmittedNote ? (
+                      <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+                        You already submitted feedback for this evaluation.
+                      </div>
+                    ) : null}
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="flex flex-col gap-2">
+                        <label className="text-sm font-medium">Rating</label>
+                        <Select
+                          value={feedbackForm.rating}
+                          onValueChange={(value) => handleFeedbackChange("rating", value)}
+                          disabled={hasSubmittedNote}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="No rating" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">No rating</SelectItem>
+                            {[1, 2, 3, 4, 5].map((value) => (
+                              <SelectItem key={value} value={String(value)}>
+                                {value} / 5
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          Optional confidence/quality score (1–5).
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <label className="text-sm font-medium">Reviewer comment</label>
+                      <Textarea
+                        value={feedbackForm.comment}
+                        onChange={(event) => handleFeedbackChange("comment", event.target.value)}
+                        rows={4}
+                        disabled={hasSubmittedNote}
+                        placeholder="What stood out? Mention agreement/disagreement with participant and why."
+                      />
+                    </div>
+                  </section>
+                </>
+              ) : (
+                <>
+                  <section className="space-y-4">
+                    <h3 className="text-sm font-semibold text-muted-foreground">Researcher decision</h3>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="flex flex-col gap-2">
+                        <label className="text-sm font-medium">Review status</label>
+                        <Select
+                          value={decisionForm.status}
+                          onValueChange={(value) => handleDecisionChange("status", value)}
+                          disabled={selected.review?.status === "resolved"}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Status" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {STATUS_OPTIONS.filter((opt) => opt.value !== "all").map((opt) => (
+                              <SelectItem key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex flex-col gap-2">
+                        <label className="text-sm font-medium">Decision</label>
+                        <Select
+                          value={decisionForm.decision}
+                          onValueChange={(value) => handleDecisionChange("decision", value)}
+                          disabled={selected.review?.status === "resolved"}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select decision" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none">No decision</SelectItem>
+                            {DECISION_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <label className="text-sm font-medium">Adjudicated label</label>
+                      <Input
+                        value={decisionForm.adjudicatedLabel}
+                        onChange={(event) => handleDecisionChange("adjudicatedLabel", event.target.value)}
+                        disabled={selected.review?.status === "resolved"}
+                        placeholder="e.g., GUI regression"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <label className="text-sm font-medium">Researcher notes</label>
+                      <Textarea
+                        value={decisionForm.notes}
+                        onChange={(event) => handleDecisionChange("notes", event.target.value)}
+                        rows={4}
+                        disabled={selected.review?.status === "resolved"}
+                        placeholder="Explain why you sided with the participant or LLM."
+                      />
+                    </div>
+                    {formError && (
+                      <p className="text-sm text-red-600">{formError}</p>
+                    )}
+                  </section>
+                  <Separator className="my-4" />
+                  <section className="space-y-2">
+                    <h3 className="text-sm font-semibold text-muted-foreground">Reviewer comments</h3>
+                    <ReviewerCommentsThread
+                      comments={selected.review?.comments}
+                      onDelete={handleDeleteNote}
+                      canDelete={canDeleteNote}
+                      deletingNoteId={deletingNoteId}
+                    />
+                  </section>
+                </>
+              )}
 
               <DialogFooter>
                 <Button variant="ghost" onClick={closeDialog} disabled={savingDecision}>
                   Cancel
                 </Button>
-                <Button
-                  onClick={handleSaveDecision}
-                  disabled={savingDecision || selected.review?.status === "resolved"}
-                >
-                  {savingDecision ? "Saving..." : "Save decision"}
-                </Button>
+                {isReviewer ? null : (
+                  <Button
+                    onClick={handleSaveDecision}
+                    disabled={savingDecision || noteSaving || selected.review?.status === "resolved"}
+                  >
+                    {savingDecision ? "Saving..." : "Save decision"}
+                  </Button>
+                )}
+                {isReviewer ? (
+                  <Button
+                    onClick={handleSaveDecision}
+                    disabled={savingDecision || noteSaving || hasSubmittedNote}
+                  >
+                    {hasSubmittedNote ? "Already submitted" : savingDecision ? "Saving..." : "Save feedback"}
+                  </Button>
+                ) : null}
               </DialogFooter>
             </>
           )}
@@ -937,6 +1116,105 @@ function getDecisionBadge(decision) {
   }
   const label = DECISION_OPTIONS.find((option) => option.value === decision)?.label || decision;
   return <Badge className="bg-slate-900">{label}</Badge>;
+}
+
+function ReviewerCommentsThread({ comments = [], onDelete, canDelete, deletingNoteId }) {
+  if (!comments || comments.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+        No reviewer feedback yet. Be the first to leave a rating and note.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {comments.map((note) => {
+        const displayName = note.reviewer?.name || note.reviewer?.email || "Reviewer";
+        const initial = displayName?.[0]?.toUpperCase() || "R";
+        const deletable = typeof canDelete === "function" ? canDelete(note) : false;
+        return (
+          <div
+            key={note.id}
+            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-900 text-sm font-semibold text-white">
+                {initial}
+              </div>
+              <div className="flex-1 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold">{displayName}</p>
+                  {note.rating ? (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                      {note.rating}/5
+                    </span>
+                  ) : null}
+                  <span className="text-[11px] text-muted-foreground">
+                    {note.createdAt ? formatDateTime(note.createdAt) : "Just now"}
+                  </span>
+                </div>
+                {note.comment ? (
+                  <p className="text-sm leading-relaxed text-foreground">{note.comment}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No comment provided.</p>
+                )}
+              </div>
+              {deletable && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground"
+                  onClick={() => onDelete && onDelete(note.id)}
+                  disabled={deletingNoteId === note.id}
+                >
+                  {deletingNoteId === note.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                  <span className="sr-only">Delete note</span>
+                </Button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReviewerNotePreview({ review }) {
+  if (!review) {
+    return <span className="text-xs text-muted-foreground">No reviewer note</span>;
+  }
+  const comments = Array.isArray(review.comments) ? review.comments : [];
+  const first = comments[0] || null;
+  const rating = first?.rating ?? review.rating;
+  const comment = first?.comment ?? review.comment;
+  if (!rating && !comment && !comments.length) {
+    return <span className="text-xs text-muted-foreground">No reviewer note</span>;
+  }
+  return (
+    <div className="space-y-1">
+      {rating ? <p className="text-sm font-medium">{rating}/5</p> : null}
+      {comment ? (
+        <p className="text-xs text-muted-foreground max-w-[240px] truncate">{comment}</p>
+      ) : null}
+      {comments.length > 1 ? (
+        <p className="text-[11px] text-muted-foreground">+{comments.length - 1} more</p>
+      ) : null}
+      {first?.createdAt ? (
+        <p className="text-[11px] text-muted-foreground">
+          {first?.reviewer?.name ? `${first.reviewer.name} · ` : ""}
+          {formatDateTime(first.createdAt)}
+        </p>
+      ) : review.reviewerSubmittedAt ? (
+        <p className="text-[11px] text-muted-foreground">
+          Updated {formatDateTime(review.reviewerSubmittedAt)}
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function formatDateTime(value) {
@@ -1276,3 +1554,5 @@ function StarRow({ value }) {
     </div>
   );
 }
+
+// helper removed (handled inline in component)

@@ -65,6 +65,12 @@ const Study = sequelize.define(
       allowNull: true,
       defaultValue: {},
     },
+    allowReviewers: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'allow_reviewers',
+    },
   },
   {
     tableName: 'studies',

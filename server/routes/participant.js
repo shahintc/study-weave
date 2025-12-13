@@ -762,7 +762,7 @@ function buildCompetencyNotifications(assignments = []) {
     }
 
     const status = typeof entry.status === 'string' ? entry.status.toLowerCase() : 'pending';
-    if (status !== 'pending' && status !== 'in_progress') {
+    if (status === 'reviewed') {
       return;
     }
 
@@ -780,7 +780,7 @@ function buildCompetencyNotifications(assignments = []) {
     const assignmentId = entry.id ? String(entry.id) : null;
 
     items.push({
-      id: `competency-${assignmentId || Math.random().toString(36).slice(2)}`,
+      id: `competency-${assignmentId || Math.random().toString(36).slice(2)}-${status}`,
       type: 'competency',
       message: `New competency assigned: ${assessment.title || 'Assessment'}${studyLabel}.`,
       assignmentId,

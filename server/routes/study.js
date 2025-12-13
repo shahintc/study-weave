@@ -63,6 +63,7 @@ router.post('/', async (req, res) => {
       metadata = {},
       selectedParticipants = [],
       autoInvite = false,
+      allowReviewers = false,
     } = req.body;
 
     if (!researcherId) {
@@ -103,6 +104,7 @@ router.post('/', async (req, res) => {
       timelineStart: normalizeDate(timelineStart),
       timelineEnd: normalizeDate(timelineEnd),
       metadata: preparedMetadata,
+      allowReviewers: Boolean(allowReviewers),
     }, { transaction });
 
     const participantSelection = Array.isArray(selectedParticipants) && selectedParticipants.length

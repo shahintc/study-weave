@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import axios from "../api/axios";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,41 @@ export default function ParticipantLayout() {
   const [avatarUrl, setAvatarUrl] = useState("");
   const [notificationCount, setNotificationCount] = useState(0);
   const [notifications, setNotifications] = useState([]);
+
+  const refreshNotifications = useCallback(async () => {
+    if (!user || user.role !== "participant") return;
+    const token = window.localStorage.getItem("token");
+    if (!token) return;
+
+    try {
+      const { data } = await axios.get("/api/participant/assignments", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const rawList = Array.isArray(data?.notifications) ? data.notifications : [];
+      const fallback = buildAssignmentNotificationsFromStudies(data?.studies);
+      const merged = dedupeNotifications([...rawList, ...fallback]);
+
+      let filtered = merged;
+      try {
+        const readRaw = window.localStorage.getItem("participantNotificationsReadIds");
+        const readIds = new Set(JSON.parse(readRaw || "[]"));
+        filtered = merged.filter((item) => !readIds.has(item.id));
+      } catch {
+        filtered = merged;
+      }
+      setNotificationCount(filtered.length);
+      setNotifications(filtered);
+      window.localStorage.setItem("participantNotificationsCount", String(filtered.length));
+      window.localStorage.setItem("participantNotificationsList", JSON.stringify(filtered));
+      window.dispatchEvent(new Event("storage"));
+    } catch (error) {
+      if (error?.response?.status === 401) {
+        navigate("/login");
+      } else {
+        console.error("Failed to refresh participant notifications", error);
+      }
+    }
+  }, [navigate, user]);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -63,6 +98,18 @@ export default function ParticipantLayout() {
     window.addEventListener("storage", handler);
     return () => window.removeEventListener("storage", handler);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      await refreshNotifications();
+    };
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname, refreshNotifications]);
 
   useEffect(() => {
     const readCount = () => {
@@ -308,6 +355,38 @@ function NotificationBell({ count = 0, notifications = [] }) {
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function buildAssignmentNotificationsFromStudies(studies = []) {
+  if (!Array.isArray(studies) || !studies.length) return [];
+  return studies
+    .filter((study) => study && (study.studyParticipantId || study.id))
+    .map((study) => {
+      const studyParticipantId = study.studyParticipantId || study.id || null;
+      const studyId = study.studyId || study.id || null;
+      return {
+        id: `${studyParticipantId}-assigned`,
+        type: "assignment",
+        message: `You were assigned to ${study.title || "a study"}.`,
+        studyId: studyId ? String(studyId) : null,
+        studyParticipantId: studyParticipantId ? String(studyParticipantId) : null,
+        cta: study.cta || null,
+        createdAt: study.timelineStart || study.lastUpdatedAt || new Date().toISOString(),
+      };
+    });
+}
+
+function dedupeNotifications(list = []) {
+  const seen = new Set();
+  const result = [];
+  list.forEach((item) => {
+    if (!item || !item.id || seen.has(item.id)) {
+      return;
+    }
+    seen.add(item.id);
+    result.push(item);
+  });
+  return result;
 }
 
 function UserNav({ displayName = "Participant", avatarUrl = "", onLogout }) {

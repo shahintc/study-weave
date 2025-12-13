@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import axios from "../api/axios";
 import { Button } from "@/components/ui/button";
@@ -17,10 +17,44 @@ import {
 export default function ResearcherLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const NOTIFICATIONS_REFRESH_MS = 30_000;
   const [user, setUser] = useState(null);
   const [avatarUrl, setAvatarUrl] = useState("");
   const [notificationCount, setNotificationCount] = useState(0);
   const [notifications, setNotifications] = useState([]);
+
+  const refreshNotifications = useCallback(async () => {
+    if (!user || (user.role !== "researcher" && user.role !== "admin")) return;
+    const token = window.localStorage.getItem("token");
+    if (!token) return;
+
+    try {
+      const { data } = await axios.get("/api/researcher/notifications", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const rawList = Array.isArray(data?.notifications) ? data.notifications : [];
+      let filtered = rawList;
+      try {
+        const rawRead = window.localStorage.getItem("researcherNotificationsReadIds");
+        const readIds = new Set(JSON.parse(rawRead || "[]"));
+        filtered = rawList.filter((item) => !readIds.has(item.id));
+      } catch {
+        filtered = rawList;
+      }
+      setNotificationCount(filtered.length);
+      setNotifications(filtered);
+      window.localStorage.setItem("researcherNotificationsCount", String(filtered.length));
+      window.localStorage.setItem("researcherNotificationsList", JSON.stringify(filtered));
+      window.dispatchEvent(new Event("storage"));
+    } catch (error) {
+      if (error?.response?.status === 401) {
+        navigate("/login");
+      } else {
+        // Keep the bell silent on fetch issues but avoid crashing the layout
+        console.error("Failed to refresh researcher notifications", error);
+      }
+    }
+  }, [navigate, user]);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -32,8 +66,8 @@ export default function ResearcherLayout() {
       const u = JSON.parse(raw);
       setUser(u);
       setAvatarUrl(resolveAvatarUrl(u?.avatarUrl));
-      if (u.role !== "researcher") {
-        navigate("/participant");
+      if (u.role !== "researcher" && u.role !== "admin" && u.role !== "reviewer") {
+        navigate("/login");
       }
     } catch {
       navigate("/login");
@@ -65,6 +99,20 @@ export default function ResearcherLayout() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      await refreshNotifications();
+    };
+    run();
+    const id = window.setInterval(run, NOTIFICATIONS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [location.pathname, refreshNotifications, NOTIFICATIONS_REFRESH_MS]);
+
+  useEffect(() => {
     const readNotifications = () => {
       try {
         const rawCount = window.localStorage.getItem("researcherNotificationsCount");
@@ -74,7 +122,7 @@ export default function ResearcherLayout() {
         const rawList = window.localStorage.getItem("researcherNotificationsList");
         const parsedList = JSON.parse(rawList || "[]");
         setNotifications(Array.isArray(parsedList) ? parsedList : []);
-      } catch (error) {
+      } catch {
         setNotificationCount(0);
         setNotifications([]);
       }
@@ -92,21 +140,29 @@ export default function ResearcherLayout() {
     navigate("/login");
   };
 
-  const nav = [
-    { to: "/researcher", label: "Dashboard" },
-    { to: "/researcher/studies", label: "Studies" },
-    { to: "/researcher/archived-studies", label: "Archived" },
-    { to: "/researcher/artifacts", label: "Artifacts" },
-    { to: "/researcher/assess", label: "Assess" },
-    { to: "/researcher/competency-review", label: "Competency Review" },
-    { to: "/researcher/reviewer", label: "Reviewer" },
-    { to: "/researcher/study-creation-wizard", label: "Study Wizard" },
-  ];
+  const nav = useMemo(() => {
+    const fullNav = [
+      { to: "/researcher", label: "Dashboard" },
+      { to: "/researcher/studies", label: "Studies" },
+      { to: "/researcher/archived-studies", label: "Archived" },
+      { to: "/researcher/artifacts", label: "Artifacts" },
+      { to: "/researcher/assess", label: "Assess" },
+      { to: "/researcher/competency-review", label: "Competency Review" },
+      { to: "/researcher/reviewer", label: "Reviewer" },
+      { to: "/researcher/study-creation-wizard", label: "Study Wizard" },
+    ];
+    if (user?.role === "reviewer") {
+      return fullNav.filter((item) => item.to === "/researcher/reviewer");
+    }
+    return fullNav;
+  }, [user?.role]);
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
       <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Study Weave (Researcher)</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Study Weave ({user?.role === "reviewer" ? "Reviewer" : "Researcher"})
+        </h1>
         <div className="flex items-center gap-3">
           <NotificationBell count={notificationCount} notifications={notifications} />
           <UserNav displayName={user?.name || "Researcher"} avatarUrl={avatarUrl} onLogout={handleLogout} />

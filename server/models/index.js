@@ -14,6 +14,7 @@ const Evaluation = require('../sequelize-models/evaluation');
 const ArtifactAssessment = require('../sequelize-models/artifactAssessment');
 const ArtifactAssessmentItem = require('../sequelize-models/artifactAssessmentItem');
 const ActionLog = require('../sequelize-models/actionLog');
+const ReviewerNote = require('../sequelize-models/reviewerNote');
 
 // User / Role
 Role.hasMany(User, { foreignKey: 'roleId', as: 'users' });
@@ -93,6 +94,14 @@ Evaluation.belongsTo(User, { foreignKey: 'participantId', as: 'participantEvalua
 StudyParticipant.hasMany(Evaluation, { foreignKey: 'studyParticipantId', as: 'evaluations' });
 Evaluation.belongsTo(StudyParticipant, { foreignKey: 'studyParticipantId', as: 'studyParticipant' });
 
+User.hasMany(Evaluation, { foreignKey: 'reviewerId', as: 'reviewerEvaluations' });
+Evaluation.belongsTo(User, { foreignKey: 'reviewerId', as: 'reviewer' });
+
+Evaluation.hasMany(ReviewerNote, { foreignKey: 'evaluationId', as: 'reviewerNotesList' });
+ReviewerNote.belongsTo(Evaluation, { foreignKey: 'evaluationId', as: 'evaluation' });
+User.hasMany(ReviewerNote, { foreignKey: 'reviewerId', as: 'authoredReviewerNotes' });
+ReviewerNote.belongsTo(User, { foreignKey: 'reviewerId', as: 'author' });
+
 // Artifact assessments
 Study.hasMany(ArtifactAssessment, { foreignKey: 'studyId', as: 'artifactAssessments' });
 ArtifactAssessment.belongsTo(Study, { foreignKey: 'studyId', as: 'study' });
@@ -142,6 +151,7 @@ const models = {
   ArtifactAssessment,
   ArtifactAssessmentItem,
   ActionLog,
+  ReviewerNote,
 };
 
 module.exports = models;

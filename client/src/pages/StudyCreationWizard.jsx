@@ -72,6 +72,7 @@ function StudyCreationWizard() {
   );
   const [isPublic, setIsPublic] = useState(false);
   const [isBlinded, setIsBlinded] = useState(false);
+  const [allowReviewers, setAllowReviewers] = useState(false);
   const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [newCriterionText, setNewCriterionText] = useState("");
@@ -339,6 +340,7 @@ function StudyCreationWizard() {
       researcherId: user.id,
       isPublic,
       isBlinded,
+      allowReviewers,
       timelineStart: windowStart || null,
       timelineEnd: windowEnd || null,
       defaultArtifactMode: studyMode,
@@ -609,6 +611,12 @@ function StudyCreationWizard() {
               <p className="text-xs uppercase">Competency gate</p>
               <p className="text-base font-medium text-foreground">{launchSummary.competencyGate}</p>
             </div>
+            <div className="rounded-md border p-3">
+              <p className="text-xs uppercase">Reviewer access</p>
+              <p className="text-base font-medium text-foreground">
+                {allowReviewers ? "Enabled" : "Disabled"}
+              </p>
+            </div>
             <Separator />
             <p>Need help configuring? Email researchers@studyweave.ai</p>
           </CardContent>
@@ -707,6 +715,21 @@ function StudyCreationWizard() {
                 </div>
                 <p className="text-xs text-muted-foreground pl-6">
                   Guests can access this study via a public link without creating an account.
+                </p>
+              </div>
+              <div className="space-y-2 rounded-md border p-4">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="allow-reviewers"
+                    checked={allowReviewers}
+                    onCheckedChange={setAllowReviewers}
+                  />
+                  <Label htmlFor="allow-reviewers" className="font-normal">
+                    Allow reviewer feedback on participant evaluations
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground pl-6">
+                  When enabled, reviewers can view submissions for this study and leave a 1–5 rating and comment for the researcher.
                 </p>
               </div>
               {error && (

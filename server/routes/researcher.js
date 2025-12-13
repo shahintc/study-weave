@@ -75,7 +75,7 @@ router.get('/studies', async (req, res) => {
 
 router.get('/notifications', authMiddleware, async (req, res) => {
   try {
-    if (!req.user || req.user.role !== 'researcher') {
+    if (!req.user || (req.user.role !== 'researcher' && req.user.role !== 'admin')) {
       return res.status(403).json({ message: 'Only researchers can view these notifications.' });
     }
 
@@ -101,13 +101,12 @@ router.get('/notifications', authMiddleware, async (req, res) => {
     const competencyAssignments = await CompetencyAssignment.findAll({
       where: {
         researcherId: req.user.id,
-        status: { [Op.in]: ['submitted', 'reviewed'] },
       },
       include: [
         { model: User, as: 'participant', attributes: ['id', 'name'] },
         { model: CompetencyAssessment, as: 'assessment', attributes: ['id', 'title'] },
       ],
-      order: [['submittedAt', 'DESC']],
+      order: [['updatedAt', 'DESC'], ['submittedAt', 'DESC']],
     });
 
     const studySubmissions = await ArtifactAssessment.findAll({
@@ -405,6 +404,7 @@ function formatStudyCard(studyInstance, ratingMap) {
     description: study.description,
     status: metadata.statusLabel || mapStatusToLabel(study.status),
     isPublic: study.isPublic,
+    allowReviewers: Boolean(study.allowReviewers),
     health: metadata.health || inferHealth(study.status),
     progress: avgProgress,
     progressDelta: metadata.progressDelta ?? 0,
@@ -641,10 +641,13 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
     }
 
     const assignment = plain.sourceAssignment;
-    if (assignment && assignment.status === 'submitted') {
+    const assignmentStatus = assignment && typeof assignment.status === 'string'
+      ? assignment.status.toLowerCase()
+      : null;
+    if (assignment && (assignmentStatus === 'submitted' || assignmentStatus === 'reviewed')) {
       const occurredAt =
         toIso(assignment.reviewedAt) || toIso(assignment.submittedAt) || toIso(plain.updatedAt) || toIso(new Date());
-      const id = `study-${studyId || 'unknown'}-participant-${participantId || 'unknown'}-competency-${assignment.status}`;
+      const id = `study-${studyId || 'unknown'}-participant-${participantId || 'unknown'}-competency-${assignmentStatus}`;
       dedup.set(id, {
         id,
         type: 'competency_complete',
@@ -665,8 +668,8 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
     const assessment = assignment.assessment || {};
     const participantId = participant.id || assignment.participantId || null;
     const participantName = participant.name || (participantId ? `Participant ${participantId}` : 'Participant');
-    const status = assignment.status;
-    if (status !== 'submitted') {
+    const status = typeof assignment.status === 'string' ? assignment.status.toLowerCase() : '';
+    if (status !== 'submitted' && status !== 'reviewed') {
       return;
     }
     const occurredAt =

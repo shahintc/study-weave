@@ -94,6 +94,38 @@ const matchesDateRange = (study, from, to) => {
   return true;
 };
 
+const buildAssignmentNotificationsFromStudies = (studies = []) => {
+  if (!Array.isArray(studies) || !studies.length) return [];
+  return studies
+    .filter((study) => study && (study.studyParticipantId || study.id))
+    .map((study) => {
+      const studyParticipantId = study.studyParticipantId || study.id || null;
+      const studyId = study.studyId || study.id || null;
+      return {
+        id: `${studyParticipantId}-assigned`,
+        type: "assignment",
+        message: `You were assigned to ${study.title || "a study"}.`,
+        studyId: studyId ? String(studyId) : null,
+        studyParticipantId: studyParticipantId ? String(studyParticipantId) : null,
+        cta: study.cta || null,
+        createdAt: study.timelineStart || study.lastUpdatedAt || new Date().toISOString(),
+      };
+    });
+};
+
+const dedupeNotifications = (list = []) => {
+  const seen = new Set();
+  const result = [];
+  list.forEach((item) => {
+    if (!item || !item.id || seen.has(item.id)) {
+      return;
+    }
+    seen.add(item.id);
+    result.push(item);
+  });
+  return result;
+};
+
 export default function ParticipantDashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -170,14 +202,16 @@ export default function ParticipantDashboard() {
       const { data } = await axios.get("/api/participant/assignments", {
         headers: { Authorization: `Bearer ${token}` },
       });
-      const rawNotifications = data.notifications || [];
-      let filteredNotifications = rawNotifications;
+      const rawNotifications = Array.isArray(data.notifications) ? data.notifications : [];
+      const fallbackNotifications = buildAssignmentNotificationsFromStudies(data.studies);
+      const mergedNotifications = dedupeNotifications([...rawNotifications, ...fallbackNotifications]);
+      let filteredNotifications = mergedNotifications;
       try {
         const readRaw = window.localStorage.getItem("participantNotificationsReadIds");
         const readIds = new Set(JSON.parse(readRaw || "[]"));
-        filteredNotifications = rawNotifications.filter((item) => !readIds.has(item.id));
+        filteredNotifications = mergedNotifications.filter((item) => !readIds.has(item.id));
       } catch {
-        filteredNotifications = rawNotifications;
+        filteredNotifications = mergedNotifications;
       }
 
       setStudies(data.studies || []);

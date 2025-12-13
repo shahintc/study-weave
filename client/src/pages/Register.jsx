@@ -79,11 +79,9 @@ export default function Register() {
       localStorage.setItem("token", res.data.token);
       localStorage.setItem("user", JSON.stringify(res.data.user));
       const role = res.data.user?.role;
-      if (role === "researcher") {
-        navigate("/researcher");
-      } else {
-        navigate("/participant");
-      }
+      if (role === "researcher") navigate("/researcher");
+      else if (role === "reviewer") navigate("/researcher/reviewer");
+      else navigate("/participant");
     } catch (err) {
       setError(err.response?.data?.message || "Verification failed");
     } finally {
@@ -237,6 +235,7 @@ export default function Register() {
                   <SelectContent>
                     <SelectItem value="participant">Participant</SelectItem>
                     <SelectItem value="researcher">Researcher</SelectItem>
+                    <SelectItem value="reviewer">Reviewer</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
