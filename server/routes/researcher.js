@@ -517,6 +517,20 @@ function normalizeJson(value) {
   }
 }
 
+function normalizeTimerSnapshot(timer) {
+  if (!timer || typeof timer !== 'object') {
+    return null;
+  }
+  const elapsedMs = Math.max(0, Number(timer.elapsedMs) || 0);
+  return {
+    elapsedMs,
+    running: Boolean(timer.running),
+    submitted: Boolean(timer.submitted),
+    studyArtifactId: Number.isFinite(Number(timer.studyArtifactId)) ? Number(timer.studyArtifactId) : null,
+    updatedAt: timer.updatedAt || null,
+  };
+}
+
 function buildArtifactLookup(studyArtifacts = []) {
   const sorted = studyArtifacts
     .map((entry) => (typeof entry.get === 'function' ? entry.get({ plain: true }) : entry))
@@ -567,7 +581,13 @@ function mapArtifactAssessments(assessments = []) {
 
 function formatParticipantDetail(row, artifactLookup, defaultMode) {
   const plain = typeof row.get === 'function' ? row.get({ plain: true }) : row;
-  const profile = normalizeJson(plain.lastCheckpoint);
+  const checkpoint = normalizeJson(plain.lastCheckpoint);
+  const profile = checkpoint || {};
+  const timerSnapshot = normalizeTimerSnapshot(checkpoint?.timer);
+  const timeOnTaskSeconds =
+    timerSnapshot && Number.isFinite(timerSnapshot.elapsedMs)
+      ? Math.round(timerSnapshot.elapsedMs / 1000)
+      : null;
   const completedAt =
     plain.completedAt && !Number.isNaN(new Date(plain.completedAt).getTime())
       ? new Date(plain.completedAt).toISOString()
@@ -613,6 +633,8 @@ function formatParticipantDetail(row, artifactLookup, defaultMode) {
     artifactAssessments: mapArtifactAssessments(plain.artifactAssessments),
     nextAssignment: buildNextAssignmentPayload(plain, artifactLookup, defaultMode),
     lastUpdatedAt: plain.updatedAt ? new Date(plain.updatedAt).toISOString() : null,
+    timeOnTaskSeconds,
+    timerSubmitted: Boolean(timerSnapshot?.submitted),
   };
 }
 

@@ -5,14 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge, badgeVariants } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -529,14 +521,20 @@ export default function ResearcherDashboard() {
     setMonitorDialogOpen(true);
   };
 
-  const handleMonitorFilterChange = (key, value) => {
-    setMonitorFilters((prev) => ({ ...prev, [key]: value }));
-  };
-
   const exportAsImage = useCallback(async () => {
     if (!analyticsRef.current || !selectedStudy) return;
     try {
-      const dataUrl = await toPng(analyticsRef.current, { backgroundColor: "#ffffff", cacheBust: true });
+      const node = analyticsRef.current;
+      const width = Math.max(node.scrollWidth, node.getBoundingClientRect().width);
+      const height = Math.max(node.scrollHeight, node.getBoundingClientRect().height);
+      const dataUrl = await toPng(node, {
+        backgroundColor: "#ffffff",
+        cacheBust: true,
+        width,
+        height,
+        canvasWidth: width,
+        canvasHeight: height,
+      });
       const link = document.createElement("a");
       link.download = `${slugify(selectedStudy.title)}-analytics.png`;
       link.href = dataUrl;
@@ -549,11 +547,25 @@ export default function ResearcherDashboard() {
   const exportAsPdf = useCallback(async () => {
     if (!analyticsRef.current || !selectedStudy) return;
     try {
-      const dataUrl = await toPng(analyticsRef.current, { backgroundColor: "#ffffff", cacheBust: true });
+      const node = analyticsRef.current;
+      const width = Math.max(node.scrollWidth, node.getBoundingClientRect().width);
+      const height = Math.max(node.scrollHeight, node.getBoundingClientRect().height);
+      const dataUrl = await toPng(node, {
+        backgroundColor: "#ffffff",
+        cacheBust: true,
+        width,
+        height,
+        canvasWidth: width,
+        canvasHeight: height,
+      });
       const pdf = new jsPDF("landscape", "pt", "letter");
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      pdf.addImage(dataUrl, "PNG", 24, 24, pageWidth - 48, pageHeight - 48);
+      const margin = 24;
+      const scale = Math.min((pageWidth - margin * 2) / width, (pageHeight - margin * 2) / height);
+      const renderWidth = width * scale;
+      const renderHeight = height * scale;
+      pdf.addImage(dataUrl, "PNG", margin, margin, renderWidth, renderHeight);
       pdf.save(`${slugify(selectedStudy.title)}-analytics.pdf`);
     } catch (error) {
       console.error("Failed to export analytics PDF", error);
@@ -724,10 +736,6 @@ export default function ResearcherDashboard() {
                               </Button>
                             );
                           })()}
-                        <Button variant="ghost" size="sm">
-                          <Settings2 className="mr-2 h-4 w-4" />
-                          Edit setup
-                        </Button>
                         <Button size="sm" onClick={() => openMonitor(study.id)}>
                           <LineChartIcon className="mr-2 h-4 w-4" />
                           Monitor
@@ -780,9 +788,7 @@ export default function ResearcherDashboard() {
             <StudyMonitorPanel
               study={selectedStudy}
               analytics={analytics}
-              filters={monitorFilters}
               participantOptions={participantOptions}
-              onFilterChange={handleMonitorFilterChange}
               isLoading={isAnalyticsLoading}
               error={analyticsError}
               onRefresh={handleMonitorRefresh}
@@ -810,9 +816,7 @@ export default function ResearcherDashboard() {
 function StudyMonitorPanel({
   study,
   analytics,
-  filters,
   participantOptions = [],
-  onFilterChange,
   isLoading,
   error,
   onRefresh,
@@ -860,6 +864,20 @@ function StudyMonitorPanel({
       { label: "Outstanding", value: completionBreakdown.open, color: "#d1d5db" },
     ],
     [completionBreakdown],
+  );
+  const timeToCompleteSeries = useMemo(
+    () =>
+      participantDetails
+        .map((participant) => {
+          const seconds = Number(participant.timeOnTaskSeconds);
+          if (!Number.isFinite(seconds) || seconds <= 0) {
+            return null;
+          }
+          return { id: participant.id, name: participant.name, seconds };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.seconds - a.seconds),
+    [participantDetails],
   );
   const criteriaSegments = useMemo(() => {
     const totalWeight = studyCriteria.reduce((sum, entry) => sum + Number(entry.weight || 0), 0);
@@ -1004,58 +1022,12 @@ function StudyMonitorPanel({
             Export PDF
           </Button>
         </div>
-      </div>
-
-      <div className="rounded-lg border bg-muted/40 p-4">
-        <div className="grid gap-4 lg:grid-cols-[repeat(4,minmax(0,1fr))]">
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">From</label>
-            <Input
-              type="date"
-              value={filters.from}
-              max={filters.to}
-              onChange={(event) => onFilterChange("from", event.target.value)}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">To</label>
-            <Input
-              type="date"
-              value={filters.to}
-              min={filters.from}
-              onChange={(event) => onFilterChange("to", event.target.value)}
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Participant</label>
-            <Select value={filters.participantId ?? "all"} onValueChange={(value) => onFilterChange("participantId", value)}>
-              <SelectTrigger>
-                <SelectValue placeholder="All participants" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All participants</SelectItem>
-                {participantOptions.map((participant) => (
-                  <SelectItem key={participant.id} value={participant.id}>
-                    {participant.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">Status</label>
-            <div className="rounded-md border bg-background px-3 py-2 text-sm text-muted-foreground">
-              Auto refresh • {lastRefreshAt ? `Updated ${formatTimeAgo(lastRefreshAt)}` : "waiting"}
-            </div>
-          </div>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span>Analytics refresh every 30s or on demand.</span>
-          <Button variant="ghost" size="sm" onClick={onRefresh}>
-            <RefreshCcw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-            Sync now
-          </Button>
-        </div>
+      </div>      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 p-4 text-xs text-muted-foreground">
+        <span>Live analytics refresh every 30s or on demand.</span>
+        <Button variant="ghost" size="sm" onClick={onRefresh}>
+          <RefreshCcw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+          Sync now
+        </Button>
       </div>
 
       {error && (
@@ -1064,6 +1036,7 @@ function StudyMonitorPanel({
         </div>
       )}
 
+      <div ref={analyticsRef} className="space-y-4">
       <Card>
         <CardHeader>
           <CardTitle>Live participation status</CardTitle>
@@ -1114,7 +1087,17 @@ function StudyMonitorPanel({
       )}
 
       {hasPayload ? (
-        <div ref={analyticsRef} className="space-y-4">
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Time to complete (seconds)</CardTitle>
+              <CardDescription>Per-participant duration captured from their artifact timer.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <TimeToCompleteChart series={timeToCompleteSeries} />
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>Criteria ratings by participant</CardTitle>
@@ -1169,6 +1152,111 @@ function StudyMonitorPanel({
           </Card>
         </div>
       ) : null}
+      </div>
+    </div>
+  );
+}
+
+function TimeToCompleteChart({ series = [] }) {
+  const data = Array.isArray(series) ? series.filter((entry) => Number.isFinite(entry?.seconds)) : [];
+  if (!data.length) {
+    return <p className="text-sm text-muted-foreground">No timing data available yet.</p>;
+  }
+
+  const width = 720;
+  const height = 320;
+  const padding = 56;
+  const innerWidth = width - padding * 2;
+  const innerHeight = height - padding * 2;
+  const maxSeconds = Math.max(...data.map((entry) => entry.seconds), 1);
+  const step = Math.max(5, Math.ceil(maxSeconds / 5));
+  const yTicks = Array.from({ length: 6 }, (_, idx) => idx * step);
+  const yMax = yTicks[yTicks.length - 1] || maxSeconds || 1;
+  const slot = innerWidth / data.length;
+  const barWidth = Math.min(60, Math.max(18, slot * 0.6));
+  const resolveX = (index) => padding + index * slot + (slot - barWidth) / 2;
+  const resolveY = (seconds) => {
+    const clamped = Math.max(0, Math.min(seconds, yMax));
+    const barHeight = (clamped / yMax) * innerHeight;
+    return height - padding - barHeight;
+  };
+
+  return (
+    <div className="space-y-3">
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label="Participant time to complete">
+        {/* Y axis grid and labels */}
+        {yTicks.map((tick) => {
+          const y = resolveY(tick);
+          return (
+            <g key={`y-${tick}`}>
+              <line x1={padding - 6} x2={width - padding + 6} y1={y} y2={y} stroke="hsl(var(--muted-foreground))" strokeOpacity="0.2" strokeWidth="1" />
+              <text x={padding - 10} y={y + 4} fontSize="10" fill="hsl(var(--muted-foreground))" textAnchor="end">
+                {tick}s
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Bars */}
+        {data.map((entry, idx) => {
+          const x = resolveX(idx);
+          const y = resolveY(entry.seconds);
+          const barHeight = height - padding - y;
+          return (
+            <g key={entry.id || entry.name || idx}>
+              <rect
+                x={x}
+                y={y}
+                width={barWidth}
+                height={barHeight}
+                rx="6"
+                fill="#0ea5e9"
+                opacity="0.9"
+              />
+              <text
+                x={x + barWidth / 2}
+                y={y - 6}
+                fontSize="10"
+                fill="hsl(var(--foreground))"
+                textAnchor="middle"
+              >
+                {entry.seconds}s
+              </text>
+            </g>
+          );
+        })}
+
+        {/* X axis labels */}
+        {data.map((entry, idx) => {
+          const x = resolveX(idx) + barWidth / 2;
+          return (
+            <text
+              key={`label-${entry.id || entry.name || idx}`}
+              x={x}
+              y={height - padding + 16}
+              fontSize="10"
+              fill="hsl(var(--muted-foreground))"
+              textAnchor="middle"
+            >
+              {entry.name}
+            </text>
+          );
+        })}
+
+        {/* Axis titles */}
+        <text x={padding} y={padding - 20} fontSize="11" fill="hsl(var(--muted-foreground))">
+          Seconds to finish
+        </text>
+        <text
+          x={width / 2}
+          y={height - padding + 32}
+          fontSize="11"
+          fill="hsl(var(--muted-foreground))"
+          textAnchor="middle"
+        >
+          Participants
+        </text>
+      </svg>
     </div>
   );
 }
