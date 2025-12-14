@@ -369,6 +369,8 @@ const createArtifactAssessment = async (req, res) => {
       await ArtifactAssessmentItem.bulkCreate(normalizedItems, { transaction });
     }
 
+    await handleArtifactSubmission({ assessmentId: assessment.id, transaction });
+
     await transaction.commit();
 
     const createdRecord = await ArtifactAssessment.findByPk(assessment.id, {
