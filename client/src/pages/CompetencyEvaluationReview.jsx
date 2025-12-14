@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import axios from "../api/axios";
 import { Badge } from "@/components/ui/badge";
@@ -57,17 +57,17 @@ export default function CompetencyEvaluationReview() {
   const [loadingStates, setLoadingStates] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [submissionFilter, setSubmissionFilter] = useState("all");
 
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const researcherId = user.id;
-  // New state for all assessments
-  const [allAssessments, setAllAssessments] = useState([]);
   // State for reviewer notes is now managed inside the dialog
   const [dialogReviewerNotes, setDialogReviewerNotes] = useState("");
   const [pendingAssignmentId, setPendingAssignmentId] = useState(() => {
     const stateId = location.state?.openAssignmentId;
     return stateId ? String(stateId) : null;
   });
+  const [selectedAssessmentId, setSelectedAssessmentId] = useState(null);
 
   useEffect(() => {
     if (location.state?.openAssignmentId) {
@@ -82,14 +82,11 @@ export default function CompetencyEvaluationReview() {
     }
     try {
       setLoading(true);
-      const [submittedRes, statusRes, allAssessmentsRes] = await Promise.all([
+      const [submittedRes, statusRes] = await Promise.all([
         axios.get("/api/competency/assignments/submitted", {
           params: { researcherId },
         }),
         axios.get("/api/competency/assignments/researcher", {
-          params: { researcherId },
-        }),
-        axios.get("/api/competency/assessments/researcher", {
           params: { researcherId },
         }),
       ]);
@@ -101,25 +98,21 @@ export default function CompetencyEvaluationReview() {
       const statusAssignments = statusRes.data.assignments || [];
       setAssignmentStatuses(statusAssignments);
 
-      const allAssessmentsData = allAssessmentsRes.data.assessments || [];
-      setAllAssessments(allAssessmentsData);
-
       setError(null);
     } catch (err) {
       console.error("Error loading competency assignments:", err);
       setError("Failed to load competency assignments. Please try again.");
       setAssessments([]);
       setAssignmentStatuses([]);
-      setAllAssessments([]);
     } finally {
       setLoading(false);
     }
   }, [researcherId]);
 
   // Fetch submitted competency evaluations
-  useEffect(() => {
-    loadAssignments();
-  }, [loadAssignments]);
+useEffect(() => {
+  loadAssignments();
+}, [loadAssignments]);
 
   useEffect(() => {
     if (!pendingAssignmentId || !assessments.length) {
@@ -322,6 +315,192 @@ export default function CompetencyEvaluationReview() {
     return `${mins}m ${secs}s`;
   };
 
+  const analytics = useMemo(() => {
+    const selected = assessments.find((a) => String(a.assessmentId) === String(selectedAssessmentId));
+    const submissions = selected ? (selected.submissions || []) : [];
+    const total = submissions.length;
+    const approved = submissions.filter((s) => s.decision === "approved").length;
+    const acceptanceRate = total ? Math.round((approved / total) * 100) : 0;
+    const scopedAssignments = assignmentStatuses.filter(
+      (a) => String(a.assessmentId) === String(selectedAssessmentId)
+    );
+    const completionRate = scopedAssignments.length
+      ? Math.round((submissions.length / scopedAssignments.length) * 100)
+      : null;
+
+    const times = submissions
+      .map((s) => Number(s.timeTakenSeconds))
+      .filter((v) => Number.isFinite(v) && v >= 0)
+      .sort((a, b) => a - b);
+    const avgTime = times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : null;
+    const medianTime = times.length ? times[Math.floor((times.length - 1) / 2)] : null;
+
+    const scores = submissions
+      .map((s) => calculatePerformance(s).percentage)
+      .filter((v) => Number.isFinite(v));
+    const avgScore = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null;
+
+    const fastFlags = submissions.filter((s) => s.isFlaggedFast).length;
+    const fastFlagPercent = total ? Math.round((fastFlags / total) * 100) : 0;
+
+    const byDay = {};
+    submissions.forEach((s) => {
+      if (!s.submittedAt) return;
+      const day = new Date(s.submittedAt).toISOString().slice(0, 10);
+      byDay[day] = (byDay[day] || 0) + 1;
+    });
+    const recentDays = Array.from({ length: 14 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (13 - i));
+      return d.toISOString().slice(0, 10);
+    });
+    const submissionTrend = recentDays.map((day) => ({ day, count: byDay[day] || 0 }));
+    const acceptanceByDay = {};
+    submissions.forEach((s) => {
+      if (!s.submittedAt) return;
+      const day = new Date(s.submittedAt).toISOString().slice(0, 10);
+      const accepted = s.decision === "approved" ? 1 : 0;
+      acceptanceByDay[day] = acceptanceByDay[day] || { accepted: 0, total: 0 };
+      acceptanceByDay[day].accepted += accepted;
+      acceptanceByDay[day].total += 1;
+    });
+    const acceptanceTrend = recentDays.map((day) => {
+      const entry = acceptanceByDay[day];
+      const rate = entry && entry.total ? Math.round((entry.accepted / entry.total) * 100) : 0;
+      return { day, rate };
+    });
+
+    const scoreBuckets = [0, 50, 60, 70, 80, 90, 100].map((start, idx, arr) => {
+      const end = arr[idx + 1] ?? 101;
+      const count = scores.filter((s) => s >= start && s < end).length;
+      return { label: `${start}-${end - 1}%`, count };
+    });
+
+    const timeBuckets = (() => {
+      if (!times.length) return [];
+      const bucketSize = 120; // 2 minutes
+      const grouped = {};
+      times.forEach((t) => {
+        const bucket = Math.floor(t / bucketSize);
+        grouped[bucket] = (grouped[bucket] || 0) + 1;
+      });
+      const maxBucket = Math.max(...Object.keys(grouped).map(Number));
+      const result = [];
+      for (let i = 0; i <= maxBucket; i++) {
+        const start = i * bucketSize;
+        const end = start + bucketSize;
+        result.push({ label: `${Math.round(start / 60)}-${Math.round(end / 60)}m`, count: grouped[i] || 0 });
+      }
+      return result;
+    })();
+
+    const perQuestion = (() => {
+      const stats = new Map();
+      submissions.forEach((s) => {
+        (s.questions || []).forEach((q) => {
+          if (q.type !== "multiple_choice") return;
+          const key = q.id || q.title || q.text || `q-${stats.size}`;
+          const entry = stats.get(key) || { title: q.title || q.text || "Question", correct: 0, total: 0 };
+          entry.total += 1;
+          const response = s.responses?.[q.id];
+          const correctOption = (q.options || []).find((opt) => opt.isCorrect);
+          if (correctOption && response === correctOption.text) {
+            entry.correct += 1;
+          }
+          stats.set(key, entry);
+        });
+      });
+      return Array.from(stats.values()).map((q, idx) => ({
+        label: q.title || `Q${idx + 1}`,
+        rate: q.total ? Math.round((q.correct / q.total) * 100) : 0,
+      }));
+    })();
+
+    return {
+      total,
+      accepted: approved,
+      acceptanceRate,
+      completionRate,
+      avgTime,
+      medianTime,
+      avgScore,
+      fastFlags,
+      fastFlagPercent,
+      submissionTrend,
+      scoreBuckets,
+      timeBuckets,
+      perQuestion,
+      normalCount: total - fastFlags,
+      acceptanceTrend,
+    };
+  }, [assessments, assignmentStatuses, selectedAssessmentId]);
+
+const submissionMax = useMemo(
+  () => (analytics.submissionTrend.length ? Math.max(...analytics.submissionTrend.map((b) => b.count || 0), 1) : 1),
+  [analytics.submissionTrend]
+);
+  const scoreMax = useMemo(
+    () => (analytics.scoreBuckets.length ? Math.max(...analytics.scoreBuckets.map((b) => b.count || 0), 1) : 1),
+    [analytics.scoreBuckets]
+  );
+  const timeMax = useMemo(
+    () => (analytics.timeBuckets.length ? Math.max(...analytics.timeBuckets.map((b) => b.count || 0), 1) : 1),
+    [analytics.timeBuckets]
+  );
+
+  const pendingCountByAssessment = useMemo(() => {
+    const map = new Map();
+    assessments.forEach((a) => {
+      const pending = (a.submissions || []).filter((s) => !s.decision || s.decision === "undecided").length;
+      map.set(String(a.assessmentId), pending);
+    });
+    return map;
+  }, [assessments]);
+
+  const allCompetencies = useMemo(() => {
+    const map = new Map();
+    assessments.forEach((a) => {
+      map.set(String(a.assessmentId), {
+        assessmentId: a.assessmentId,
+        title: a.title,
+        submissions: a.submissions || [],
+      });
+    });
+    assignmentStatuses.forEach((s) => {
+      const key = String(s.assessmentId);
+      if (!map.has(key)) {
+        map.set(key, {
+          assessmentId: s.assessmentId,
+          title: s.title || "Competency",
+          submissions: [],
+        });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
+  }, [assessments, assignmentStatuses]);
+
+  useEffect(() => {
+    if (!selectedAssessmentId && allCompetencies.length) {
+      setSelectedAssessmentId(allCompetencies[0].assessmentId);
+    }
+  }, [allCompetencies, selectedAssessmentId]);
+
+  const selectedCompetency =
+    allCompetencies.find((a) => String(a.assessmentId) === String(selectedAssessmentId)) ||
+    allCompetencies[0] ||
+    { assessmentId: null, title: "No competencies", submissions: [] };
+  const selectedSubmissions = selectedCompetency?.submissions || [];
+  const filteredSubmissions = useMemo(() => {
+    if (!selectedSubmissions.length) return [];
+    if (submissionFilter === "pending") {
+      return selectedSubmissions.filter((s) => !s.decision || s.decision === "undecided");
+    }
+    if (submissionFilter === "reviewed") {
+      return selectedSubmissions.filter((s) => s.decision && s.decision !== "undecided");
+    }
+    return selectedSubmissions;
+  }, [selectedSubmissions, submissionFilter]);
+
   const getTimeTakenDisplay = (submission) => {
     const timeTaken = submission.timeTakenSeconds;
     const estimatedTime = submission.estimatedTimeSeconds;
@@ -355,6 +534,14 @@ export default function CompetencyEvaluationReview() {
       </div>
     );
   }
+  if (!allCompetencies.length) {
+    return (
+      <div className="p-6 md:p-10">
+        <h1 className="text-3xl font-semibold">Competency Evaluations</h1>
+        <p className="text-sm text-muted-foreground mt-2">No competencies found yet.</p>
+      </div>
+    );
+  }
   const hasSubmittedAssessments = assessments.length > 0;
 
   return (
@@ -366,89 +553,158 @@ export default function CompetencyEvaluationReview() {
         </p>
       </div>
 
-      {/* NEW SECTION: All Competency Assessments */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Competency Assessments</CardTitle>
-          <CardDescription>
-            Manage and generate performance reports for all competency quizzes you have created.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {allAssessments.filter(a => a.status === 'published').length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              You have not created any competency assessments yet.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {allAssessments.filter(a => a.status === 'published').map((assessment) => (
-                <div
-                  key={assessment.id}
-                  className="flex flex-col gap-3 rounded-lg border p-3 md:flex-row md:items-center md:justify-between"
+      <div className="bg-background rounded-lg border p-3 shadow-sm">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-lg font-semibold">Competencies</h2>
+            <p className="text-sm text-muted-foreground">Select one to view analytics and submissions.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {selectedAssessmentId ? (
+              <>
+                <Button variant="outline" size="sm" onClick={() => handleExport(selectedAssessmentId, "csv")}>
+                  <Download className="mr-2 h-4 w-4" /> CSV
+                </Button>
+                <Button size="sm" onClick={() => handleExport(selectedAssessmentId, "pdf")}>
+                  <Download className="mr-2 h-4 w-4" /> PDF
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </div>
+        <div className="mt-3 max-h-64 overflow-auto pr-1">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {allCompetencies.map((comp) => {
+              const isActive = String(comp.assessmentId) === String(selectedAssessmentId);
+              const pending = pendingCountByAssessment.get(String(comp.assessmentId)) || 0;
+              const submissionCount = comp.submissions?.length || 0;
+              return (
+                <button
+                  key={comp.assessmentId}
+                  className={`text-left rounded-lg border p-4 transition hover:border-primary hover:shadow ${
+                    isActive ? "border-primary bg-primary/5 shadow-sm" : "border-border bg-background"
+                  }`}
+                  onClick={() => setSelectedAssessmentId(comp.assessmentId)}
                 >
-                  <div>
-                    <p className="font-medium">{assessment.title}</p>
-                    <p className="text-xs text-muted-foreground">
-                      Created on {formatDateTime(assessment.createdAt)}
-                    </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-semibold line-clamp-1">{comp.title}</p>
+                    <Badge variant={pending ? "destructive" : "secondary"} className="text-[11px]">
+                      {pending ? `${pending} pending` : "No pending"}
+                    </Badge>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleExport(assessment.id, "csv")}
-                    >
-                      <Download className="mr-2 h-4 w-4" /> Export CSV
-                    </Button>
-                    <Button size="sm" onClick={() => handleExport(assessment.id, "pdf")}>
-                      <Download className="mr-2 h-4 w-4" /> Export PDF
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Separator />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {submissionCount} submission{submissionCount === 1 ? "" : "s"}
+                  </p>
+                  {!submissionCount ? (
+                    <p className="text-[11px] text-muted-foreground mt-1">No submissions yet</p>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>Assignment status overview</CardTitle>
-          <CardDescription>Monitor every participant invited to a competency quiz.</CardDescription>
+        <CardHeader className="space-y-2">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <CardTitle>Submissions & Status</CardTitle>
+              <CardDescription>Monitor participants for this competency and review pending items.</CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs uppercase text-muted-foreground">Filter:</p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setSubmissionFilter("all")}
+                className={submissionFilter === "all" ? "bg-primary/10 border-primary" : ""}
+              >
+                All
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setSubmissionFilter("pending")}
+                className={submissionFilter === "pending" ? "bg-primary/10 border-primary" : ""}
+              >
+                Pending
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setSubmissionFilter("reviewed")}
+                className={submissionFilter === "reviewed" ? "bg-primary/10 border-primary" : ""}
+              >
+                Reviewed
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
-          {assignmentStatuses.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Invite participants to a competency quiz and their status will appear here.
-            </p>
+          {!selectedSubmissions.length ? (
+            <p className="text-sm text-muted-foreground">No submissions yet for this competency.</p>
           ) : (
             <div className="rounded-lg border overflow-hidden">
               <Table>
                 <TableHeader className="bg-muted/50">
                   <TableRow>
                     <TableHead>Participant</TableHead>
-                    <TableHead>Quiz</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Decision</TableHead>
-                    <TableHead>Last update</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Submitted</TableHead>
+                    <TableHead>Assignment Status</TableHead>
+                    <TableHead>Review Status</TableHead>
+                    <TableHead>Flag</TableHead>
+                    <TableHead>MC Score</TableHead>
+                    <TableHead>Time Taken</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {assignmentStatuses.map((assignment) => (
-                    <TableRow key={assignment.id}>
-                      <TableCell className="font-medium">
-                        {assignment.participantName || "Participant"}
-                        <p className="text-xs text-muted-foreground">{assignment.participantEmail}</p>
-                      </TableCell>
+                  {filteredSubmissions.map((submission) => (
+                    <TableRow key={submission.id}>
+                      <TableCell className="font-medium">{submission.participantName}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {assignment.title || "Assessment"}
+                        {submission.participantEmail}
                       </TableCell>
-                      <TableCell>{getAssignmentStatusBadge(assignment.status)}</TableCell>
-                      <TableCell className="text-sm">{formatDecisionLabel(assignment.decision)}</TableCell>
                       <TableCell className="text-sm">
-                        {formatDateTime(resolveLastUpdate(assignment))}
+                        {formatDateTime(submission.submittedAt)}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {getAssignmentStatusBadge(submission.status || "submitted")}
+                      </TableCell>
+                      <TableCell>{getStatusBadge(submission)}</TableCell>
+                      <TableCell>
+                        {submission.isFlaggedFast ? (
+                          <Badge variant="destructive" className="text-xs">Fast</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs text-muted-foreground">Normal</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1 text-sm">
+                          <Percent className="h-3.5 w-3.5 text-muted-foreground" />
+                          <span>
+                            {calculatePerformance(submission).percentage}%
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1 text-sm">
+                          <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                          {getTimeTakenDisplay(submission)}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleViewEvaluation(submission)}
+                          disabled={loadingStates[submission.id]}
+                        >
+                          <Eye className="h-4 w-4 mr-2" />
+                          Review
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -461,101 +717,202 @@ export default function CompetencyEvaluationReview() {
 
       <Separator />
 
-      <section className="space-y-6">
+      <section className="space-y-4">
         <div>
-          <h2 className="text-2xl font-semibold">Submitted evaluations</h2>
-          <p className="text-sm text-muted-foreground">
-            Only participants who completed their competency quiz appear below for review.
-          </p>
+          <h2 className="text-2xl font-semibold">Analytics & Charts</h2>
+          <p className="text-sm text-muted-foreground">Trends across submissions for this competency (last 14 days).</p>
         </div>
-
-        {!hasSubmittedAssessments ? (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <Card>
-            <CardContent className="pt-6 text-center">
-              <p className="text-muted-foreground">No submitted evaluations yet.</p>
-              <p className="text-sm text-muted-foreground mt-2">
-                Evaluations will appear here once participants submit their competency quizzes.
-              </p>
+            <CardHeader>
+              <CardTitle>Acceptance rate</CardTitle>
+              <CardDescription>Approved vs rejected submissions.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex items-center gap-6">
+              <div
+                className="h-32 w-32 rounded-full"
+                style={{
+                  background: `conic-gradient(#16A34A ${analytics.acceptanceRate}%, #ef4444 0)`,
+                }}
+              />
+              <div className="space-y-1 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-green-600"></span>
+                  <span className="text-muted-foreground">Accepted</span>
+                  <span className="font-medium">{analytics.accepted}/{analytics.total}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="inline-block h-2 w-2 rounded-full bg-red-500"></span>
+                  <span className="text-muted-foreground">Rejected</span>
+                  <span className="font-medium">{analytics.total - analytics.accepted}</span>
+                </div>
+                <p className="text-sm font-semibold">{analytics.acceptanceRate}%</p>
+              </div>
             </CardContent>
           </Card>
-        ) : (
-          assessments.map((assessment) => (
-            <div key={assessment.assessmentId} className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-semibold">{assessment.title}</h3>
-                <Badge variant="secondary">
-                  {assessment.submissions.length}{" "}
-                  {assessment.submissions.length === 1 ? "submission" : "submissions"}
-                </Badge>
-              </div>
 
-              <div className="rounded-lg border overflow-hidden">
-                <Table>
-                  <TableHeader className="bg-muted/50">
-                    <TableRow>
-                      <TableHead>Participant</TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Submitted</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Flag</TableHead>
-                      <TableHead>MC Score</TableHead>
-                      <TableHead>Time Taken</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {assessment.submissions.map((submission) => (
-                      <TableRow key={submission.id}>
-                        <TableCell className="font-medium">{submission.participantName}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {submission.participantEmail}
-                        </TableCell>
-                        <TableCell className="text-sm">
-                          {formatDateTime(submission.submittedAt)}
-                        </TableCell>
-                        <TableCell>{getStatusBadge(submission)}</TableCell>
-                        <TableCell>
-                          {submission.isFlaggedFast ? (
-                            <Badge variant="destructive" className="text-xs">Fast</Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-xs text-muted-foreground">Normal</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1 text-sm">
-                            <Percent className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span>
-                              {calculatePerformance(submission).percentage}%
-                            </span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1 text-sm">
-                            <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                            {getTimeTakenDisplay(submission)}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleViewEvaluation(submission)}
-                            disabled={loadingStates[submission.id]}
-                          >
-                            <Eye className="h-4 w-4 mr-2" />
-                            Review
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Acceptance over time</CardTitle>
+              <CardDescription>Daily acceptance rate progression.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {analytics.acceptanceTrend.length ? (
+                analytics.acceptanceTrend.map((bucket) => (
+                  <div key={bucket.day} className="flex items-center gap-3">
+                    <div className="w-20 text-xs text-muted-foreground">{bucket.day}</div>
+                    <div className="flex-1 h-2 rounded-full bg-muted">
+                      <div
+                        className="h-2 rounded-full bg-indigo-500"
+                        style={{ width: `${Math.min(bucket.rate, 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground w-10 text-right">{bucket.rate}%</span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">Not enough data.</p>
+              )}
+            </CardContent>
+          </Card>
 
-              <Separator className="mt-8" />
-            </div>
-          ))
-        )}
+          <Card>
+            <CardHeader>
+              <CardTitle>Submissions per day (14d)</CardTitle>
+              <CardDescription>Volume of submissions each day.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {analytics.submissionTrend.length ? (
+                analytics.submissionTrend.map((bucket) => (
+                  <div key={bucket.day} className="flex items-center gap-3">
+                    <div className="w-20 text-xs text-muted-foreground">{bucket.day}</div>
+                    <div className="flex-1 h-2 rounded-full bg-muted">
+                      <div
+                        className="h-2 rounded-full bg-blue-500"
+                        style={{
+                          width: `${
+                            Math.min((bucket.count / submissionMax) * 100, 100)
+                          }%`,
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground w-8 text-right">{bucket.count}</span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">Not enough data.</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Score distribution</CardTitle>
+              <CardDescription>MC scores grouped by band.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {analytics.scoreBuckets.length ? (
+                analytics.scoreBuckets.map((bucket) => (
+                  <div key={bucket.label} className="flex items-center gap-3">
+                    <div className="w-20 text-xs text-muted-foreground">{bucket.label}</div>
+                    <div className="flex-1 h-2 rounded-full bg-muted">
+                      <div
+                        className="h-2 rounded-full bg-emerald-500"
+                        style={{
+                          width: `${
+                            Math.min((bucket.count / scoreMax) * 100, 100)
+                          }%`,
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground w-8 text-right">{bucket.count}</span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">No score data yet.</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Time to complete</CardTitle>
+              <CardDescription>Histogram in 2-minute buckets.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {analytics.timeBuckets.length ? (
+                analytics.timeBuckets.map((bucket) => (
+                  <div key={bucket.label} className="flex items-center gap-3">
+                    <div className="w-20 text-xs text-muted-foreground">{bucket.label}</div>
+                    <div className="flex-1 h-2 rounded-full bg-muted">
+                      <div
+                        className="h-2 rounded-full bg-amber-500"
+                        style={{
+                          width: `${Math.min((bucket.count / timeMax) * 100, 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground w-8 text-right">{bucket.count}</span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">No timing data yet.</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Fast flags vs normal</CardTitle>
+              <CardDescription>Breakdown of flagged vs normal submissions.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span>Fast flagged</span>
+                <Badge variant="destructive">{analytics.fastFlags}</Badge>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span>Normal</span>
+                <Badge variant="outline">{analytics.normalCount}</Badge>
+              </div>
+              <div className="h-2 rounded-full bg-muted">
+                <div
+                  className="h-2 rounded-full bg-destructive"
+                  style={{
+                    width: `${
+                      analytics.total ? Math.min((analytics.fastFlags / analytics.total) * 100, 100) : 0
+                    }%`,
+                  }}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="md:col-span-2">
+            <CardHeader>
+              <CardTitle>Per-question solve rate</CardTitle>
+              <CardDescription>Multiple-choice questions only.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {analytics.perQuestion.length ? (
+                analytics.perQuestion.map((item, idx) => (
+                  <div key={idx} className="flex items-center gap-3">
+                    <div className="w-32 text-xs text-muted-foreground truncate">{item.label}</div>
+                    <div className="flex-1 h-2 rounded-full bg-muted">
+                      <div
+                        className="h-2 rounded-full bg-sky-500"
+                        style={{ width: `${Math.min(item.rate, 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground w-10 text-right">{item.rate}%</span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">No question-level data available.</p>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </section>
 
       {/* Review Dialog */}

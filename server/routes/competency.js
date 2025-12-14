@@ -662,6 +662,30 @@ router.get('/assessments/:id/report', async (req, res) => {
     const totalPossibleMcqAnswers = mcQuestions.length * totalReviewed;
     const overallMcqPerformance = totalPossibleMcqAnswers > 0 ? ((totalCorrectMcqAnswers / totalPossibleMcqAnswers) * 100).toFixed(1) : 0;
 
+    // Trend data (last 14 days)
+    const recentDays = Array.from({ length: 14 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() - (13 - i));
+      return d.toISOString().slice(0, 10);
+    });
+    const submissionsByDay = {};
+    const acceptanceByDay = {};
+    assignments.forEach((a) => {
+      if (!a.submittedAt) return;
+      const day = new Date(a.submittedAt).toISOString().slice(0, 10);
+      submissionsByDay[day] = (submissionsByDay[day] || 0) + 1;
+      const accepted = a.decision === 'approved' ? 1 : 0;
+      acceptanceByDay[day] = acceptanceByDay[day] || { accepted: 0, total: 0 };
+      acceptanceByDay[day].accepted += accepted;
+      acceptanceByDay[day].total += 1;
+    });
+    const submissionTrend = recentDays.map((day) => ({ day, count: submissionsByDay[day] || 0 }));
+    const acceptanceTrend = recentDays.map((day) => {
+      const entry = acceptanceByDay[day];
+      const rate = entry && entry.total ? Math.round((entry.accepted / entry.total) * 100) : 0;
+      return { day, rate };
+    });
+
     const reportData = {
       assessmentTitle: assessment.title,
       submissions: assignments.map((a) => ({
@@ -687,6 +711,8 @@ router.get('/assessments/:id/report', async (req, res) => {
       averageTimeSeconds,
       fastestTimeSeconds,
       slowestTimeSeconds,
+      submissionTrend,
+      acceptanceTrend,
       questionPerformance: Array.from(questionPerfMap.values()).map((entry) => ({
         ...entry,
         solveRate: entry.total ? ((entry.correct / entry.total) * 100).toFixed(1) : '0.0',
@@ -713,6 +739,16 @@ router.get('/assessments/:id/report', async (req, res) => {
         'Overall Acceptance Rate',
         `${summaryData.acceptanceRate}% (${summaryData.totalApproved}/${summaryData.totalReviewed} approved)`,
       ]);
+      csvStream.write(['Submission Trend (last 14 days)']);
+      summaryData.submissionTrend.forEach((row) => {
+        csvStream.write([row.day, row.count]);
+      });
+      csvStream.write([]);
+      csvStream.write(['Acceptance Trend (last 14 days)']);
+      summaryData.acceptanceTrend.forEach((row) => {
+        csvStream.write([row.day, `${row.rate}%`]);
+      });
+      csvStream.write([]);
       csvStream.write(['Multiple Choice Performance', `${summaryData.overallMcqPerformance}% correct`]);
       csvStream.write(['Average Solve Time', formatSeconds(summaryData.averageTimeSeconds)]);
       csvStream.write(['Fastest Solve Time', formatSeconds(summaryData.fastestTimeSeconds)]);
@@ -760,11 +796,14 @@ router.get('/assessments/:id/report', async (req, res) => {
 
       // --- PDF Styling and Helpers ---
       const colors = {
-        primary: '#4F46E5', // A modern indigo/purple
-        text: '#1F2937', // Dark gray for text
-        muted: '#6B7280', // Lighter gray for secondary info
-        border: '#E5E7EB', // Light gray for borders
-        headerBg: '#F9FAFB', // Very light gray for table header
+        primary: '#2563EB',
+        success: '#16A34A',
+        warning: '#F59E0B',
+        text: '#0F172A',
+        muted: '#6B7280',
+        border: '#E5E7EB',
+        headerBg: '#F8FAFC',
+        panelBg: '#F4F6F8',
       };
 
       const generateHeader = () => {
@@ -772,12 +811,12 @@ router.get('/assessments/:id/report', async (req, res) => {
           .fillColor(colors.primary)
           .fontSize(10)
           .font('Helvetica-Bold')
-          .text('StudyWeave', { align: 'left' });
+          .text('StudyWeave', 50, doc.y, { align: 'left', width: 200 });
         doc
           .fillColor(colors.muted)
-          .fontSize(10)
+          .fontSize(9)
           .font('Helvetica')
-          .text(`Report Generated: ${new Date().toLocaleDateString()}`, { align: 'right' });
+          .text(`Report Generated: ${new Date().toLocaleDateString()}`, 350, doc.y, { align: 'right', width: 200 });
         doc.moveDown(2);
       };
 
@@ -786,38 +825,95 @@ router.get('/assessments/:id/report', async (req, res) => {
           .fillColor(colors.text)
           .fontSize(18)
           .font('Helvetica-Bold')
-          .text('Competency Performance Report');
-        doc.fontSize(14).font('Helvetica').text(reportData.assessmentTitle);
+          .text('Competency Performance Report', 50, doc.y, { width: 500 });
+        doc.fontSize(14).font('Helvetica').fillColor(colors.muted).text(reportData.assessmentTitle, 50, doc.y, { width: 500 });
         doc.moveDown(1);
       };
 
       const generateSummary = () => {
-        doc.fontSize(12).font('Helvetica-Bold').text('Summary');
+        doc.fontSize(14).font('Helvetica-Bold').fillColor(colors.text).text('Summary', 50, doc.y);
         doc.strokeColor(colors.border).moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+        doc.moveDown(1);
+
+        // Left column KPIs
+        const kpiX = 50;
+        const kpiY = doc.y;
+        const lineHeight = 14;
+        doc.fontSize(10).font('Helvetica').fillColor(colors.text);
+        doc.text(`Acceptance Rate: `, kpiX, kpiY, { continued: true }).font('Helvetica-Bold').text(`${summaryData.acceptanceRate}%`);
+        doc.font('Helvetica').text(`Approved: ${summaryData.totalApproved}/${summaryData.totalReviewed}`);
+        doc.text(`MCQ Performance: `, kpiX, doc.y, { continued: true }).font('Helvetica-Bold').text(`${summaryData.overallMcqPerformance}%`);
+        doc.font('Helvetica').text(`Solve Time Avg/Min/Max: ${formatSeconds(summaryData.averageTimeSeconds)} / ${formatSeconds(summaryData.fastestTimeSeconds)} / ${formatSeconds(summaryData.slowestTimeSeconds)}`);
+        doc.text(`Questions: ${mcQuestions.length} MC, ${saQuestions.length} SA`);
+
+        // Right column acceptance donut + legend
+        const centerX = 480;
+        const centerY = kpiY + 35;
+        const radius = 22;
+        const pct = Number(summaryData.acceptanceRate) || 0;
+        const angle = (pct / 100) * Math.PI * 2;
+        // base ring
+        doc.save();
+        doc.lineWidth(10);
+        doc.circle(centerX, centerY, radius).stroke(colors.border);
+        // acceptance arc
+        doc.moveTo(centerX, centerY);
+        doc.lineTo(centerX, centerY - radius);
+        doc.arc(centerX, centerY, radius, -Math.PI / 2, -Math.PI / 2 + angle);
+        doc.lineTo(centerX, centerY);
+        doc.fill(colors.success);
+        doc.restore();
+        doc.fontSize(10).fillColor(colors.text).text(`${pct}%`, centerX - 12, centerY - 6, { width: 24, align: 'center' });
+        doc.fontSize(9).fillColor(colors.muted).text('Accepted', centerX + 30, centerY - 10);
+        doc.rect(centerX + 30, centerY, 10, 10).fill(colors.success);
+        doc.fillColor(colors.muted).text('Rejected', centerX + 30, centerY + 14);
+        doc.rect(centerX + 30, centerY + 24, 10, 10).fill(colors.primary);
+
+        doc.moveDown(4);
+      };
+
+      const generateTrendBlocks = () => {
+        doc.x = 50;
+        doc.fontSize(12).font('Helvetica-Bold').fillColor(colors.text).text('Trends (last 14 days)', 50, doc.y);
         doc.moveDown(0.5);
-        doc
-          .fontSize(10)
-          .font('Helvetica')
-          .fillColor(colors.text)
-          .text(`Acceptance Rate: `, { continued: true })
-          .font('Helvetica-Bold').text(`${summaryData.acceptanceRate}% `, { continued: true })
-          .font('Helvetica').text(`(${summaryData.totalApproved} of ${summaryData.totalReviewed} approved)`);
-        
-        doc.text(`MCQ Performance: `, { continued: true })
-          .font('Helvetica-Bold').text(`${summaryData.overallMcqPerformance}% `, { continued: true })
-          .font('Helvetica').text(`(${totalCorrectMcqAnswers} of ${totalPossibleMcqAnswers} correct answers)`);
+        const chartX = 50;
+        const chartWidth = 430;
+        const chartHeight = 40;
 
-        doc.text(`Solve Time: `, { continued: true })
-          .font('Helvetica-Bold').text(`${formatSeconds(summaryData.averageTimeSeconds)} avg `, { continued: true })
-          .font('Helvetica').text(`(fastest ${formatSeconds(summaryData.fastestTimeSeconds)}, slowest ${formatSeconds(summaryData.slowestTimeSeconds)})`);
+        const renderBarStrip = ({ label, data, maxValue, color }) => {
+          const bucketW = data.length ? chartWidth / data.length : chartWidth;
+          const baseY = doc.y + 14 + chartHeight;
+          doc.fontSize(10).font('Helvetica').fillColor(colors.text).text(label, chartX, doc.y);
+          data.forEach((row, idx) => {
+            const value = row.value;
+            const barH = maxValue ? (value / maxValue) * chartHeight : 0;
+            const x = chartX + idx * bucketW + bucketW * 0.1;
+            const w = bucketW * 0.8;
+            doc.rect(x, baseY - barH, w, barH).fill(color);
+          });
+          doc.fontSize(8).fillColor(colors.muted).text(
+            `${data[0]?.label || ''} → ${data[data.length - 1]?.label || ''}`,
+            chartX,
+            baseY + 6,
+            { width: chartWidth }
+          );
+          doc.moveDown(3);
+        };
 
-        doc.text(`Question Count: `, { continued: true })
-          .font('Helvetica-Bold').text(`${mcQuestions.length} `, { continued: true })
-          .font('Helvetica').text(`Multiple Choice, `, { continued: true })
-          .font('Helvetica-Bold').text(`${saQuestions.length} `, { continued: true })
-          .font('Helvetica').text(`Short Answer`);
+        renderBarStrip({
+          label: 'Acceptance over time',
+          data: summaryData.acceptanceTrend.map((r) => ({ label: r.day, value: r.rate })),
+          maxValue: 100,
+          color: colors.primary,
+        });
 
-        doc.moveDown(2);
+        const subMax = Math.max(...summaryData.submissionTrend.map((b) => b.count || 0), 1);
+        renderBarStrip({
+          label: 'Submissions per day',
+          data: summaryData.submissionTrend.map((r) => ({ label: r.day, value: r.count })),
+          maxValue: subMax,
+          color: colors.border,
+        });
       };
 
       const checkPageBreak = (threshold = 700) => {
@@ -828,7 +924,7 @@ router.get('/assessments/:id/report', async (req, res) => {
       };
 
       const generateTable = () => {
-        doc.fontSize(12).font('Helvetica-Bold').text('Anonymous Submission Details');
+        doc.fontSize(12).font('Helvetica-Bold').text('Anonymous Submission Details', 50, doc.y, { align: 'left' });
         doc.moveDown(0.5);
 
         const table = {
@@ -841,36 +937,41 @@ router.get('/assessments/:id/report', async (req, res) => {
             sub.comments,
             sub.submittedAt ? new Date(sub.submittedAt).toLocaleString() : 'N/A',
           ]),
-          columnWidths: [60, 60, 60, 130, 150, 110],
+          columnWidths: [80, 60, 50, 120, 130, 60],
           columnAligns: ['left', 'left', 'center', 'left', 'left', 'right'],
         };
 
         const tableTop = doc.y;
-        const rowHeight = 25;
+        const rowHeight = 20;
 
         // Draw header
         doc.rect(50, tableTop, 500, rowHeight).fill(colors.headerBg);
-        doc.fillColor(colors.text).font('Helvetica-Bold').fontSize(10);
+        doc.fillColor(colors.text).font('Helvetica-Bold').fontSize(9);
         let currentX = 50;
         table.headers.forEach((header, i) => {
-          doc.text(header, currentX + 10, tableTop + 8, { width: table.columnWidths[i] - 20 });
+          doc.text(header, currentX + 6, tableTop + 5, { width: table.columnWidths[i] - 12 });
           currentX += table.columnWidths[i];
         });
 
         // Draw rows
-        doc.fillColor(colors.text).font('Helvetica').fontSize(9);
+        doc.fillColor(colors.text).font('Helvetica').fontSize(8);
         table.rows.forEach((row, i) => {
           const rowY = tableTop + (i + 1) * rowHeight;
+          const stripe = i % 2 === 0 ? '#FFFFFF' : colors.panelBg;
+          doc.save();
+          doc.rect(50, rowY, 500, rowHeight).fill(stripe);
+          doc.restore();
           currentX = 50;
           row.forEach((cell, j) => {
-            doc.text(cell, currentX + 10, rowY + 8, {
-              width: table.columnWidths[j] - 20,
+            doc.text(cell, currentX + 6, rowY + 4, {
+              width: table.columnWidths[j] - 12,
               align: table.columnAligns[j],
             });
             currentX += table.columnWidths[j];
           });
           doc.strokeColor(colors.border).moveTo(50, rowY + rowHeight).lineTo(550, rowY + rowHeight).stroke();
         });
+        doc.moveDown(1);
       };
 
       const generateQuestionPerformanceTable = () => {
@@ -931,6 +1032,7 @@ router.get('/assessments/:id/report', async (req, res) => {
       generateHeader();
       generateTitle();
       generateSummary();
+      generateTrendBlocks();
       generateQuestionPerformanceTable();
       checkPageBreak(doc.page.height - doc.page.margins.bottom - 100); // Ensure space for the next table header
       generateTable();
