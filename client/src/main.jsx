@@ -18,6 +18,7 @@ import ParticipantCompetencyAssessment from "./pages/participant_competency_asse
 import ResearcherLayout from "./pages/ResearcherLayout";
 import ParticipantLayout from "./pages/ParticipantLayout";
 import ParticipantStudies from "./pages/ParticipantStudies";
+import ProtectedRoute from "./components/ProtectedRoute";
 import ParticipantsListPage from "./pages/ParticipantsListPage";
 import AdminRoleManagementPage from "./pages/AdminRoleManagementPage";
 import CompetencyEvaluationReview from "./pages/CompetencyEvaluationReview";
@@ -27,14 +28,21 @@ import StudiesPage from "./pages/StudiesPage";
 ReactDOM.createRoot(document.getElementById("root")).render(
   <BrowserRouter>
     <Routes>
-      {/* App.jsx is the layout for all the below routes */}
-      <Route path="/" element={<App />}>
-        {/* Auth Pages */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+      {/* Public Auth Pages - these routes are accessible without a token */}
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password/:token" element={<ResetPassword />} />
+
+      {/* Protected Routes - All routes within this group require authentication */}
+      {/* The App component acts as the main layout for all protected content */}
+      <Route path="/" element={<ProtectedRoute><App /></ProtectedRoute>}>
+        {/* Default route for authenticated users landing on "/" */}
+        <Route index element={<Navigate to="/researcher" replace />} />
+
+        {/* Other protected routes */}
         <Route path="/profile" element={<Profile />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password/:token" element={<ResetPassword />} />
+
         {/* Back-compat single-route dashboards */}
         <Route path="/participant-dashboard" element={<Navigate to="/participant" replace />} />
         <Route path="/researcher-dashboard" element={<Navigate to="/researcher" replace />} />
