@@ -161,6 +161,7 @@ export default function ParticipantDashboard() {
   const [publicError, setPublicError] = useState("");
   const [joiningStudyId, setJoiningStudyId] = useState(null);
   const [studyScope, setStudyScope] = useState("all"); // all | public | private
+  const [showAllAssignments, setShowAllAssignments] = useState(false);
   const joinedStudyIds = useMemo(() => {
     const ids = studies
       .map((study) => Number(study?.studyId || study?.id))
@@ -448,6 +449,10 @@ export default function ParticipantDashboard() {
       }),
     [filteredStudies, studyScope],
   );
+  const visibleAssignments = useMemo(
+    () => (showAllAssignments ? scopedStudies : scopedStudies.slice(0, 6)),
+    [scopedStudies, showAllAssignments],
+  );
 
   const noStudiesAssigned = !loading && studies.length === 0;
   const noStudiesAfterFilter = !loading && scopedStudies.length === 0 && studies.length > 0;
@@ -455,6 +460,10 @@ export default function ParticipantDashboard() {
   const layoutWithoutWelcome = useMemo(() => layout.filter((id) => id !== "welcome"), [layout]);
   const shouldPairPublicWithAssignments =
     !isGuest && layoutWithoutWelcome.includes("assignments") && layoutWithoutWelcome.includes("public");
+
+  useEffect(() => {
+    setShowAllAssignments(false);
+  }, [studyScope, filters.study, filters.criteria, filters.from, filters.to]);
 
   const handleJoinPublicStudy = async (studyId) => {
     const token = authToken || localStorage.getItem("token");
@@ -735,7 +744,8 @@ export default function ParticipantDashboard() {
                 </CardFooter>
               </Card>
             ) : (
-              scopedStudies.map((study) => {
+              <>
+              {visibleAssignments.map((study) => {
                 const cardStatus = deriveCardStatus(study, visitedStudies);
                 const competency = study.competency || {};
                 const nextModeLabel = study.nextAssignment?.modeLabel || null;
@@ -861,7 +871,19 @@ export default function ParticipantDashboard() {
                     </CardFooter>
                   </Card>
                 );
-              })
+              })}
+              {scopedStudies.length > 6 ? (
+                <div className="flex justify-center">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowAllAssignments((prev) => !prev)}
+                  >
+                    {showAllAssignments ? "Show less" : `See all (${scopedStudies.length})`}
+                  </Button>
+                </div>
+              ) : null}
+              </>
             )}
           </section>
         );
@@ -872,7 +894,7 @@ export default function ParticipantDashboard() {
 
   return (
     <div className="space-y-6">
-      <section className="flex flex-col gap-3 rounded-xl border bg-white p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+      <section className="flex flex-col gap-3 rounded-2xl border bg-card/80 p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between">
         <div className="space-y-1">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Dashboard</p>
           <h2 className="text-xl font-semibold">

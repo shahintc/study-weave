@@ -1877,15 +1877,15 @@ export default function ArtifactsComparison() {
     const anns = side === "left" ? leftAnn : rightAnn;
     if (anns.length === 0) return null;
     return (
-      <div className="border-t bg-gray-50/50 p-3 max-h-48 overflow-y-auto">
-        <h4 className="text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider">
+      <div className="border-t bg-muted/40 p-3 max-h-48 overflow-y-auto">
+        <h4 className="text-xs font-bold text-muted-foreground mb-2 uppercase tracking-wider">
           Comments & Highlights ({anns.length})
         </h4>
         <div className="space-y-2">
           {anns.map((ann) => (
             <div
               key={ann.id}
-              className="text-xs bg-white p-2 rounded border flex justify-between gap-2 items-start group"
+              className="text-xs bg-card p-2 rounded border border-border/70 flex justify-between gap-2 items-start group"
             >
               <div className="flex-1">
                 <div className="flex items-center gap-2 mb-1">
@@ -1894,15 +1894,15 @@ export default function ArtifactsComparison() {
                     style={{ backgroundColor: ann.color }}
                   ></div>
                   {ann.snippet && (
-                    <span className="font-mono text-gray-600 truncate max-w-[150px]">
+                    <span className="font-mono text-muted-foreground truncate max-w-[150px]">
                       {ann.comment ? "Comment on:" : "Highlight:"} "
                       {ann.snippet.replace(/\n/g, " ")}"
                     </span>
                   )}
                 </div>
-                <p className="text-gray-800 pl-5 leading-relaxed">
+                <p className="text-foreground pl-5 leading-relaxed">
                   {ann.comment || (
-                    <i className="text-gray-400">No specific comment added.</i>
+                    <i className="text-muted-foreground">No specific comment added.</i>
                   )}
                 </p>
               </div>
@@ -1939,12 +1939,12 @@ export default function ArtifactsComparison() {
     const canAnnotateImage = data.type === "image";
 
     return (
-      <div className="flex items-center justify-between px-3 py-2 border-b bg-white min-h-[46px]">
+      <div className="flex items-center justify-between px-3 py-2 border-b bg-card min-h-[46px]">
         <span className="font-semibold text-sm mr-2 truncate">{title}</span>
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
           {data.type === "text" ? (
             patchMode ? (
-              <span className="text-[11px] text-gray-500 px-2 py-1 bg-gray-100 rounded">
+              <span className="text-[11px] text-muted-foreground px-2 py-1 bg-muted/60 rounded">
                 Patch view (read-only)
               </span>
             ) : (
@@ -1960,7 +1960,7 @@ export default function ArtifactsComparison() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 text-xs px-2 bg-gray-100 hover:bg-gray-200 text-gray-700"
+                  className="h-7 text-xs px-2 bg-muted/60 hover:bg-muted text-foreground"
                   disabled={editing}
                   onClick={() => onSimpleHighlight(side)}
                 >
@@ -1969,7 +1969,7 @@ export default function ArtifactsComparison() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 text-xs px-2 bg-gray-100 hover:bg-gray-200 text-gray-700"
+                  className="h-7 text-xs px-2 bg-muted/60 hover:bg-muted text-foreground"
                   disabled={editing}
                   onClick={() => onAddComment(side)}
                 >
@@ -2191,7 +2191,7 @@ export default function ArtifactsComparison() {
       return (
         <div
           ref={ref}
-          className="h-full w-full overflow-auto bg-white relative p-4 font-mono text-sm whitespace-pre-wrap leading-relaxed"
+          className="h-full w-full overflow-auto bg-card text-foreground relative p-4 font-mono text-sm whitespace-pre-wrap leading-relaxed border border-border/70 rounded-lg"
         >
           {editing ? (
             <div
@@ -2216,10 +2216,10 @@ export default function ArtifactsComparison() {
     return (
       <div
         ref={ref}
-        className="h-full w-full overflow-auto bg-gray-100 flex items-start justify-center p-8 relative"
+        className="h-full w-full overflow-auto bg-muted/40 flex items-start justify-center p-8 relative"
       >
         <div
-          className="relative shadow-lg bg-white transition-transform origin-top"
+          className="relative shadow-lg bg-card transition-transform origin-top border border-border/70 rounded-lg"
           style={{ transform: `scale(${zoom})` }}
         >
           {data.type === "image" && (
@@ -2278,7 +2278,7 @@ export default function ArtifactsComparison() {
         <img
           src={pane.url}
           alt={pane.name || "Artifact image"}
-          className="border rounded-md max-h-[320px] object-contain mx-auto bg-white"
+          className="border border-border/60 rounded-md max-h-[320px] object-contain mx-auto bg-card"
         />
       );
     }
@@ -2293,7 +2293,7 @@ export default function ArtifactsComparison() {
       );
     }
     return (
-      <pre className="text-xs bg-white border rounded-md p-3 overflow-auto max-h-[320px] whitespace-pre-wrap">
+      <pre className="text-xs bg-card text-foreground border border-border/70 rounded-md p-3 overflow-auto max-h-[320px] whitespace-pre-wrap">
         {pane.text || "Text artifact attached."}
       </pre>
     );
@@ -2624,8 +2624,8 @@ export default function ArtifactsComparison() {
   // ===== MAIN RENDER =====
   if (!hasAssignmentContext) {
     return (
-      <div className="min-h-screen bg-white px-4 py-12 flex items-center justify-center">
-        <Card className="w-full max-w-2xl border-dashed">
+      <div className="min-h-screen bg-background px-4 py-12 flex items-center justify-center">
+        <Card className="w-full max-w-2xl border-dashed bg-card shadow-lg">
           <CardHeader>
             <CardTitle>No artifact assignment available</CardTitle>
             <CardDescription>
@@ -2657,7 +2657,7 @@ export default function ArtifactsComparison() {
   }
 
     return (
-      <div className={`min-h-screen bg-white p-6 text-gray-900 font-sans ${formDisabled ? "opacity-95" : ""}`}>
+      <div className={`min-h-screen bg-background p-6 text-foreground font-sans ${formDisabled ? "opacity-95" : ""}`}>
         <div className="max-w-[1400px] mx-auto space-y-6">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex flex-col gap-1">
@@ -2687,7 +2687,7 @@ export default function ArtifactsComparison() {
           <div className="flex flex-col gap-2 items-start lg:items-end">
             <div className="flex flex-wrap items-center gap-3">
               <div
-                className={`flex items-center gap-2 rounded-full border px-3 py-1 ${timerBadgeClass}`}
+                className={`flex items-center gap-2 rounded-full border px-3 py-1 bg-card/70 ${timerBadgeClass}`}
                 title="Tracks your time on this study task"
               >
                 <span className={`h-2 w-2 rounded-full ${timerDotClass}`} />
@@ -2720,7 +2720,7 @@ export default function ArtifactsComparison() {
             <div className="flex flex-wrap items-center gap-3 justify-end">
               {allowSyncAndSwap && (
                 <>
-                  <div className="flex items-center space-x-2 bg-gray-100 px-3 py-1.5 rounded-md border">
+                  <div className="flex items-center space-x-2 bg-muted/60 px-3 py-1.5 rounded-md border border-border/70">
                     <Checkbox
                       id="sync-mode"
                       checked={syncScroll}
@@ -2781,21 +2781,21 @@ export default function ArtifactsComparison() {
         </div>
 
         {assignmentMeta?.instructions && (
-          <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-            <p className="text-xs uppercase tracking-wide text-slate-500 mb-1">
+          <div className="rounded-md border border-border/70 bg-muted/40 px-4 py-3 text-sm text-foreground">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">
               Researcher instructions
             </p>
             {assignmentMeta.label ? (
-              <p className="font-semibold text-slate-900">{assignmentMeta.label}</p>
+              <p className="font-semibold">{assignmentMeta.label}</p>
             ) : null}
-            <p className="whitespace-pre-line text-sm leading-relaxed">
+            <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
               {assignmentMeta.instructions}
             </p>
           </div>
         )}
 
         <div className="space-y-2">
-          <div className="border rounded-md px-4 py-3 bg-gray-50 text-xs text-gray-700 flex flex-wrap gap-4">
+          <div className="border rounded-md px-4 py-3 bg-muted/40 text-xs text-muted-foreground flex flex-wrap gap-4">
             <span>Study #{studyContext.studyId ?? "—"}</span>
             <span>Artifact link #{studyContext.studyArtifactId ?? "—"}</span>
             <span>Participant record #{activeParticipantId ?? "—"}</span>
@@ -2809,9 +2809,9 @@ export default function ArtifactsComparison() {
             )}
           </div>
           {participantSummary && (
-            <div className="border border-slate-200 bg-white rounded-md px-4 py-2 text-xs text-slate-600">
+            <div className="border border-border/70 bg-card rounded-md px-4 py-2 text-xs text-muted-foreground">
               Assigned participant:
-              <span className="font-semibold text-slate-900 ml-1">
+              <span className="font-semibold text-foreground ml-1">
                 {participantSummary.name || `User ${participantSummary.id}`}
               </span>
               {participantSummary.email ? ` • ${participantSummary.email}` : null}
@@ -2837,34 +2837,34 @@ export default function ArtifactsComparison() {
 
         {/* Patch similarity heatmap bar */}
         {mode === "patch" && patchSimilarity !== null && (
-          <div className="border rounded-md px-3 py-2 bg-gray-50 flex items-center gap-3 text-xs text-gray-700">
-            <span className="font-medium">Patch similarity</span>
-            <div className="flex-1 h-2 rounded-full bg-gray-200 overflow-hidden">
+          <div className="border border-border/70 rounded-md px-3 py-2 bg-muted/40 flex items-center gap-3 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">Patch similarity</span>
+            <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
               <div
-                className="h-2 rounded-full bg-emerald-500"
+                className="h-2 rounded-full bg-primary"
                 style={{ width: `${patchSimilarity}%` }}
               />
             </div>
-            <span className="w-10 text-right font-semibold">
+            <span className="w-10 text-right font-semibold text-foreground">
               {patchSimilarity}%
             </span>
           </div>
         )}
 
         {metadataEntries.length > 0 && (
-          <div className="border rounded-md px-4 py-3 bg-blue-50 flex flex-wrap gap-3 items-center text-xs text-blue-900">
+          <div className="border border-primary/20 rounded-md px-4 py-3 bg-primary/10 flex flex-wrap gap-3 items-center text-xs text-primary">
             <div>
               <p className="font-semibold">
                 Defects4J metadata loaded ({metadataEntries.length} bugs)
               </p>
-              <p className="text-[11px] text-blue-800">
+              <p className="text-[11px] text-primary/80">
                 Switch between bug reports without re-uploading the file.
               </p>
             </div>
             <select
               value={selectedMetadataId}
               onChange={(e) => handleMetadataSelection(e.target.value)}
-              className="border rounded px-2 py-1 bg-white text-gray-700"
+              className="border border-border/70 rounded px-2 py-1 bg-card text-foreground"
               disabled={formDisabled}
             >
               {!selectedMetadataId && (
@@ -2889,7 +2889,7 @@ export default function ArtifactsComparison() {
                     handleMetadataSelection(selectedMetadataId, nextPane);
                   }
                 }}
-                className="border rounded px-2 py-1 bg-white text-gray-700"
+                className="border border-border/70 rounded px-2 py-1 bg-card text-foreground"
                 disabled={formDisabled}
               >
                 <option value="left">Artifact A (left)</option>
@@ -2905,7 +2905,7 @@ export default function ArtifactsComparison() {
         )}
 
         {mode === "solid" && solidRecords.length > 0 && (
-          <div className="border rounded-md px-4 py-3 bg-amber-50 flex flex-wrap items-center gap-3 text-xs text-amber-900">
+          <div className="border rounded-md px-4 py-3 bg-amber-50/60 dark:bg-amber-900/20 flex flex-wrap items-center gap-3 text-xs text-amber-900 dark:text-amber-100">
             <span className="font-semibold">
               {solidDatasetName || "SOLID dataset"} – Record {" "}
               {solidRecordIndex + 1} / {solidRecords.length}
@@ -2929,7 +2929,7 @@ export default function ArtifactsComparison() {
               </Button>
             </div>
             <select
-              className="border rounded px-2 py-1 bg-white text-gray-700"
+              className="border border-border/70 rounded px-2 py-1 bg-card text-foreground"
               value={solidRecordIndex}
               onChange={(e) => handleSolidRecordChange(Number(e.target.value))}
             >
@@ -2952,7 +2952,7 @@ export default function ArtifactsComparison() {
 
         {/* MAIN VIEWER */}
         {mode !== "custom" && (
-          <div className="flex border rounded-lg h-[650px] shadow-sm overflow-hidden">
+          <div className="flex border border-border/70 rounded-lg h-[650px] shadow-sm overflow-hidden bg-card/60">
             {/* LEFT always visible */}
             <div
               className={`flex-1 flex flex-col min-w-0 border-r relative ${
@@ -3054,7 +3054,7 @@ export default function ArtifactsComparison() {
               </div>
             )}
             {customActivePane && (
-              <div className="border rounded-lg shadow-sm bg-white">
+              <div className="border border-border/70 rounded-lg shadow-sm bg-card">
                 <PaneToolbar side="left" title={customActivePane.name || customActivePane.artifactName || "Custom Artifact"} />
                 <div className="h-[500px]">
                   {renderContent("left", false, null)}
@@ -3066,13 +3066,13 @@ export default function ArtifactsComparison() {
         )}
 
         {mode === "snapshot" && (
-          <div className="border rounded-lg p-4 bg-gray-50 space-y-3">
+          <div className="border rounded-lg p-4 bg-muted/40 space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-gray-800">
+                <h3 className="text-sm font-semibold text-foreground">
                   Diff artifact (researcher provided)
                 </h3>
-                <p className="text-[11px] text-gray-500">
+                <p className="text-[11px] text-muted-foreground">
                   Review this diff alongside the reference and failure snapshots. Uploading is no longer required.
                 </p>
               </div>
@@ -3087,7 +3087,7 @@ export default function ArtifactsComparison() {
                 <img
                   src={snapshotAssets.diff.url}
                   alt="Diff artifact"
-                  className="border rounded-md max-h-[420px] object-contain mx-auto bg-white"
+                  className="border border-border/60 rounded-md max-h-[420px] object-contain mx-auto bg-card"
                 />
               ) : snapshotAssets.diff.type === "pdf" ? (
                 <object
@@ -3099,17 +3099,17 @@ export default function ArtifactsComparison() {
                   type="application/pdf"
                   className="w-full h-[420px]"
                 >
-                  <div className="text-xs text-gray-500 text-center">
+                  <div className="text-xs text-muted-foreground text-center">
                     Unable to display PDF diff. Download to view.
                   </div>
                 </object>
               ) : (
-                <pre className="text-xs bg-white border rounded-md p-3 overflow-auto max-h-[420px]">
+                <pre className="text-xs bg-card text-foreground border border-border/70 rounded-md p-3 overflow-auto max-h-[420px]">
                   {snapshotAssets.diff.text || "Diff artifact attached."}
                 </pre>
               )
             ) : (
-              <div className="text-xs text-gray-500 border border-dashed rounded-md p-6 text-center">
+              <div className="text-xs text-muted-foreground border border-dashed rounded-md p-6 text-center">
                 No diff artifact was attached by the researcher.
               </div>
             )}
@@ -3180,7 +3180,7 @@ export default function ArtifactsComparison() {
                                   [q.id]: e.target.value,
                                 }))
                               }
-                              className="border rounded px-2 py-1 text-sm w-full bg-white"
+                              className="border border-border/70 rounded px-2 py-1 text-sm w-full bg-card text-foreground"
                             >
                               <option value="">Choose an option...</option>
                               {(q.options || []).map((opt) => (
@@ -3280,7 +3280,7 @@ export default function ArtifactsComparison() {
                     <select
                       value={patchCloneType}
                       onChange={(e) => setPatchCloneType(e.target.value)}
-                      className="border rounded px-2 py-1 text-sm w-full bg-white"
+                      className="border border-border/70 rounded px-2 py-1 text-sm w-full bg-card text-foreground"
                       disabled={formDisabled || submissionLocked}
                     >
                       <option value="">Choose clone type...</option>
@@ -3321,7 +3321,7 @@ export default function ArtifactsComparison() {
                   <select
                     value={solidViolation}
                     onChange={(e) => setSolidViolation(e.target.value)}
-                    className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    className="border border-border/70 rounded px-2 py-1 text-sm w-full bg-card text-foreground"
                     disabled={formDisabled || submissionLocked}
                   >
                     <option value="">Choose violation...</option>
@@ -3414,7 +3414,7 @@ export default function ArtifactsComparison() {
                     {currentSolidRecord.output && (
                       <div>
                         <p className="font-semibold mb-1">LLM suggestion:</p>
-                        <pre className="bg-white border rounded-md p-2 text-[11px] text-gray-800 whitespace-pre-wrap">
+                        <pre className="bg-card border border-border/70 rounded-md p-2 text-[11px] text-foreground whitespace-pre-wrap">
                           {currentSolidRecord.output}
                         </pre>
                       </div>
@@ -3463,7 +3463,7 @@ export default function ArtifactsComparison() {
                   <select
                     value={snapshotChangeType}
                     onChange={(e) => setSnapshotChangeType(e.target.value)}
-                    className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    className="border border-border/70 rounded px-2 py-1 text-sm w-full bg-card text-foreground"
                     disabled={formDisabled || submissionLocked}
                   >
                     <option value="">Choose change type...</option>
@@ -3513,7 +3513,7 @@ export default function ArtifactsComparison() {
                   <select
                     value={leftCategory}
                     onChange={(e) => setLeftCategory(e.target.value)}
-                    className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    className="border border-border/70 rounded px-2 py-1 text-sm w-full bg-card text-foreground"
                     disabled={formDisabled || submissionLocked}
                   >
                     <option value="">Choose category...</option>
@@ -3659,11 +3659,11 @@ export default function ArtifactsComparison() {
             onClick={() => setPendingAnnotation(null)}
           >
             <div
-              className="bg-white p-6 rounded-lg shadow-xl w-[400px]"
+              className="bg-card p-6 rounded-lg shadow-xl w-[400px] border border-border/70"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="font-bold mb-2">Add Comment</h3>
-              <div className="text-xs text-gray-500 italic border-l-2 pl-2 mb-4 bg-gray-50 p-2 rounded">
+              <div className="text-xs text-muted-foreground italic border-l-2 border-border/70 pl-2 mb-4 bg-muted/40 p-2 rounded">
                 "{pendingAnnotation.snippet}"
               </div>
               <Textarea
@@ -3688,8 +3688,8 @@ export default function ArtifactsComparison() {
 
         {/* Fullscreen mode */}
         {showBig && (mode !== "custom" || customActivePane) && (
-          <div className="fixed inset-0 z-50 bg-white flex flex-col animate-in fade-in duration-200">
-            <div className="border-b p-4 flex justify-between items-center bg-gray-50">
+          <div className="fixed inset-0 z-50 bg-background flex flex-col animate-in fade-in duration-200">
+            <div className="border-b p-4 flex justify-between items-center bg-card">
               <h2 className="font-bold text-lg">Full Screen View</h2>
               <Button variant="outline" onClick={() => setShowBig(false)}>
                 Close

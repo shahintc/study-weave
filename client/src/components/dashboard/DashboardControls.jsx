@@ -57,7 +57,7 @@ export default function DashboardControls({
   };
 
   return (
-    <Card>
+    <Card className="border-0 bg-card/80 shadow-md backdrop-blur">
       <CardHeader className="pb-4">
         <CardTitle>Dashboard controls</CardTitle>
         <CardDescription>Filter what you see and rearrange widgets to match your workflow.</CardDescription>
@@ -146,8 +146,8 @@ export default function DashboardControls({
           </div>
         </div>
       </CardContent>
-      <Separator />
-      <CardFooter className="flex flex-wrap items-center justify-between gap-3">
+      <Separator className="mx-6" />
+      <CardFooter className="flex flex-wrap items-center justify-between gap-3 rounded-b-2xl bg-muted/20 px-6 py-4">
         <div className="text-xs text-muted-foreground">
           {lastSavedAt ? `Last saved ${formatTimestamp(lastSavedAt)}` : "Not saved to profile yet."}
           {saveError ? (

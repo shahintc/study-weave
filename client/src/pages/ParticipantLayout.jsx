@@ -3,7 +3,7 @@ import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import axios from "../api/axios";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { Bell } from "lucide-react";
+import { Bell, LayoutDashboard, Shuffle, Brain, Menu } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +22,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import {
+  Sheet,
+  SheetContent,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 const parseEstimatedSeconds = (value) => {
   if (!value) return null;
@@ -40,6 +46,7 @@ export default function ParticipantLayout() {
   const [notifications, setNotifications] = useState([]);
   const [resumeChip, setResumeChip] = useState(null);
   const [nowTs, setNowTs] = useState(() => Date.now());
+  const [showGuestCompetencyModal, setShowGuestCompetencyModal] = useState(false);
 
   const refreshNotifications = useCallback(async () => {
     if (!user || user.role !== "participant") return;
@@ -75,7 +82,6 @@ export default function ParticipantLayout() {
       }
     }
   }, [navigate, user]);
-  const [showGuestCompetencyModal, setShowGuestCompetencyModal] = useState(false);
 
   useEffect(() => {
     const raw = localStorage.getItem("user");
@@ -238,69 +244,135 @@ export default function ParticipantLayout() {
     navigate(itemTo);
   };
 
+  const workspaceLabel = isGuest ? "Guest participant" : "Participant";
+
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
-      {resumeChip && location.pathname !== "/participant/competency" ? (() => {
-        const durationSeconds =
-          resumeChip.durationSeconds || parseEstimatedSeconds(resumeChip.estimatedTime);
-        const remainingSeconds =
-          durationSeconds && resumeChip.startedAt
-            ? Math.max(durationSeconds - Math.floor((nowTs - resumeChip.startedAt) / 1000), 0)
-            : null;
-        return (
-        <div className="fixed bottom-5 left-5 z-40 flex items-center gap-3 rounded-full border border-amber-200 bg-amber-50 px-4 py-3 shadow-lg">
-          <div className="flex flex-col">
-            <span className="text-[11px] uppercase tracking-wide text-amber-700">Active competency</span>
-            <span className="text-sm font-semibold text-amber-900 truncate max-w-[220px]">
-              {resumeChip.title}
-            </span>
-          </div>
-          {Number.isFinite(remainingSeconds) ? (
-            <Badge variant="outline" className="bg-white text-amber-800 border-amber-300">
-              {Math.max(Math.floor(remainingSeconds / 60), 0)}m left
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="bg-white text-amber-800 border-amber-300">
-              Resume
-            </Badge>
-          )}
-          <Button
-            size="sm"
-            variant="secondary"
-            className="h-8"
-            onClick={() => navigate("/participant/competency")}
-            aria-label="Return to active competency"
-          >
-            Open
-          </Button>
-        </div>
-      )})() : null}
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Study Weave ({isGuest ? "Guest Participant" : "Participant"})
-        </h1>
-        <div className="flex items-center gap-3">
-          {!isGuest ? (
-            <NotificationBell count={notificationCount} notifications={notifications} />
-          ) : null}
-          <UserNav displayName={user?.name || (isGuest ? "Guest Participant" : "Participant")} avatarUrl={avatarUrl} onLogout={handleLogout} />
-        </div>
-      </header>
+    <div className="min-h-screen bg-background">
+      {resumeChip && location.pathname !== "/participant/competency"
+        ? (() => {
+            const durationSeconds =
+              resumeChip.durationSeconds || parseEstimatedSeconds(resumeChip.estimatedTime);
+            const remainingSeconds =
+              durationSeconds && resumeChip.startedAt
+                ? Math.max(durationSeconds - Math.floor((nowTs - resumeChip.startedAt) / 1000), 0)
+                : null;
+            return (
+              <div className="fixed bottom-5 left-5 z-40 flex items-center gap-3 rounded-full border border-primary/20 bg-card/90 px-4 py-3 shadow-lg backdrop-blur">
+                <div className="flex flex-col">
+                  <span className="text-[11px] uppercase tracking-wide text-primary">Active competency</span>
+                  <span className="text-sm font-semibold text-foreground truncate max-w-[220px]">
+                    {resumeChip.title}
+                  </span>
+                </div>
+                {Number.isFinite(remainingSeconds) ? (
+                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
+                    {Math.max(Math.floor(remainingSeconds / 60), 0)}m left
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">
+                    Resume
+                  </Badge>
+                )}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="h-8"
+                  onClick={() => navigate("/participant/competency")}
+                  aria-label="Return to active competency"
+                >
+                  Open
+                </Button>
+              </div>
+            );
+          })()
+        : null}
 
-      <nav className="flex items-center gap-2 border-b pb-4">
-        {nav.map((item) => (
-          <Button
-            key={item.key}
-            variant={location.pathname === item.to ? "secondary" : "ghost"}
-            className="rounded-full"
-            onClick={() => handleNavClick(item.to)}
-          >
-            {item.label}
-          </Button>
-        ))}
-      </nav>
+      <div className="mx-auto flex w-full max-w-none gap-6 px-4 py-6 lg:px-8">
+        <aside className="hidden w-[220px] shrink-0 lg:block">
+          <NavRail
+            nav={nav}
+            activePath={location.pathname}
+            onSelect={handleNavClick}
+            roleLabel={workspaceLabel}
+            userName={user?.name}
+          />
+        </aside>
 
-      <Outlet />
+        <Sheet>
+          <SheetTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              className="lg:hidden"
+              aria-label="Open navigation"
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-[260px] p-0">
+            <div className="p-4 pb-2">
+              <NavRail
+                nav={nav}
+                activePath={location.pathname}
+                onSelect={handleNavClick}
+                roleLabel={workspaceLabel}
+                userName={user?.name}
+                dense
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
+
+        <div className="flex-1 space-y-6">
+          <header className="sticky top-4 z-10 rounded-2xl border bg-card/80 px-4 py-3 backdrop-blur-lg shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    {workspaceLabel} workspace
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <h1 className="text-xl font-semibold tracking-tight">Study Weave</h1>
+                    {isGuest ? (
+                      <span className="rounded-full bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent-foreground">
+                        Guest
+                      </span>
+                    ) : (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                        Live
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <ThemeToggle />
+                {!isGuest ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="hidden sm:inline-flex"
+                    onClick={() => handleNavClick("/participant/artifacts-comparison")}
+                  >
+                    <Shuffle className="h-4 w-4" />
+                    Compare
+                  </Button>
+                ) : null}
+                {!isGuest ? (
+                  <NotificationBell count={notificationCount} notifications={notifications} />
+                ) : null}
+                <UserNav
+                  displayName={user?.name || (isGuest ? "Guest Participant" : "Participant")}
+                  avatarUrl={avatarUrl}
+                  onLogout={handleLogout}
+                />
+              </div>
+            </div>
+          </header>
+
+          <Outlet />
+        </div>
+      </div>
 
       <Dialog open={showGuestCompetencyModal} onOpenChange={setShowGuestCompetencyModal}>
         <DialogContent>
@@ -570,5 +642,53 @@ function UserNav({ displayName = "Participant", avatarUrl = "", onLogout }) {
         <DropdownMenuItem onClick={onLogout}>Logout</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function NavRail({ nav = [], activePath = "", onSelect, roleLabel = "Participant", userName = "", dense = false }) {
+  const iconMap = {
+    "/participant": LayoutDashboard,
+    "/participant/artifacts-comparison": Shuffle,
+    "/participant/competency": Brain,
+  };
+
+  const itemBase =
+    "relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors";
+
+  return (
+    <div className={dense ? "space-y-4" : "space-y-6 p-2"}>
+      <div className="space-y-1">
+        <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Navigation</p>
+        <p className="text-sm font-semibold text-foreground">{roleLabel}</p>
+        {userName ? <p className="text-xs text-muted-foreground truncate">{userName}</p> : null}
+      </div>
+      <div className="space-y-1">
+        {nav.map((item) => {
+          const Icon = iconMap[item.to] || LayoutDashboard;
+          const isActive =
+            activePath === item.to ||
+            activePath.startsWith(`${item.to}/`);
+          return (
+            <button
+              key={item.to}
+              type="button"
+              onClick={() => onSelect?.(item.to)}
+              className={`${itemBase} ${isActive ? "bg-primary/10 text-primary shadow-sm ring-1 ring-primary/20" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
+              aria-current={isActive ? "page" : undefined}
+            >
+              <span className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-secondary/60 text-foreground">
+                <Icon className="h-5 w-5" />
+                {isActive ? (
+                  <span className="absolute inset-y-1 -left-2 w-1 rounded-full bg-primary/90" />
+                ) : null}
+              </span>
+              <div className="flex flex-col items-start">
+                <span>{item.label}</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

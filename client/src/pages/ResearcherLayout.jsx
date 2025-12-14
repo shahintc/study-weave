@@ -13,6 +13,22 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Sheet,
+  SheetContent,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import {
+  LayoutDashboard,
+  Layers,
+  FolderArchive,
+  ClipboardList,
+  Users,
+  Sparkles,
+  Wand2,
+  Menu,
+} from "lucide-react";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 export default function ResearcherLayout() {
   const navigate = useNavigate();
@@ -158,35 +174,84 @@ export default function ResearcherLayout() {
   }, [user?.role]);
 
   return (
-    <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Study Weave ({user?.role === "reviewer" ? "Reviewer" : "Researcher"})
-        </h1>
-        <div className="flex items-center gap-3">
-          <NotificationBell count={notificationCount} notifications={notifications} />
-          <UserNav displayName={user?.name || "Researcher"} avatarUrl={avatarUrl} onLogout={handleLogout} />
+    <div className="min-h-screen bg-background">
+      <div className="mx-auto flex w-full max-w-none gap-6 px-4 py-6 lg:px-8">
+        {/* Desktop left rail */}
+        <aside className="hidden w-[240px] shrink-0 lg:block">
+          <NavRail
+            nav={nav}
+            activePath={location.pathname}
+            roleLabel={user?.role === "reviewer" ? "Reviewer" : "Researcher"}
+            userName={user?.name}
+          />
+        </aside>
+
+        {/* Mobile rail toggle */}
+        <Sheet>
+          <SheetTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon"
+              className="lg:hidden"
+              aria-label="Open navigation"
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-[260px] p-0">
+            <div className="p-4 pb-2">
+              <NavRail
+                nav={nav}
+                activePath={location.pathname}
+                roleLabel={user?.role === "reviewer" ? "Reviewer" : "Researcher"}
+                userName={user?.name}
+                dense
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
+
+        <div className="flex-1 space-y-6">
+          <header className="sticky top-4 z-10 rounded-2xl border bg-card/80 px-4 py-3 backdrop-blur-lg shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    {user?.role === "reviewer" ? "Reviewer" : "Researcher"} workspace
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <h1 className="text-xl font-semibold tracking-tight">
+                      Study Weave
+                    </h1>
+                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                      Live
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <ThemeToggle />
+                <Button variant="outline" size="sm" className="hidden sm:inline-flex" asChild>
+                  <Link to="/researcher/study-creation-wizard">
+                    <Sparkles className="h-4 w-4" />
+                    New study
+                  </Link>
+                </Button>
+                <Button variant="secondary" size="sm" className="hidden sm:inline-flex" asChild>
+                  <Link to="/researcher/participants-list">
+                    <Users className="h-4 w-4" />
+                    Invite
+                  </Link>
+                </Button>
+                <NotificationBell count={notificationCount} notifications={notifications} />
+                <UserNav displayName={user?.name || "Researcher"} avatarUrl={avatarUrl} onLogout={handleLogout} />
+              </div>
+            </div>
+          </header>
+
+          <Outlet />
         </div>
-      </header>
-
-      <nav className="flex items-center gap-2 border-b pb-4">
-        {nav.map((item) => (
-          <Button
-            key={item.to}
-            asChild
-            variant={
-              location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
-                ? "secondary"
-                : "ghost"
-            }
-            className="rounded-full"
-          >
-            <Link to={item.to}>{item.label}</Link>
-          </Button>
-        ))}
-      </nav>
-
-      <Outlet />
+      </div>
     </div>
   );
 }
@@ -357,5 +422,60 @@ function UserNav({ displayName = "Researcher", avatarUrl = "", onLogout }) {
         <DropdownMenuItem onClick={onLogout}>Logout</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function NavRail({ nav = [], activePath = "", roleLabel = "Researcher", userName = "", dense = false }) {
+  const iconMap = {
+    "/researcher": LayoutDashboard,
+    "/researcher/studies": Layers,
+    "/researcher/archived-studies": FolderArchive,
+    "/researcher/artifacts": ClipboardList,
+    "/researcher/assess": Wand2,
+    "/researcher/competency-review": Users,
+    "/researcher/reviewer": Sparkles,
+    "/researcher/study-creation-wizard": Layers,
+    "/researcher/participants-list": Users,
+  };
+
+  const itemBase = "relative flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors";
+
+  return (
+    <div className={dense ? "space-y-4" : "space-y-6 p-2"}>
+      <div className="space-y-1">
+        <p className="text-xs uppercase tracking-[0.16em] text-muted-foreground">Navigation</p>
+        <p className="text-sm font-semibold text-foreground">{roleLabel}</p>
+        {userName ? <p className="text-xs text-muted-foreground truncate">{userName}</p> : null}
+      </div>
+      <div className="space-y-1">
+        {nav.map((item) => {
+          const Icon = iconMap[item.to] || LayoutDashboard;
+          const isActive =
+            activePath === item.to ||
+            activePath.startsWith(`${item.to}/`);
+          return (
+            <Link
+              key={item.to}
+              to={item.to}
+              className={`${itemBase} ${isActive ? "bg-primary/10 text-primary shadow-sm ring-1 ring-primary/20" : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"}`}
+              aria-current={isActive ? "page" : undefined}
+            >
+              <span className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-secondary/60 text-foreground">
+                <Icon className="h-5 w-5" />
+                {isActive ? (
+                  <span className="absolute inset-y-1 -left-2 w-1 rounded-full bg-primary/90" />
+                ) : null}
+              </span>
+              <div className="flex flex-col">
+                <span>{item.label}</span>
+                {item.subLabel ? (
+                  <span className="text-xs text-muted-foreground">{item.subLabel}</span>
+                ) : null}
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
   );
 }
