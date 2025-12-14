@@ -21,8 +21,6 @@ import {
   CalendarDays,
   Download,
   RefreshCcw,
-  Share2,
-  Copy, Check,
   Filter,
 } from "lucide-react";
 import { toPng } from "html-to-image";
@@ -135,8 +133,6 @@ export default function ResearcherDashboard() {
   const [participantError, setParticipantError] = useState("");
   const [isParticipantsLoading, setIsParticipantsLoading] = useState(false);
   const [assignmentDrafts, setAssignmentDrafts] = useState({});
-  // --- Start: Rewritten Copy Logic ---
-  const [copyStatus, setCopyStatus] = useState({ studyId: null, state: 'idle' }); // 'idle', 'copied', 'error'
   const [assignmentSaving, setAssignmentSaving] = useState({});
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortBy, setSortBy] = useState("recent");
@@ -552,28 +548,6 @@ export default function ResearcherDashboard() {
     }
   }, [monitorDialogOpen]);
 
-  const handleCopyLink = (studyId) => {
-    const publicUrl = `${window.location.origin}/study/public/${studyId}`;
-
-    // navigator.clipboard is only available in secure contexts (https:// or localhost)
-    if (!navigator.clipboard?.writeText) {
-      setCopyStatus({ studyId, state: 'error' });
-      setTimeout(() => setCopyStatus({ studyId: null, state: 'idle' }), 3000);
-      return;
-    }
-
-    navigator.clipboard.writeText(publicUrl).then(
-      () => { // Success
-        setCopyStatus({ studyId, state: 'copied' });
-        setTimeout(() => setCopyStatus({ studyId: null, state: 'idle' }), 2000);
-      },
-      () => { // Failure
-        setCopyStatus({ studyId, state: 'error' });
-        setTimeout(() => setCopyStatus({ studyId: null, state: 'idle' }), 3000);
-      }
-    );
-  };
-
   const openMonitor = (studyId) => {
     setMonitoringStudyId(studyId);
     setMonitorFilters(createDefaultFilters());
@@ -769,11 +743,8 @@ export default function ResearcherDashboard() {
                     <div className="grid gap-4 lg:grid-cols-2">
                       {displayedStudies.map((study) => {
                         const isHealthAttention = study.health === "attention";
-                        const lastTouch =
+                        const lastTouch = formatTimeAgo(study.lastActivityAt || study.updatedAt || study.createdAt) || "N/A";
                           formatTimeAgo(study.lastActivityAt || study.updatedAt || study.createdAt) || "—";
-                        const isCurrent = copyStatus.studyId === study.id;
-                        const isCopied = isCurrent && copyStatus.state === "copied";
-                        const isError = isCurrent && copyStatus.state === "error";
                         return (
                           <div
                             key={normalizeStudyId(study)}
@@ -840,39 +811,24 @@ export default function ResearcherDashboard() {
                                 </p>
                                 <p className="text-xs text-muted-foreground">Avg participant rating</p>
                               </div>
-                              <div className="space-y-2">
-                                <p className="text-xs text-muted-foreground">Next milestone</p>
-                                <p className="text-sm font-medium">{study.nextMilestone || "Not set"}</p>
-                                <p className="text-xs text-muted-foreground">Window: {study.window || "—"}</p>
-                              </div>
+                            <div className="space-y-2">
+                              <p className="text-xs text-muted-foreground">Next milestone</p>
+                              <p className="text-sm font-medium">{study.nextMilestone || "Not set"}</p>
+                              <p className="text-xs text-muted-foreground">Window: {study.window || "—"}</p>
                             </div>
+                          </div>
 
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                {study.isPublic ? (
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => handleCopyLink(study.id)}
-                                    disabled={isCopied}
-                                  >
-                                    {isCopied ? (
-                                      <Check className="mr-2 h-4 w-4" />
-                                    ) : (
-                                      <Copy className="mr-2 h-4 w-4" />
-                                    )}
-                                    {isCopied ? "Copied!" : isError ? "Copy Failed" : "Copy invite"}
-                                  </Button>
-                                ) : null}
-                                <Button size="sm" variant="outline" onClick={() => navigate("/researcher/study-creation-wizard")}>
-                                  <Plus className="mr-2 h-4 w-4" />
-                                  New study
-                                </Button>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button size="sm" variant="outline" onClick={() => navigate("/researcher/study-creation-wizard")}>
+                                <Plus className="mr-2 h-4 w-4" />
+                                New study
+                              </Button>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="secondary"
                                   onClick={() =>
                                     navigate("/researcher/studies", {
                                       state: { highlightStudyId: String(study.id) },
@@ -1178,7 +1134,8 @@ function StudyMonitorPanel({
             Export PDF
           </Button>
         </div>
-      </div>      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 p-4 text-xs text-muted-foreground">
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 p-4 text-xs text-muted-foreground">
         <span>Live analytics refresh every 30s or on demand.</span>
         <Button variant="ghost" size="sm" onClick={onRefresh}>
           <RefreshCcw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />

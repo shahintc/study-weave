@@ -56,6 +56,7 @@ export default function CompetencyEvaluationReview() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [loadingStates, setLoadingStates] = useState({});
   const [loading, setLoading] = useState(true);
+  const [showAnalytics, setShowAnalytics] = useState(false);
   const [error, setError] = useState(null);
   const [submissionFilter, setSubmissionFilter] = useState("all");
 
@@ -718,201 +719,210 @@ const submissionMax = useMemo(
       <Separator />
 
       <section className="space-y-4">
-        <div>
-          <h2 className="text-2xl font-semibold">Analytics & Charts</h2>
-          <p className="text-sm text-muted-foreground">Trends across submissions for this competency (last 14 days).</p>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="text-2xl font-semibold">Analytics & Charts</h2>
+            <p className="text-sm text-muted-foreground">Trends across submissions for this competency (last 14 days).</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setShowAnalytics((prev) => !prev)}>
+            {showAnalytics ? "Hide analytics" : "Show analytics"}
+          </Button>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <Card>
-            <CardHeader>
-              <CardTitle>Acceptance rate</CardTitle>
-              <CardDescription>Approved vs rejected submissions.</CardDescription>
-            </CardHeader>
-            <CardContent className="flex items-center gap-6">
-              <div
-                className="h-32 w-32 rounded-full"
-                style={{
-                  background: `conic-gradient(#16A34A ${analytics.acceptanceRate}%, #ef4444 0)`,
-                }}
-              />
-              <div className="space-y-1 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="inline-block h-2 w-2 rounded-full bg-green-600"></span>
-                  <span className="text-muted-foreground">Accepted</span>
-                  <span className="font-medium">{analytics.accepted}/{analytics.total}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="inline-block h-2 w-2 rounded-full bg-red-500"></span>
-                  <span className="text-muted-foreground">Rejected</span>
-                  <span className="font-medium">{analytics.total - analytics.accepted}</span>
-                </div>
-                <p className="text-sm font-semibold">{analytics.acceptanceRate}%</p>
-              </div>
-            </CardContent>
-          </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Acceptance over time</CardTitle>
-              <CardDescription>Daily acceptance rate progression.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {analytics.acceptanceTrend.length ? (
-                analytics.acceptanceTrend.map((bucket) => (
-                  <div key={bucket.day} className="flex items-center gap-3">
-                    <div className="w-20 text-xs text-muted-foreground">{bucket.day}</div>
-                    <div className="flex-1 h-2 rounded-full bg-muted">
-                      <div
-                        className="h-2 rounded-full bg-indigo-500"
-                        style={{ width: `${Math.min(bucket.rate, 100)}%` }}
-                      />
-                    </div>
-                    <span className="text-xs text-muted-foreground w-10 text-right">{bucket.rate}%</span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground">Not enough data.</p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Submissions per day (14d)</CardTitle>
-              <CardDescription>Volume of submissions each day.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {analytics.submissionTrend.length ? (
-                analytics.submissionTrend.map((bucket) => (
-                  <div key={bucket.day} className="flex items-center gap-3">
-                    <div className="w-20 text-xs text-muted-foreground">{bucket.day}</div>
-                    <div className="flex-1 h-2 rounded-full bg-muted">
-                      <div
-                        className="h-2 rounded-full bg-blue-500"
-                        style={{
-                          width: `${
-                            Math.min((bucket.count / submissionMax) * 100, 100)
-                          }%`,
-                        }}
-                      />
-                    </div>
-                    <span className="text-xs text-muted-foreground w-8 text-right">{bucket.count}</span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground">Not enough data.</p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Score distribution</CardTitle>
-              <CardDescription>MC scores grouped by band.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {analytics.scoreBuckets.length ? (
-                analytics.scoreBuckets.map((bucket) => (
-                  <div key={bucket.label} className="flex items-center gap-3">
-                    <div className="w-20 text-xs text-muted-foreground">{bucket.label}</div>
-                    <div className="flex-1 h-2 rounded-full bg-muted">
-                      <div
-                        className="h-2 rounded-full bg-emerald-500"
-                        style={{
-                          width: `${
-                            Math.min((bucket.count / scoreMax) * 100, 100)
-                          }%`,
-                        }}
-                      />
-                    </div>
-                    <span className="text-xs text-muted-foreground w-8 text-right">{bucket.count}</span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground">No score data yet.</p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Time to complete</CardTitle>
-              <CardDescription>Histogram in 2-minute buckets.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {analytics.timeBuckets.length ? (
-                analytics.timeBuckets.map((bucket) => (
-                  <div key={bucket.label} className="flex items-center gap-3">
-                    <div className="w-20 text-xs text-muted-foreground">{bucket.label}</div>
-                    <div className="flex-1 h-2 rounded-full bg-muted">
-                      <div
-                        className="h-2 rounded-full bg-amber-500"
-                        style={{
-                          width: `${Math.min((bucket.count / timeMax) * 100, 100)}%`,
-                        }}
-                      />
-                    </div>
-                    <span className="text-xs text-muted-foreground w-8 text-right">{bucket.count}</span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground">No timing data yet.</p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Fast flags vs normal</CardTitle>
-              <CardDescription>Breakdown of flagged vs normal submissions.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex items-center justify-between text-sm">
-                <span>Fast flagged</span>
-                <Badge variant="destructive">{analytics.fastFlags}</Badge>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span>Normal</span>
-                <Badge variant="outline">{analytics.normalCount}</Badge>
-              </div>
-              <div className="h-2 rounded-full bg-muted">
+        {showAnalytics ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <Card>
+              <CardHeader>
+                <CardTitle>Acceptance rate</CardTitle>
+                <CardDescription>Approved vs rejected submissions.</CardDescription>
+              </CardHeader>
+              <CardContent className="flex items-center gap-6">
                 <div
-                  className="h-2 rounded-full bg-destructive"
+                  className="h-32 w-32 rounded-full"
                   style={{
-                    width: `${
-                      analytics.total ? Math.min((analytics.fastFlags / analytics.total) * 100, 100) : 0
-                    }%`,
+                    background: `conic-gradient(#16A34A ${analytics.acceptanceRate}%, #ef4444 0)`,
                   }}
                 />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="md:col-span-2">
-            <CardHeader>
-              <CardTitle>Per-question solve rate</CardTitle>
-              <CardDescription>Multiple-choice questions only.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {analytics.perQuestion.length ? (
-                analytics.perQuestion.map((item, idx) => (
-                  <div key={idx} className="flex items-center gap-3">
-                    <div className="w-32 text-xs text-muted-foreground truncate">{item.label}</div>
-                    <div className="flex-1 h-2 rounded-full bg-muted">
-                      <div
-                        className="h-2 rounded-full bg-sky-500"
-                        style={{ width: `${Math.min(item.rate, 100)}%` }}
-                      />
-                    </div>
-                    <span className="text-xs text-muted-foreground w-10 text-right">{item.rate}%</span>
+                <div className="space-y-1 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-2 w-2 rounded-full bg-green-600"></span>
+                    <span className="text-muted-foreground">Accepted</span>
+                    <span className="font-medium">{analytics.accepted}/{analytics.total}</span>
                   </div>
-                ))
-              ) : (
-                <p className="text-sm text-muted-foreground">No question-level data available.</p>
-              )}
-            </CardContent>
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block h-2 w-2 rounded-full bg-red-500"></span>
+                    <span className="text-muted-foreground">Rejected</span>
+                    <span className="font-medium">{analytics.total - analytics.accepted}</span>
+                  </div>
+                  <p className="text-sm font-semibold">{analytics.acceptanceRate}%</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Acceptance over time</CardTitle>
+                <CardDescription>Daily acceptance rate progression.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {analytics.acceptanceTrend.length ? (
+                  analytics.acceptanceTrend.map((bucket) => (
+                    <div key={bucket.day} className="flex items-center gap-3">
+                      <div className="w-20 text-xs text-muted-foreground">{bucket.day}</div>
+                      <div className="flex-1 h-2 rounded-full bg-muted">
+                        <div
+                          className="h-2 rounded-full bg-indigo-500"
+                          style={{ width: `${Math.min(bucket.rate, 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground w-10 text-right">{bucket.rate}%</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">Not enough data.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Submissions per day (14d)</CardTitle>
+                <CardDescription>Volume of submissions each day.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {analytics.submissionTrend.length ? (
+                  analytics.submissionTrend.map((bucket) => (
+                    <div key={bucket.day} className="flex items-center gap-3">
+                      <div className="w-20 text-xs text-muted-foreground">{bucket.day}</div>
+                      <div className="flex-1 h-2 rounded-full bg-muted">
+                        <div
+                          className="h-2 rounded-full bg-blue-500"
+                          style={{
+                            width: `${Math.min((bucket.count / submissionMax) * 100, 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground w-8 text-right">{bucket.count}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">Not enough data.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Score distribution</CardTitle>
+                <CardDescription>MC scores grouped by band.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {analytics.scoreBuckets.length ? (
+                  analytics.scoreBuckets.map((bucket) => (
+                    <div key={bucket.label} className="flex items-center gap-3">
+                      <div className="w-20 text-xs text-muted-foreground">{bucket.label}</div>
+                      <div className="flex-1 h-2 rounded-full bg-muted">
+                        <div
+                          className="h-2 rounded-full bg-emerald-500"
+                          style={{
+                            width: `${Math.min((bucket.count / scoreMax) * 100, 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground w-8 text-right">{bucket.count}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">No score data yet.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Time to complete</CardTitle>
+                <CardDescription>Histogram in 2-minute buckets.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {analytics.timeBuckets.length ? (
+                  analytics.timeBuckets.map((bucket) => (
+                    <div key={bucket.label} className="flex items-center gap-3">
+                      <div className="w-20 text-xs text-muted-foreground">{bucket.label}</div>
+                      <div className="flex-1 h-2 rounded-full bg-muted">
+                        <div
+                          className="h-2 rounded-full bg-amber-500"
+                          style={{
+                            width: `${Math.min((bucket.count / timeMax) * 100, 100)}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground w-8 text-right">{bucket.count}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">No timing data yet.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Fast flags vs normal</CardTitle>
+                <CardDescription>Breakdown of flagged vs normal submissions.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-center justify-between text-sm">
+                  <span>Fast flagged</span>
+                  <Badge variant="destructive">{analytics.fastFlags}</Badge>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span>Normal</span>
+                  <Badge variant="outline">{analytics.normalCount}</Badge>
+                </div>
+                <div className="h-2 rounded-full bg-muted">
+                  <div
+                    className="h-2 rounded-full bg-destructive"
+                    style={{
+                      width: `${analytics.total ? Math.min((analytics.fastFlags / analytics.total) * 100, 100) : 0}%`,
+                    }}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="md:col-span-2">
+              <CardHeader>
+                <CardTitle>Per-question solve rate</CardTitle>
+                <CardDescription>Multiple-choice questions only.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {analytics.perQuestion.length ? (
+                  analytics.perQuestion.map((item, idx) => (
+                    <div key={idx} className="flex items-center gap-3">
+                      <div className="w-32 text-xs text-muted-foreground truncate">{item.label}</div>
+                      <div className="flex-1 h-2 rounded-full bg-muted">
+                        <div
+                          className="h-2 rounded-full bg-sky-500"
+                          style={{ width: `${Math.min(item.rate, 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground w-10 text-right">{item.rate}%</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">No question-level data available.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        ) : (
+          <Card>
+            <CardHeader>
+              <CardTitle>Analytics hidden</CardTitle>
+              <CardDescription>Charts are hidden by default. Click “Show analytics” to view.</CardDescription>
+            </CardHeader>
           </Card>
-        </div>
+        )}
       </section>
 
       {/* Review Dialog */}

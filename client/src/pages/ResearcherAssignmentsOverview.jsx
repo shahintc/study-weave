@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const COMPETENCY_ASSIGNMENTS = [
   {
@@ -78,6 +79,8 @@ const PARTICIPANT_PIPELINE = [
 ];
 
 export default function ResearcherAssignmentsOverview() {
+  const [scoreRange, setScoreRange] = useState("all");
+
   const totals = useMemo(() => {
     const totalAssigned = COMPETENCY_ASSIGNMENTS.reduce(
       (sum, assignment) => sum + assignment.participants,
@@ -90,6 +93,22 @@ export default function ResearcherAssignmentsOverview() {
     );
     return { totalAssigned, approved, awaitingReview };
   }, []);
+
+  const filteredPipeline = useMemo(() => {
+    const matchesRange = (score, range) => {
+      if (range === "all") return true;
+      const numeric = Number(score);
+      if (!Number.isFinite(numeric)) return false;
+      if (range === "0-59") return numeric < 60;
+      if (range === "60-79") return numeric >= 60 && numeric < 80;
+      if (range === "80-100") return numeric >= 80;
+      return true;
+    };
+
+    return [...PARTICIPANT_PIPELINE]
+      .filter((participant) => matchesRange(participant.score, scoreRange))
+      .sort((a, b) => Number(b.score) - Number(a.score));
+  }, [scoreRange]);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6 p-6 md:p-10">
@@ -190,11 +209,26 @@ export default function ResearcherAssignmentsOverview() {
           })}
         </CardContent>
       </Card>
-
       <Card>
-        <CardHeader>
-          <CardTitle>Participant pipeline</CardTitle>
-          <CardDescription>See who has passed competency checks and where they’re headed.</CardDescription>
+        <CardHeader className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <CardTitle>Participant pipeline</CardTitle>
+            <CardDescription>See who has passed competency checks and where they're headed.</CardDescription>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Score range</span>
+            <Select value={scoreRange} onValueChange={setScoreRange}>
+              <SelectTrigger className="h-8 w-32">
+                <SelectValue placeholder="All scores" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All scores</SelectItem>
+                <SelectItem value="80-100">80-100</SelectItem>
+                <SelectItem value="60-79">60-79</SelectItem>
+                <SelectItem value="0-59">Below 60</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </CardHeader>
         <CardContent>
           <Table>
@@ -212,7 +246,7 @@ export default function ResearcherAssignmentsOverview() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {PARTICIPANT_PIPELINE.map((participant) => (
+              {filteredPipeline.map((participant) => (
                 <TableRow key={participant.id}>
                   <TableCell className="font-medium">{participant.name}</TableCell>
                   <TableCell>{participant.segment}</TableCell>

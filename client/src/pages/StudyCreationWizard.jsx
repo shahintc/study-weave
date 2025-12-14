@@ -38,7 +38,7 @@ const WIZARD_STEPS = [
   { id: 0, label: "Study details", helper: "Title, description, window" },
   { id: 1, label: "Artifacts", helper: "Pick or upload artifacts" },
   { id: 2, label: "Competency gate", helper: "Choose quiz + targeting" },
-  { id: 3, label: "Launch", helper: "Review + send invites" },
+  { id: 3, label: "Launch", helper: "Review and launch" },
 ];
 
 const DEFAULT_CRITERIA = [];
@@ -969,7 +969,7 @@ function StudyCreationWizard() {
                   </Label>
                 </div>
                 <p className="text-xs text-muted-foreground pl-6">
-                  Guests can access this study via a public link without creating an account.
+                  Guests can discover and join from the public studies board; no invitation link is generated.
                 </p>
               </div>
               <div className="space-y-2 rounded-md border p-4">
