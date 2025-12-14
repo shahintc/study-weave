@@ -31,6 +31,7 @@ const STATUS_OPTIONS = [
   { value: "in_review", label: "In review" },
   { value: "resolved", label: "Resolved" },
 ];
+const HIDDEN_FILTER_VALUE = "__hidden__";
 
 const DECISION_OPTIONS = [
   { value: "participant_correct", label: "Participant correct" },
@@ -200,7 +201,14 @@ export default function ReviewerAdjudication() {
   const [adjudications, setAdjudications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [filters, setFilters] = useState({ status: "all", studyId: "all" });
+  const [filters, setFilters] = useState({
+    status: "all",
+    studyId: "all",
+    sortBy: "newest",
+    participantType: "all",
+    showHidden: false,
+  });
+  const [hiddenIds, setHiddenIds] = useState([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [decisionForm, setDecisionForm] = useState({
@@ -224,6 +232,7 @@ export default function ReviewerAdjudication() {
     primary: { text: "", loading: false, error: "" },
     secondary: { text: "", loading: false, error: "" },
   });
+  const [visibleCount, setVisibleCount] = useState(10);
   const [pendingEvaluationId, setPendingEvaluationId] = useState(() => {
     const stateId = location.state?.openEvaluationId;
     return stateId ? String(stateId) : null;
@@ -244,6 +253,19 @@ export default function ReviewerAdjudication() {
       navigate(location.pathname, { replace: true });
     }
   }, [location.state, location.pathname, navigate]);
+
+  useEffect(() => {
+    setVisibleCount(10);
+  }, [
+    filters.status,
+    filters.studyId,
+    filters.sortBy,
+    filters.participantType,
+    filters.showHidden,
+    adjudications,
+    hiddenIds,
+  ]);
+
   const hasSubmittedNote = useMemo(() => {
     if (!isReviewer || !selected || !user?.id) return false;
     const comments = Array.isArray(selected.review?.comments) ? selected.review.comments : [];
@@ -398,7 +420,7 @@ export default function ReviewerAdjudication() {
       if (filters.status) {
         params.append("status", filters.status);
       }
-      if (filters.studyId && filters.studyId !== "all") {
+      if (filters.studyId && filters.studyId !== "all" && filters.studyId !== HIDDEN_FILTER_VALUE) {
         params.append("studyId", filters.studyId);
       }
       const query = params.toString();
@@ -466,6 +488,56 @@ export default function ReviewerAdjudication() {
       { pending: 0, in_review: 0, resolved: 0 }
     );
   }, [adjudications]);
+
+  const filteredAdjudications = useMemo(() => {
+    let list = adjudications;
+    if (filters.participantType === "guest") {
+      list = list.filter((entry) => {
+        const participant = entry?.participant || {};
+        const role = String(participant.role || "").toLowerCase();
+        const email = String(participant.email || "");
+        return participant.isGuest === true || role === "guest" || /guest/i.test(email);
+      });
+    }
+    const effectiveShowHidden = filters.showHidden || filters.studyId === HIDDEN_FILTER_VALUE;
+    if (!effectiveShowHidden) {
+      list = list.filter((entry) => !hiddenIds.includes(String(entry.id)));
+    }
+    if (filters.studyId === HIDDEN_FILTER_VALUE) {
+      list = list.filter((entry) => hiddenIds.includes(String(entry.id)));
+    }
+    return list;
+  }, [adjudications, filters.participantType, filters.showHidden, filters.studyId, hiddenIds]);
+
+  const sortedAdjudications = useMemo(() => {
+    const resolveTimestamp = (entry) => {
+      const candidate =
+        entry?.submittedAt ||
+        entry?.participantAnswer?.submittedAt ||
+        entry?.participantAnswer?.createdAt ||
+        entry?.createdAt ||
+        entry?.review?.createdAt;
+      const date = candidate ? new Date(candidate) : null;
+      return date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
+    };
+    const resolveName = (entry) => {
+      const participant = entry?.participant || {};
+      return String(participant.name || participant.email || "").toLowerCase();
+    };
+    const list = [...filteredAdjudications];
+    if (filters.sortBy === "oldest") {
+      return list.sort((a, b) => resolveTimestamp(a) - resolveTimestamp(b));
+    }
+    if (filters.sortBy === "name") {
+      return list.sort((a, b) => resolveName(a).localeCompare(resolveName(b)) || resolveTimestamp(b) - resolveTimestamp(a));
+    }
+    return list.sort((a, b) => resolveTimestamp(b) - resolveTimestamp(a));
+  }, [filteredAdjudications, filters.sortBy]);
+
+  const visibleAdjudications = useMemo(
+    () => sortedAdjudications.slice(0, visibleCount),
+    [sortedAdjudications, visibleCount],
+  );
 
   const openDialog = (entry) => {
     setSelected(entry);
@@ -718,6 +790,15 @@ export default function ReviewerAdjudication() {
 
   const handleRefresh = () => fetchAdjudications();
 
+  const handleShowMore = () => {
+    setVisibleCount((prev) => Math.min(prev + 5, sortedAdjudications.length));
+  };
+
+  const handleHideRow = (id) => {
+    const key = String(id);
+    setHiddenIds((prev) => (prev.includes(key) ? prev : [...prev, key]));
+  };
+
   const handleDeleteNote = useCallback(
     async (noteId) => {
       if (!selected || !authToken || !noteId) return;
@@ -773,8 +854,9 @@ export default function ReviewerAdjudication() {
     );
   }
 
-  const hasRows = adjudications.length > 0;
+  const hasRows = sortedAdjudications.length > 0;
   const selectedParticipantDisplay = selected ? getParticipantDisplayMeta(selected) : null;
+  const canShowMore = visibleCount < sortedAdjudications.length;
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6 p-6 md:p-10">
@@ -813,8 +895,8 @@ export default function ReviewerAdjudication() {
           <CardTitle>Filters</CardTitle>
           <CardDescription>Narrow the queue to the study or status you care about.</CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4 md:flex-row">
-          <div className="flex flex-col gap-2 w-full md:w-1/3">
+        <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="flex flex-col gap-2">
             <label className="text-sm font-medium">Review status</label>
             <Select value={filters.status} onValueChange={(value) => setFilters((prev) => ({ ...prev, status: value }))}>
               <SelectTrigger className="w-full">
@@ -829,22 +911,60 @@ export default function ReviewerAdjudication() {
               </SelectContent>
             </Select>
           </div>
-          <div className="flex flex-col gap-2 w-full md:w-1/3">
+          <div className="flex flex-col gap-2">
             <label className="text-sm font-medium">Study</label>
             <Select
               value={filters.studyId}
-              onValueChange={(value) => setFilters((prev) => ({ ...prev, studyId: value }))}
+              onValueChange={(value) =>
+                setFilters((prev) => ({
+                  ...prev,
+                  studyId: value,
+                  showHidden: value === HIDDEN_FILTER_VALUE ? true : prev.showHidden,
+                }))
+              }
             >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder="All studies" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All studies</SelectItem>
+                <SelectItem value={HIDDEN_FILTER_VALUE}>Hidden rows</SelectItem>
                 {studyOptions.map((option) => (
                   <SelectItem key={option.id} value={option.id}>
                     {option.title}
                   </SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium">Sort by</label>
+            <Select
+              value={filters.sortBy}
+              onValueChange={(value) => setFilters((prev) => ({ ...prev, sortBy: value }))}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Sort order" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="newest">Submission time (newest first)</SelectItem>
+                <SelectItem value="oldest">Submission time (oldest first)</SelectItem>
+                <SelectItem value="name">Participant name (A-Z)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium">Participant</label>
+            <Select
+              value={filters.participantType}
+              onValueChange={(value) => setFilters((prev) => ({ ...prev, participantType: value }))}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="All participants" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All participants</SelectItem>
+                <SelectItem value="guest">Guest users only</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -878,15 +998,17 @@ export default function ReviewerAdjudication() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {adjudications.map((entry) => {
+                {visibleAdjudications.map((entry) => {
                   const participantDisplay = getParticipantDisplayMeta(entry);
+                  const isHidden = hiddenIds.includes(String(entry.id));
                   return (
-                    <TableRow key={entry.id}>
+                    <TableRow key={entry.id} className={isHidden ? "opacity-60" : ""}>
                       <TableCell className="font-medium">
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-2">
                             <span>{participantDisplay.name}</span>
                             {participantDisplay.isBlinded ? <Badge variant="outline">Blinded</Badge> : null}
+                            {isHidden ? <Badge variant="secondary">Hidden</Badge> : null}
                           </div>
                           <p className="text-xs text-muted-foreground">{participantDisplay.email}</p>
                         </div>
@@ -900,16 +1022,36 @@ export default function ReviewerAdjudication() {
                       <TableCell>{getStatusBadge(entry.review?.status)}</TableCell>
                       <TableCell>{getDecisionBadge(entry.review?.decision)}</TableCell>
                       <TableCell className="text-right">
-                        <Button variant="outline" size="sm" onClick={() => openDialog(entry)}>
-                          <Eye className="mr-2 h-4 w-4" />
-                          Review
-                        </Button>
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" size="sm" onClick={() => openDialog(entry)}>
+                            <Eye className="mr-2 h-4 w-4" />
+                            Review
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive"
+                            onClick={() => handleHideRow(entry.id)}
+                          >
+                            Hide
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
                 })}
               </TableBody>
             </Table>
+            <div className="flex items-center justify-between pt-4">
+              <p className="text-xs text-muted-foreground">
+                Showing {Math.min(visibleCount, sortedAdjudications.length)} of {sortedAdjudications.length}
+              </p>
+              {canShowMore ? (
+                <Button variant="ghost" size="sm" onClick={handleShowMore}>
+                  Show more
+                </Button>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
       )}
