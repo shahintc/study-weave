@@ -78,7 +78,7 @@ const questionSchema = z
 
 const assessmentSchema = z.object({
   title: z.string().min(5, { message: "Assessment title must be at least 5 characters." }),
-  description: z.string().min(20, { message: "Provide a short description (20+ chars)." }),
+  description: z.string().min(1, { message: "Provide a short description." }),
   duration: z.string().regex(/^\d+$/, { message: "Duration must be a number (in minutes)." }),
   passingThreshold: z.string().regex(/^\d+$/, { message: "Threshold must be a number (percentage)." }),
   instructions: z.string().min(20, { message: "Share instructions for participants (20+ chars)." }),

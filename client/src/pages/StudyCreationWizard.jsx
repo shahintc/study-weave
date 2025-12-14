@@ -197,6 +197,14 @@ function StudyCreationWizard() {
   }, [user]);
 
   useEffect(() => {
+    if (!isPublic) {
+      return;
+    }
+    setSelectedParticipants([]);
+    setAutoInvite(false);
+  }, [isPublic]);
+
+  useEffect(() => {
     if (studyMode === "snapshot") {
       if (!wasSnapshotModeRef.current) {
         wasSnapshotModeRef.current = true;
@@ -415,6 +423,9 @@ function StudyCreationWizard() {
       studyMode === "custom"
         ? Array.from(new Set(selectedArtifacts)).slice(0, 5)
         : [];
+    const selectedArtifactIds = Array.from(new Set(selectedArtifacts));
+    const participantIdsForPayload = isPublic ? [] : selectedParticipants;
+    const autoInviteFlag = isPublic ? false : autoInvite;
 
     const payload = {
       title,
@@ -427,6 +438,8 @@ function StudyCreationWizard() {
       timelineStart: windowStart || null,
       timelineEnd: windowEnd || null,
       defaultArtifactMode: studyMode,
+      autoInvite: autoInviteFlag,
+      selectedParticipants: participantIdsForPayload,
       metadata: {
         participantTarget: Number(participantTarget) || 0,
         windowStart,
@@ -435,9 +448,9 @@ function StudyCreationWizard() {
         requireAssessment,
         selectedAssessment: requireAssessment ? selectedAssessment : null,
         selectedSegment: requireAssessment ? selectedSegment : null,
-        autoInvite,
-        selectedArtifacts: Array.from(new Set(selectedArtifacts)),
-        selectedParticipants,
+        autoInvite: autoInviteFlag,
+        selectedArtifacts: selectedArtifactIds,
+        selectedParticipants: participantIdsForPayload,
         isPublic,
         isBlinded,
         defaultArtifactMode: studyMode,
@@ -463,6 +476,8 @@ function StudyCreationWizard() {
     }
   };
 
+  const participantSelectionDisabled = isPublic;
+
   const filteredParticipants = useMemo(() => {
     const list = Array.isArray(participants) ? participants : [];
     if (!participantSearch.trim()) {
@@ -481,6 +496,9 @@ function StudyCreationWizard() {
   }, [participantSearch, participants]);
 
   const toggleParticipant = (participantId) => {
+    if (isPublic) {
+      return;
+    }
     setSelectedParticipants((prev) =>
       prev.includes(participantId)
         ? prev.filter((id) => id !== participantId)
@@ -489,6 +507,9 @@ function StudyCreationWizard() {
   };
 
   const selectAllParticipants = () => {
+    if (isPublic) {
+      return;
+    }
     const everyId = participants.map((participant) => participant.id);
     setSelectedParticipants(everyId);
   };
@@ -1121,8 +1142,10 @@ function StudyCreationWizard() {
                     <Label>Select participants</Label>
                     <p className="text-xs text-muted-foreground">
                       {isParticipantsLoading
-                        ? "Loading participants…"
-                        : `${selectedParticipants.length} selected • showing everyone tied to your competency quizzes.`}
+                        ? "Loading participants..."
+                        : participantSelectionDisabled
+                        ? "Public studies are open enrollment. Invitations are disabled."
+                        : `${selectedParticipants.length} selected - showing everyone tied to your competency quizzes.`}
                     </p>
                   </div>
                   <Button
@@ -1130,17 +1153,23 @@ function StudyCreationWizard() {
                     variant="ghost"
                     size="sm"
                     onClick={selectAllParticipants}
-                    disabled={!participants.length}
+                    disabled={participantSelectionDisabled || !participants.length}
                   >
                     Select all
                   </Button>
                 </div>
 
+                {participantSelectionDisabled ? (
+                  <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+                    Public studies disable manual invites. Participants can self-enroll from their dashboards.
+                  </div>
+                ) : null}
+
                 <Input
                   placeholder="Search by name or assessment"
                   value={participantSearch}
                   onChange={(event) => setParticipantSearch(event.target.value)}
-                  disabled={!participants.length}
+                  disabled={participantSelectionDisabled || !participants.length}
                 />
 
                 {participantsError ? <p className="text-xs text-destructive">{participantsError}</p> : null}
@@ -1241,7 +1270,12 @@ function StudyCreationWizard() {
                 </div>
               </div>
               <div className="flex items-center space-x-2">
-                <Checkbox id="auto-invite" checked={autoInvite} onCheckedChange={setAutoInvite} />
+                <Checkbox
+                  id="auto-invite"
+                  checked={autoInvite}
+                  onCheckedChange={setAutoInvite}
+                  disabled={participantSelectionDisabled}
+                />
                 <Label htmlFor="auto-invite" className="font-normal">
                   Auto-invite participants who pass the quiz
                 </Label>

@@ -153,9 +153,10 @@ async function buildPanePayload(studyArtifactEntry, role = 'primary') {
 
 router.post('/join-public', authMiddleware, async (req, res) => {
   try {
-    if (!req.user || req.user.role !== 'guest') {
-      return res.status(403).json({ message: 'Only guest users can join public studies.' });
+    if (!req.user || !['guest', 'participant'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only participants and guests can join public studies.' });
     }
+    const isGuest = req.user.role === 'guest';
     const studyId = Number(req.body.studyId);
     if (!Number.isFinite(studyId)) {
       return res.status(400).json({ message: 'A valid studyId is required.' });
@@ -182,10 +183,24 @@ router.post('/join-public', authMiddleware, async (req, res) => {
       return res.status(403).json({ message: 'This study has already ended.' });
     }
 
-    const existing = await StudyParticipant.findOne({
-      where: { studyId, participantId: req.user.id },
-    });
+    const existing = await StudyParticipant.findOne({ where: { studyId, participantId: req.user.id } });
     if (existing) {
+      const needsAcceptance = existing.invitationStatus !== 'accepted';
+      const pendingGuestMeta = isGuest
+        ? {
+            source: existing.source || 'public_guest',
+            guestSessionId: req.user.guestSessionId || existing.guestSessionId || null,
+            expiresAt: req.user.guestExpiresAt
+              ? new Date(req.user.guestExpiresAt)
+              : existing.expiresAt || null,
+          }
+        : {};
+      if (needsAcceptance) {
+        await existing.update({
+          invitationStatus: 'accepted',
+          ...pendingGuestMeta,
+        });
+      }
       return res.json({ participant: existing.get ? existing.get({ plain: true }) : existing });
     }
 
@@ -207,16 +222,16 @@ router.post('/join-public', authMiddleware, async (req, res) => {
       participantId: req.user.id,
       competencyAssignmentId: null,
       invitationStatus: 'accepted',
-      participationStatus: 'in_progress',
+      participationStatus: 'not_started',
       progressPercent: 0,
-      startedAt: new Date(),
+      startedAt: isGuest ? new Date() : null,
       completedAt: null,
       lastCheckpoint: null,
       nextArtifactMode: defaultMode,
       nextStudyArtifactId: nextArtifact.id,
-      source: 'public_guest',
-      guestSessionId: req.user.guestSessionId || null,
-      expiresAt: req.user.guestExpiresAt ? new Date(req.user.guestExpiresAt) : null,
+      source: isGuest ? 'public_guest' : 'invited',
+      guestSessionId: isGuest ? req.user.guestSessionId || null : null,
+      expiresAt: isGuest && req.user.guestExpiresAt ? new Date(req.user.guestExpiresAt) : null,
     });
 
     return res.status(201).json({
