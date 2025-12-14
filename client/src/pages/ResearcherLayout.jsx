@@ -447,9 +447,9 @@ function NavRail({ nav = [], activePath = "", roleLabel = "Researcher", userName
       <div className="space-y-1">
         {nav.map((item) => {
           const Icon = iconMap[item.to] || LayoutDashboard;
-          const isActive =
-            activePath === item.to ||
-            activePath.startsWith(`${item.to}/`);
+          const matchesExact = activePath === item.to;
+          const matchesNested = item.to !== "/researcher" && activePath.startsWith(`${item.to}/`);
+          const isActive = matchesExact || matchesNested;
           return (
             <Link
               key={item.to}
