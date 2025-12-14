@@ -21,6 +21,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+
+const parseEstimatedSeconds = (value) => {
+  if (!value) return null;
+  const match = String(value).match(/(\d+)/);
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  return Number.isFinite(minutes) ? minutes * 60 : null;
+};
 
 export default function ParticipantLayout() {
   const navigate = useNavigate();
@@ -29,6 +38,8 @@ export default function ParticipantLayout() {
   const [avatarUrl, setAvatarUrl] = useState("");
   const [notificationCount, setNotificationCount] = useState(0);
   const [notifications, setNotifications] = useState([]);
+  const [resumeChip, setResumeChip] = useState(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
 
   const refreshNotifications = useCallback(async () => {
     if (!user || user.role !== "participant") return;
@@ -109,6 +120,40 @@ export default function ParticipantLayout() {
   }, []);
 
   useEffect(() => {
+    const syncActive = () => {
+      try {
+        const raw = window.localStorage.getItem("competencyActive");
+        if (!raw) {
+          setResumeChip(null);
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        if (parsed?.assignmentId) {
+          setResumeChip({
+            assignmentId: parsed.assignmentId,
+            title: parsed.title || "Competency",
+            estimatedTime: parsed.estimatedTime || "",
+            startedAt: parsed.startedAt || null,
+            durationSeconds: parsed.durationSeconds || null,
+          });
+        } else {
+          setResumeChip(null);
+        }
+      } catch {
+        setResumeChip(null);
+      }
+    };
+    syncActive();
+    const handler = () => syncActive();
+    window.addEventListener("storage", handler);
+    window.addEventListener("competency-active-changed", handler);
+    return () => {
+      window.removeEventListener("storage", handler);
+      window.removeEventListener("competency-active-changed", handler);
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     const run = async () => {
       if (cancelled) return;
@@ -119,6 +164,36 @@ export default function ParticipantLayout() {
       cancelled = true;
     };
   }, [location.pathname, refreshNotifications]);
+
+  useEffect(() => {
+    // Keep resume chip fresh on route changes within participant area
+    try {
+      const raw = window.localStorage.getItem("competencyActive");
+      if (!raw) {
+        setResumeChip(null);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (parsed?.assignmentId) {
+        setResumeChip({
+          assignmentId: parsed.assignmentId,
+          title: parsed.title || "Competency",
+          estimatedTime: parsed.estimatedTime || "",
+          startedAt: parsed.startedAt || null,
+          durationSeconds: parsed.durationSeconds || null,
+        });
+      } else {
+        setResumeChip(null);
+      }
+    } catch {
+      setResumeChip(null);
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const tick = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, []);
 
   useEffect(() => {
     const readCount = () => {
@@ -165,6 +240,41 @@ export default function ParticipantLayout() {
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-6 space-y-6">
+      {resumeChip && location.pathname !== "/participant/competency" ? (() => {
+        const durationSeconds =
+          resumeChip.durationSeconds || parseEstimatedSeconds(resumeChip.estimatedTime);
+        const remainingSeconds =
+          durationSeconds && resumeChip.startedAt
+            ? Math.max(durationSeconds - Math.floor((nowTs - resumeChip.startedAt) / 1000), 0)
+            : null;
+        return (
+        <div className="fixed bottom-5 left-5 z-40 flex items-center gap-3 rounded-full border border-amber-200 bg-amber-50 px-4 py-3 shadow-lg">
+          <div className="flex flex-col">
+            <span className="text-[11px] uppercase tracking-wide text-amber-700">Active competency</span>
+            <span className="text-sm font-semibold text-amber-900 truncate max-w-[220px]">
+              {resumeChip.title}
+            </span>
+          </div>
+          {Number.isFinite(remainingSeconds) ? (
+            <Badge variant="outline" className="bg-white text-amber-800 border-amber-300">
+              {Math.max(Math.floor(remainingSeconds / 60), 0)}m left
+            </Badge>
+          ) : (
+            <Badge variant="outline" className="bg-white text-amber-800 border-amber-300">
+              Resume
+            </Badge>
+          )}
+          <Button
+            size="sm"
+            variant="secondary"
+            className="h-8"
+            onClick={() => navigate("/participant/competency")}
+            aria-label="Return to active competency"
+          >
+            Open
+          </Button>
+        </div>
+      )})() : null}
       <header className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">
           Study Weave ({isGuest ? "Guest Participant" : "Participant"})

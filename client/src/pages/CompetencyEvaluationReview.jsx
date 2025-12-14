@@ -24,10 +24,32 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { AlertCircle, Check, X, Eye, Download, Percent, Clock } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+
+const parseEstimatedSeconds = (value) => {
+  if (value === null || value === undefined) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    // Heuristic: values already in seconds are usually > 5 minutes (300s).
+    // Treat larger numbers as seconds to avoid multiplying twice.
+    return numeric > 300 ? Math.round(numeric) : Math.round(numeric * 60);
+  }
+  const match = String(value).match(/(\d+)/);
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  return Number.isFinite(minutes) ? Math.round(minutes * 60) : null;
+};
+
+const resolveEstimatedSeconds = (assignment) => {
+  const explicit = Number(assignment?.estimatedTimeSeconds);
+  if (Number.isFinite(explicit)) return explicit;
+  return parseEstimatedSeconds(assignment?.estimatedTime);
+};
 
 export default function CompetencyEvaluationReview() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [assessments, setAssessments] = useState([]);
   const [assignmentStatuses, setAssignmentStatuses] = useState([]);
   const [selectedAssignment, setSelectedAssignment] = useState(null);
@@ -113,7 +135,21 @@ export default function CompetencyEvaluationReview() {
   }, [pendingAssignmentId, assessments]);
 
   const groupByAssessment = (assignments) => {
-    const fullySubmitted = assignments.filter((assignment) => {
+    const enriched = assignments.map((assignment) => {
+      const estimated = resolveEstimatedSeconds(assignment);
+      const threshold = estimated ? estimated * 0.3 : null;
+      const flagged =
+        threshold && Number.isFinite(assignment.timeTakenSeconds) && assignment.timeTakenSeconds > 0
+          ? assignment.timeTakenSeconds < threshold
+          : false;
+      return {
+        ...assignment,
+        estimatedTimeSeconds: estimated,
+        isFlaggedFast: flagged,
+      };
+    });
+
+    const fullySubmitted = enriched.filter((assignment) => {
       const hasResponses = assignment.responses && Object.keys(assignment.responses).length > 0;
       const status = (assignment.status || '').toLowerCase();
       return status === 'submitted' && hasResponses;
@@ -158,16 +194,19 @@ export default function CompetencyEvaluationReview() {
 
       await loadAssignments();
       setIsDialogOpen(false);
-      alert(
-        decision === "approved"
-          ? "Participant approved. Decision stored."
-          : "Participant rejected. Decision stored."
-      );
+      toast({
+        title: decision === "approved" ? "Participant approved" : "Participant rejected",
+        description: "Decision stored successfully.",
+      });
     } catch (err) {
       console.error("Error recording decision:", err);
       const fallbackMessage =
         err.response?.data?.message || "Failed to record decision. Please try again.";
-      alert(fallbackMessage);
+      toast({
+        title: "Unable to record decision",
+        description: fallbackMessage,
+        variant: "destructive",
+      });
     } finally {
       setLoadingStates((prev) => ({
         ...prev,
@@ -458,6 +497,7 @@ export default function CompetencyEvaluationReview() {
                       <TableHead>Email</TableHead>
                       <TableHead>Submitted</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Flag</TableHead>
                       <TableHead>MC Score</TableHead>
                       <TableHead>Time Taken</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
@@ -474,6 +514,13 @@ export default function CompetencyEvaluationReview() {
                           {formatDateTime(submission.submittedAt)}
                         </TableCell>
                         <TableCell>{getStatusBadge(submission)}</TableCell>
+                        <TableCell>
+                          {submission.isFlaggedFast ? (
+                            <Badge variant="destructive" className="text-xs">Fast</Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-xs text-muted-foreground">Normal</Badge>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1 text-sm">
                             <Percent className="h-3.5 w-3.5 text-muted-foreground" />
@@ -559,6 +606,9 @@ export default function CompetencyEvaluationReview() {
                       <p className="text-base">
                         {formatTimeTaken(selectedAssignment.timeTakenSeconds)} / {formatTimeTaken(selectedAssignment.estimatedTimeSeconds)}
                       </p>
+                      {selectedAssignment.isFlaggedFast ? (
+                        <Badge variant="destructive" className="mt-1 text-xs">Flagged: unusually fast</Badge>
+                      ) : null}
                     </div>
                   </div>
 
@@ -580,10 +630,15 @@ export default function CompetencyEvaluationReview() {
                       {mcQuestions.map((question, index) => {
                         const response = selectedAssignment.responses?.[question.id || index];
                         const correctOption = question.options.find(opt => opt.isCorrect);
+                        const multiCorrectCount = (question.options || []).filter(opt => opt.isCorrect).length;
+                        const typeLabel = multiCorrectCount > 1 ? "Multiple select" : "Single choice";
                         const isCorrect = response === correctOption?.text;
                         return (
                           <div key={question.id || index} className="p-4 border rounded-lg space-y-2">
-                            <p className="font-medium text-sm">Q{index + 1}: {question.title}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="font-medium text-sm">Q{index + 1}: {question.title}</p>
+                              <Badge variant="outline" className="text-[11px]">{typeLabel}</Badge>
+                            </div>
                             <div className={`p-3 rounded text-sm ${isCorrect ? 'bg-green-100' : 'bg-red-100'}`}>
                               <p className="font-semibold">{response || "(No response provided)"}</p>
                               {!isCorrect && correctOption && (

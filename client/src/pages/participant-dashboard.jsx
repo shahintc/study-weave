@@ -161,6 +161,12 @@ export default function ParticipantDashboard() {
   const [publicError, setPublicError] = useState("");
   const [joiningStudyId, setJoiningStudyId] = useState(null);
   const [studyScope, setStudyScope] = useState("all"); // all | public | private
+  const joinedStudyIds = useMemo(() => {
+    const ids = studies
+      .map((study) => Number(study?.studyId || study?.id))
+      .filter((value) => Number.isFinite(value));
+    return new Set(ids);
+  }, [studies]);
   const [visitedStudies, setVisitedStudies] = useState(() => {
     if (typeof window === "undefined") return new Set();
     try {
@@ -177,7 +183,10 @@ export default function ParticipantDashboard() {
   const defaultPreferences = useMemo(
     () => ({
       filters: { study: "all", criteria: "", from: "", to: "" },
-      layout: user?.role === "guest" ? ["public", "assignments"] : ["quickActions", "assignments"],
+      layout:
+        user?.role === "guest"
+          ? ["public", "assignments"]
+          : ["quickActions", "assignments", "public"],
     }),
     [user?.role],
   );
@@ -352,9 +361,7 @@ export default function ParticipantDashboard() {
       return;
     }
     fetchAssignments();
-    if (user.role === "guest") {
-      fetchPublicStudies();
-    }
+    fetchPublicStudies();
   }, [user, authToken, fetchAssignments, fetchPublicStudies]);
 
   useEffect(() => {
@@ -446,6 +453,8 @@ export default function ParticipantDashboard() {
   const noStudiesAfterFilter = !loading && scopedStudies.length === 0 && studies.length > 0;
   const isGuest = user?.role === "guest";
   const layoutWithoutWelcome = useMemo(() => layout.filter((id) => id !== "welcome"), [layout]);
+  const shouldPairPublicWithAssignments =
+    !isGuest && layoutWithoutWelcome.includes("assignments") && layoutWithoutWelcome.includes("public");
 
   const handleJoinPublicStudy = async (studyId) => {
     const token = authToken || localStorage.getItem("token");
@@ -519,9 +528,7 @@ export default function ParticipantDashboard() {
   const handleRefresh = () => {
     if (!loading) {
       fetchAssignments();
-      if (isGuest) {
-        fetchPublicStudies();
-      }
+      fetchPublicStudies();
     }
   };
 
@@ -581,11 +588,15 @@ export default function ParticipantDashboard() {
           </section>
         );
       case "public":
-        if (!isGuest) return null;
         return (
           <section className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold">Available public studies</h2>
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold">Available public studies</h2>
+                <p className="text-xs text-muted-foreground">
+                  Public studies are open to everyone. {isGuest ? "Join as a guest now." : "Enroll without waiting for an invite."}
+                </p>
+              </div>
             </div>
             {publicError ? (
               <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -627,15 +638,27 @@ export default function ParticipantDashboard() {
                   </CardContent>
                   <CardFooter className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div className="text-xs text-muted-foreground">
-                      Guest session expires in 4 hours from login.
+                      {isGuest
+                        ? "Guest session expires in 4 hours from login."
+                        : "Self-serve enrollment — no invite needed."}
                     </div>
-                    <Button
-                      size="sm"
-                      onClick={() => handleJoinPublicStudy(study.id)}
-                      disabled={joiningStudyId === study.id}
-                    >
-                      {joiningStudyId === study.id ? "Joining..." : "Join study"}
-                    </Button>
+                    {(() => {
+                      const alreadyJoined = joinedStudyIds.has(Number(study.id));
+                      return (
+                        <Button
+                          size="sm"
+                          onClick={() => handleJoinPublicStudy(study.id)}
+                          disabled={joiningStudyId === study.id || alreadyJoined}
+                          variant={alreadyJoined ? "outline" : "default"}
+                        >
+                          {alreadyJoined
+                            ? "Already joined"
+                            : joiningStudyId === study.id
+                            ? "Joining..."
+                            : "Join study"}
+                        </Button>
+                      );
+                    })()}
                   </CardFooter>
                 </Card>
               ))
@@ -904,9 +927,32 @@ export default function ParticipantDashboard() {
         </div>
       )}
 
-      {layoutWithoutWelcome.map((widgetId) => (
-        <React.Fragment key={widgetId}>{renderWidget(widgetId)}</React.Fragment>
-      ))}
+      {(() => {
+        if (!shouldPairPublicWithAssignments) {
+          return layoutWithoutWelcome.map((widgetId) => (
+            <React.Fragment key={widgetId}>{renderWidget(widgetId)}</React.Fragment>
+          ));
+        }
+        const rendered = [];
+        let pairedRendered = false;
+        layoutWithoutWelcome.forEach((widgetId) => {
+          if (!pairedRendered && (widgetId === "assignments" || widgetId === "public")) {
+            pairedRendered = true;
+            rendered.push(
+              <div
+                key="assignments-public-grid"
+                className="grid gap-6 lg:grid-cols-[1.6fr_1fr] xl:grid-cols-[1.8fr_1fr]"
+              >
+                <div className="min-w-0">{renderWidget("assignments")}</div>
+                <div className="min-w-0">{renderWidget("public")}</div>
+              </div>,
+            );
+          } else if (widgetId !== "assignments" && widgetId !== "public") {
+            rendered.push(<React.Fragment key={widgetId}>{renderWidget(widgetId)}</React.Fragment>);
+          }
+        });
+        return rendered;
+      })()}
     </div>
   );
 }

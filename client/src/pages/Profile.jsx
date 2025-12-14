@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import axios from "../api/axios";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -45,6 +45,7 @@ const resolveAvatarUrl = (value) => {
 };
 
 export default function Profile() {
+  const location = useLocation();
   const [profile, setProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [error, setError] = useState("");
@@ -58,6 +59,16 @@ export default function Profile() {
   const [avatarUrl, setAvatarUrl] = useState("");
   const [avatarStatus, setAvatarStatus] = useState({ type: "", message: "" });
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [resumeChip, setResumeChip] = useState(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
+
+  const parseEstimatedSeconds = (value) => {
+    if (!value) return null;
+    const match = String(value).match(/(\d+)/);
+    if (!match) return null;
+    const minutes = Number(match[1]);
+    return Number.isFinite(minutes) ? minutes * 60 : null;
+  };
   const [deleteStatus, setDeleteStatus] = useState({ type: "", message: "" });
   const [deletingAccount, setDeletingAccount] = useState(false);
 
@@ -108,6 +119,45 @@ export default function Profile() {
 
   useEffect(() => {
     loadProfile();
+  }, []);
+
+  useEffect(() => {
+    const syncActive = () => {
+      try {
+        const raw = window.localStorage.getItem("competencyActive");
+        if (!raw) {
+          setResumeChip(null);
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        if (parsed?.assignmentId) {
+          setResumeChip({
+            assignmentId: parsed.assignmentId,
+            title: parsed.title || "Competency",
+            estimatedTime: parsed.estimatedTime || "",
+            startedAt: parsed.startedAt || null,
+            durationSeconds: parsed.durationSeconds || null,
+          });
+        } else {
+          setResumeChip(null);
+        }
+      } catch {
+        setResumeChip(null);
+      }
+    };
+    syncActive();
+    const storageHandler = () => syncActive();
+    window.addEventListener("storage", storageHandler);
+    window.addEventListener("competency-active-changed", storageHandler);
+    return () => {
+      window.removeEventListener("storage", storageHandler);
+      window.removeEventListener("competency-active-changed", storageHandler);
+    };
+  }, []);
+
+  useEffect(() => {
+    const tick = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(tick);
   }, []);
 
   const handleAccountSubmit = async (e) => {
@@ -259,6 +309,38 @@ export default function Profile() {
 
   return (
     <div className="min-h-screen bg-muted/20 py-10">
+      {resumeChip ? (() => {
+        const durationSeconds =
+          resumeChip.durationSeconds || parseEstimatedSeconds(resumeChip.estimatedTime);
+        const remainingSeconds =
+          durationSeconds && resumeChip.startedAt
+            ? Math.max(durationSeconds - Math.floor((nowTs - resumeChip.startedAt) / 1000), 0)
+            : null;
+        return (
+          <div className="fixed bottom-5 left-5 z-40 flex items-center gap-3 rounded-full border border-amber-200 bg-amber-50 px-4 py-3 shadow-lg">
+            <div className="flex flex-col">
+              <span className="text-[11px] uppercase tracking-wide text-amber-700">Active competency</span>
+              <span className="text-sm font-semibold text-amber-900 truncate max-w-[220px]">
+                {resumeChip.title}
+              </span>
+            </div>
+            {Number.isFinite(remainingSeconds) ? (
+              <Badge variant="outline" className="bg-white text-amber-800 border-amber-300">
+                {Math.max(Math.floor(remainingSeconds / 60), 0)}m left
+              </Badge>
+            ) : null}
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-8"
+              onClick={() => navigate("/participant/competency")}
+              aria-label="Return to active competency"
+            >
+              Open
+            </Button>
+          </div>
+        );
+      })() : null}
       <div className="mx-auto max-w-5xl space-y-6 px-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
