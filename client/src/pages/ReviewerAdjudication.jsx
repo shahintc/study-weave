@@ -1499,9 +1499,9 @@ export default function ReviewerAdjudication() {
 function StatusTile({ icon, label, value, tone }) {
   const IconComponent = icon;
   const toneClass = {
-    amber: "bg-amber-50 text-amber-700",
-    blue: "bg-blue-50 text-blue-700",
-    green: "bg-emerald-50 text-emerald-700",
+    amber: "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-100",
+    blue: "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-100",
+    green: "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-100",
   }[tone];
 
   return (
@@ -1531,7 +1531,13 @@ function getDecisionBadge(decision) {
     return <Badge variant="outline">Awaiting decision</Badge>;
   }
   const label = DECISION_OPTIONS.find((option) => option.value === decision)?.label || decision;
-  return <Badge className="bg-slate-900">{label}</Badge>;
+  const toneClass = {
+    participant_correct: "bg-emerald-500/15 text-emerald-600 border border-emerald-500/40 dark:bg-emerald-400/15 dark:text-emerald-200 dark:border-emerald-400/40",
+    llm_correct: "bg-blue-500/15 text-blue-600 border border-blue-500/40 dark:bg-blue-400/15 dark:text-blue-200 dark:border-blue-400/40",
+    inconclusive: "bg-amber-500/15 text-amber-700 border border-amber-500/40 dark:bg-amber-400/15 dark:text-amber-100 dark:border-amber-400/40",
+    needs_followup: "bg-rose-500/15 text-rose-700 border border-rose-500/40 dark:bg-rose-400/15 dark:text-rose-100 dark:border-rose-400/40",
+  }[decision] || "bg-primary/15 text-primary border border-primary/30 dark:bg-primary/20 dark:text-primary-foreground";
+  return <Badge className={toneClass}>{label}</Badge>;
 }
 
 function ReviewerCommentsThread({ comments = [], onDelete, canDelete, deletingNoteId }) {
@@ -1551,10 +1557,10 @@ function ReviewerCommentsThread({ comments = [], onDelete, canDelete, deletingNo
         return (
           <div
             key={note.id}
-            className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+            className="rounded-xl border border-border/70 bg-card p-3 shadow-sm"
           >
             <div className="flex items-start gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-900 text-sm font-semibold text-white">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">
                 {initial}
               </div>
               <div className="flex-1 space-y-1">
