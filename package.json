@@ -4,6 +4,7 @@
   "description": "CS319 Project - Artifact Comparator Web App with Human Study Module",
   "main": "index.js",
   "scripts": {
+    "setup": "node configSetup.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -22,5 +23,8 @@
   "bugs": {
     "url": "https://github.com/CS319-25-FA/S1-T9-study-weave/issues"
   },
-  "homepage": "https://github.com/CS319-25-FA/S1-T9-study-weave#readme"
+  "homepage": "https://github.com/CS319-25-FA/S1-T9-study-weave#readme",
+  "dependencies": {
+    "inquirer": "^13.1.0"
+  }
 }

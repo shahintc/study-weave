@@ -34,6 +34,6 @@ app.use('/api/artifact-collections', require('./routes/artifactCollections'));
 
 app.get('/', (req, res) => res.send('Backend ready with PostgreSQL!'));
 
-sequelize.sync({ force: false }).then(() => { // Use { force: true } only in development, it drops existing tables!
+sequelize.sync({ alter: true }).then(() => { // Use { force: true } only in development, it drops existing tables!
   app.listen(port, () => console.log(`Server running on port ${port}`));
 });
