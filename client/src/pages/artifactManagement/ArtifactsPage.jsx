@@ -253,7 +253,7 @@ export default function ResearcherDashboard() {
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon">
+                  <Button variant="outline" size="icon">
                     <IconDotsVertical className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>

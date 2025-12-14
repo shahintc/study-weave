@@ -124,7 +124,7 @@ export function ManageTagsModal({ isOpen, setIsOpen, onClose, currentUserId }) {
         </div>
         {/* New section for adding tags */}
         <div className="px-4 pb-4 border-t pt-4">
-          <div className="flex space-x-2">
+          <div className="flex items-center justify-center space-x-2"> {/* Added items-center here */}
             <Input
               type="text"
               placeholder="New tag name"
