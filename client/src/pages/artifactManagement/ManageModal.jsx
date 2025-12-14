@@ -30,15 +30,17 @@ import {
   DropdownMenuCheckboxItem
 } from "@/components/ui/dropdown-menu";
 import { Plus } from 'lucide-react'; // Consider changing to IconPlus if @tabler/icons-react is preferred
+import { IconEye } from '@tabler/icons-react'; // Import IconEye
 
 // Reusing constants from UploadModal for consistency
 import { cn } from '@/lib/utils'; // Assuming this utility is available in a shadcn project
+import { ViewArtifactModal } from './ViewArtifactModal'; // Import ViewArtifactModal
 
 const MAX_FILE_SIZE_MB = 10; // Match DetailedUploadModal
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const ALLOWED_FILE_TYPES = ['text/plain', 'image/png', 'application/pdf']; // Mime types for .txt, .png, .pdf
 
-export function ManageModal({ isOpen, setIsOpen, artifact, onSave, onDelete }) { // Removed onFileReplace prop
+export function ManageModal({ isOpen, setIsOpen, artifact, onSave, onDelete, currentUserId }) {
   const [editedName, setEditedName] = useState(artifact?.name || '');
   const [editedType, setEditedType] = useState(artifact?.type || '');
   const [editedTags, setEditedTags] = useState(artifact?.tags || []);
@@ -46,6 +48,7 @@ export function ManageModal({ isOpen, setIsOpen, artifact, onSave, onDelete }) {
   const [error, setError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isViewArtifactModalOpen, setIsViewArtifactModalOpen] = useState(false); // State for ViewArtifactModal
 
   // State for file replacement
   const [selectedFileForReplacement, setSelectedFileForReplacement] = useState(null);
@@ -208,19 +211,6 @@ export function ManageModal({ isOpen, setIsOpen, artifact, onSave, onDelete }) {
   const handleTagRemove = (tagToRemove) => {
     setEditedTags((prevTags) => prevTags.filter((tag) => tag !== tagToRemove));
   };
-
-  // Placeholder for file replacement - will likely involve opening the UploadModal again
-  const handleReplaceFile = () => {
-    // This will eventually trigger the FileUploadModal or similar mechanism
-    console.log("Initiating file replacement for artifact:", artifact.id);
-    // You would typically call onFileReplace here, which would
-    // trigger the FileUploadModal in the parent component
-    if (onFileReplace) {
-        onFileReplace(artifact.id);
-    }
-    setIsOpen(false); // Close manage modal
-  };
-
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
@@ -387,9 +377,19 @@ export function ManageModal({ isOpen, setIsOpen, artifact, onSave, onDelete }) {
                 )}
               </div>
               {replacementError && <p className="text-sm text-destructive mt-1">{replacementError}</p>}
-              <p className="text-xs text-muted-foreground mt-1">
-                Current file: <span className="font-semibold">{artifact?.fileOriginalName || "N/A"}</span>
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground mt-1">
+                  Current file: <span className="font-semibold">{artifact?.fileOriginalName || "N/A"}</span>
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsViewArtifactModalOpen(true)}
+                  disabled={!artifact?.id || !artifact?.fileMimeType}
+                >
+                  <IconEye className="h-4 w-4 mr-1" />View
+                </Button>
+              </div>
             </div>
           </div>
 
@@ -403,10 +403,18 @@ export function ManageModal({ isOpen, setIsOpen, artifact, onSave, onDelete }) {
               Cancel
             </Button>
             <Button onClick={handleSave} disabled={!editedName.trim() || !editedType || isSaving || !!replacementError}>
-              {isSaving ? 'Saving...' : 'Save Changes'}
-            </Button>
-          </div>
-        </DialogFooter>
+                  {isSaving ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </div>
+            </DialogFooter>
+            <ViewArtifactModal
+              isOpen={isViewArtifactModalOpen}
+              setIsOpen={setIsViewArtifactModalOpen}
+              artifactId={artifact?.id}
+              artifactName={artifact?.name}
+              fileMimeType={artifact?.fileMimeType}
+              currentUserId={currentUserId} // Pass currentUserId
+            />
       </DialogContent>
     </Dialog>
   );

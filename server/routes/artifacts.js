@@ -78,6 +78,44 @@ router.post('/', upload.single('artifactFile'), async (req, res) => {
   }
 });
 
+// GET /api/artifacts/:id/content - Stream artifact file content
+router.get('/:id/content', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id || isNaN(parseInt(id))) {
+      return res.status(400).json({ message: 'A valid artifact ID is required.' });
+    }
+
+    const artifact = await Artifact.findArtifactById(parseInt(id));
+
+    if (!artifact) {
+      return res.status(404).json({ message: 'Artifact not found.' });
+    }
+
+    const filePath = artifact.filePath;
+    const fileMimeType = artifact.fileMimeType;
+
+    if (!filePath || !fileMimeType) {
+      return res.status(500).json({ message: 'File path or MIME type not available for this artifact.' });
+    }
+
+    // Stream the file to the response
+    res.setHeader('Content-Type', fileMimeType);
+    res.sendFile(filePath, (err) => {
+      if (err) {
+        console.error('Error sending file:', err);
+        return res.status(500).json({ message: 'Error sending file.' });
+      }
+    });
+
+  } catch (error) {
+    console.error('Error retrieving artifact content:', error);
+    res.status(500).json({ message: error.message || 'Failed to retrieve artifact content.' });
+  }
+});
+
+
 // GET /api/artifacts/user/:userId - List a specific user's artifacts
 router.get('/user/:userId', async (req, res) => {
   try {
