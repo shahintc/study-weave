@@ -1011,11 +1011,6 @@ export default function ParticipantCompetencyAssessment() {
                         <Badge variant={assignment.statusChip === "Awaiting submission" ? "secondary" : "outline"}>
                           {assignment.statusChip}
                         </Badge>
-                        {!assignment.isLocked && assessmentState !== 'in_progress' && (
-                          <Button size="sm" variant="outline" onClick={() => handleOpenDetails(assignment.id)}>
-                            Open
-                          </Button>
-                        )}
                       </div>
                     </div>
                   );

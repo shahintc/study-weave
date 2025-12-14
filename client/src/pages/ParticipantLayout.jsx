@@ -231,7 +231,6 @@ export default function ParticipantLayout() {
 
   const nav = [
     { to: "/participant", label: "Dashboard", key: "dashboard" },
-    { to: "/participant/artifacts-comparison", label: "Artifacts Comparison", key: "artifacts" },
     { to: "/participant/competency", label: "Competency", key: "competency" },
   ];
 
@@ -348,17 +347,6 @@ export default function ParticipantLayout() {
               </div>
               <div className="flex items-center gap-2">
                 <ThemeToggle />
-                {!isGuest ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="hidden sm:inline-flex"
-                    onClick={() => handleNavClick("/participant/artifacts-comparison")}
-                  >
-                    <Shuffle className="h-4 w-4" />
-                    Compare
-                  </Button>
-                ) : null}
                 {!isGuest ? (
                   <NotificationBell count={notificationCount} notifications={notifications} />
                 ) : null}
