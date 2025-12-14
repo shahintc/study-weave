@@ -428,26 +428,44 @@ export default function ParticipantDashboard() {
     [studies],
   );
 
+  const isGuest = user?.role === "guest";
+  const filteredPublicStudies = useMemo(() => {
+    return (publicStudies || []).filter((study) => {
+      if (filters.criteria && filters.criteria.trim()) {
+        const haystack = [study.title, study.description, study.researcher?.name]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(filters.criteria.trim().toLowerCase())) {
+          return false;
+        }
+      }
+      if (!matchesDateRange(study, filters.from, filters.to)) return false;
+      return true;
+    });
+  }, [publicStudies, filters.criteria, filters.from, filters.to]);
   const actionableStudies = useMemo(
     () =>
       filteredStudies
         .filter((study) => {
+          if (isGuest) return study.isPublic;
           if (studyScope === "public") return study.isPublic;
           if (studyScope === "private") return !study.isPublic;
           return true;
         })
         .filter((study) => study?.cta && study.cta.type !== "none" && !study.cta.disabled),
-    [filteredStudies, studyScope],
+    [filteredStudies, studyScope, isGuest],
   );
   const quickActions = actionableStudies.slice(0, 3);
   const scopedStudies = useMemo(
     () =>
       filteredStudies.filter((study) => {
+        if (isGuest) return study.isPublic;
         if (studyScope === "public") return study.isPublic;
         if (studyScope === "private") return !study.isPublic;
         return true;
       }),
-    [filteredStudies, studyScope],
+    [filteredStudies, studyScope, isGuest],
   );
   const visibleAssignments = useMemo(
     () => (showAllAssignments ? scopedStudies : scopedStudies.slice(0, 6)),
@@ -456,10 +474,10 @@ export default function ParticipantDashboard() {
 
   const noStudiesAssigned = !loading && studies.length === 0;
   const noStudiesAfterFilter = !loading && scopedStudies.length === 0 && studies.length > 0;
-  const isGuest = user?.role === "guest";
   const layoutWithoutWelcome = useMemo(() => layout.filter((id) => id !== "welcome"), [layout]);
   const shouldPairPublicWithAssignments =
-    !isGuest && layoutWithoutWelcome.includes("assignments") && layoutWithoutWelcome.includes("public");
+    (isGuest && layoutWithoutWelcome.includes("assignments") && layoutWithoutWelcome.includes("public")) ||
+    (!isGuest && layoutWithoutWelcome.includes("assignments") && layoutWithoutWelcome.includes("public"));
 
   useEffect(() => {
     setShowAllAssignments(false);
@@ -619,58 +637,66 @@ export default function ParticipantDashboard() {
                   <span className="text-sm text-muted-foreground">Loading public studies…</span>
                 </CardContent>
               </Card>
-            ) : publicStudies.length === 0 ? (
+            ) : filteredPublicStudies.length === 0 ? (
               <Card>
                 <CardHeader>
                   <CardTitle>No public studies available</CardTitle>
-                  <CardDescription>Check back later for open guest studies.</CardDescription>
+                  <CardDescription>
+                    {hasActiveFilters
+                      ? "No public studies match your filters."
+                      : "Check back later for open guest studies."}
+                  </CardDescription>
                 </CardHeader>
               </Card>
             ) : (
-              publicStudies.map((study) => (
-                <Card key={study.id}>
-                  <CardHeader className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <CardTitle>{study.title}</CardTitle>
-                      <Badge variant="outline">Public</Badge>
-                    </div>
-                    <CardDescription>{study.description}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="grid gap-2 text-sm text-muted-foreground">
-                    {study.researcher?.name ? <p>Researcher: {study.researcher.name}</p> : null}
-                    {study.artifactCount ? <p>{study.artifactCount} artifacts</p> : <p>No artifacts yet</p>}
-                    {study.timelineEnd ? (
-                      <p className="text-xs text-muted-foreground/80">
-                        Ends {new Date(study.timelineEnd).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                      </p>
-                    ) : null}
-                  </CardContent>
-                  <CardFooter className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="text-xs text-muted-foreground">
-                      {isGuest
-                        ? "Guest session expires in 4 hours from login."
-                        : "Self-serve enrollment — no invite needed."}
-                    </div>
-                    {(() => {
-                      const alreadyJoined = joinedStudyIds.has(Number(study.id));
-                      return (
-                        <Button
-                          size="sm"
-                          onClick={() => handleJoinPublicStudy(study.id)}
-                          disabled={joiningStudyId === study.id || alreadyJoined}
-                          variant={alreadyJoined ? "outline" : "default"}
-                        >
-                          {alreadyJoined
-                            ? "Already joined"
-                            : joiningStudyId === study.id
-                            ? "Joining..."
-                            : "Join study"}
-                        </Button>
-                      );
-                    })()}
-                  </CardFooter>
-                </Card>
-              ))
+              <div className="max-h-[70vh] overflow-auto pr-1">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {filteredPublicStudies.map((study) => (
+                    <Card key={study.id} className="min-w-0">
+                      <CardHeader className="space-y-1">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <CardTitle className="text-base leading-snug break-words">{study.title}</CardTitle>
+                          <Badge variant="outline">Public</Badge>
+                        </div>
+                        <CardDescription className="line-clamp-2 break-words leading-snug">
+                          {study.description}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="grid gap-2 text-sm text-muted-foreground">
+                        {study.researcher?.name ? (
+                          <p className="truncate">Researcher: {study.researcher.name}</p>
+                        ) : null}
+                        {study.artifactCount ? <p>{study.artifactCount} artifacts</p> : <p>No artifacts yet</p>}
+                        {study.timelineEnd ? (
+                          <p className="text-xs text-muted-foreground/80">
+                            Ends {new Date(study.timelineEnd).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                          </p>
+                        ) : null}
+                      </CardContent>
+                      <CardFooter className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-xs text-muted-foreground">Self-serve enrollment — no invite needed.</div>
+                        {(() => {
+                          const alreadyJoined = joinedStudyIds.has(Number(study.id));
+                          return (
+                            <Button
+                              size="sm"
+                              onClick={() => handleJoinPublicStudy(study.id)}
+                              disabled={joiningStudyId === study.id || alreadyJoined}
+                              variant={alreadyJoined ? "outline" : "default"}
+                            >
+                              {alreadyJoined
+                                ? "Already joined"
+                                : joiningStudyId === study.id
+                                ? "Joining..."
+                                : "Join study"}
+                            </Button>
+                          );
+                        })()}
+                      </CardFooter>
+                    </Card>
+                  ))}
+                </div>
+              </div>
             )}
           </section>
         );
@@ -681,30 +707,32 @@ export default function ParticipantDashboard() {
               <h2 className="text-lg font-semibold">
                 {isGuest ? "My guest enrollments" : "My Assigned Studies"}
               </h2>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="flex gap-2 rounded-full border bg-muted/40 p-1 text-xs">
-                  {[
-                    { key: "all", label: "All" },
-                    { key: "public", label: "Public" },
-                    { key: "private", label: "Invited" },
-                  ].map((option) => (
-                    <Button
-                      key={option.key}
-                      size="sm"
-                      variant={studyScope === option.key ? "secondary" : "ghost"}
-                      className="h-8 rounded-full px-3"
-                      onClick={() => setStudyScope(option.key)}
-                    >
-                      {option.label}
-                    </Button>
-                  ))}
+              {!isGuest ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex gap-2 rounded-full border bg-muted/40 p-1 text-xs">
+                    {[
+                      { key: "all", label: "All" },
+                      { key: "public", label: "Public" },
+                      { key: "private", label: "Invited" },
+                    ].map((option) => (
+                      <Button
+                        key={option.key}
+                        size="sm"
+                        variant={studyScope === option.key ? "secondary" : "ghost"}
+                        className="h-8 rounded-full px-3"
+                        onClick={() => setStudyScope(option.key)}
+                      >
+                        {option.label}
+                      </Button>
+                    ))}
+                  </div>
+                  {hasActiveFilters ? (
+                    <Badge variant="outline" className="text-xs">
+                      Filters on
+                    </Badge>
+                  ) : null}
                 </div>
-                {hasActiveFilters ? (
-                  <Badge variant="outline" className="text-xs">
-                    Filters on
-                  </Badge>
-                ) : null}
-              </div>
+              ) : null}
             </div>
             {loading ? (
               <Card>
@@ -744,7 +772,8 @@ export default function ParticipantDashboard() {
                 </CardFooter>
               </Card>
             ) : (
-              <>
+              <div className="max-h-[70vh] overflow-auto pr-1">
+                <div className="grid gap-3 sm:grid-cols-2">
               {visibleAssignments.map((study) => {
                 const cardStatus = deriveCardStatus(study, visitedStudies);
                 const competency = study.competency || {};
@@ -792,9 +821,9 @@ export default function ParticipantDashboard() {
                   <Card key={normalizeStudyId(study) || study.studyParticipantId}>
                     <CardHeader className="pb-3">
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
+                        <div className="min-w-0 space-y-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <CardTitle>{study.title}</CardTitle>
+                            <CardTitle className="leading-tight break-words">{study.title}</CardTitle>
                             <Badge
                               variant="outline"
                               className={isClosed ? "border-destructive/60 text-destructive" : "border-emerald-300 text-emerald-700"}
@@ -802,9 +831,9 @@ export default function ParticipantDashboard() {
                               {isClosed ? "Closed" : "Active"}
                             </Badge>
                           </div>
-                          <CardDescription>
+                          <CardDescription className="leading-snug break-words">
                             {study.studyWindow ? study.studyWindow : "Active study"}
-                            {study.researcher?.name ? ` · ${study.researcher.name}` : ""}
+                            {study.researcher?.name ? ` - ${study.researcher.name}` : ""}
                           </CardDescription>
                         </div>
                         <span className={`text-xs px-2 py-1 rounded-full ${statusMeta.className}`}>
@@ -822,12 +851,19 @@ export default function ParticipantDashboard() {
                       </div>
 
                       <div className="grid gap-4 md:grid-cols-3">
-                        <div className="space-y-1">
+                        {isGuest ? null : (
+                          <div className="space-y-1 min-w-0">
+                            <p className="text-sm font-medium">Competency assessment</p>
+                            <p className="text-sm text-muted-foreground">{competency.statusLabel || "Not assigned"}</p>
+                            <Progress value={clampPercent(competency.completionPercent)} className="h-2" />
+                          </div>
+                        )}
+                        <div className="space-y-1 min-w-0">
                           <p className="text-sm font-medium">Artifact submissions</p>
                           <p className="text-sm text-muted-foreground">{artifactTotals} submitted</p>
                           {renderArtifactChips(study.artifactProgress?.modes)}
                         </div>
-                        <div className="space-y-1">
+                        <div className="space-y-1 min-w-0">
                           <p className="text-sm font-medium">Time on artifact task</p>
                           <div className="flex items-center gap-2 text-sm text-muted-foreground">
                             <span className={`h-2.5 w-2.5 rounded-full ${timerIndicatorClass}`} />
@@ -841,7 +877,7 @@ export default function ParticipantDashboard() {
                       </div>
                     </CardContent>
                     <CardFooter className="flex flex-col gap-2 text-left md:flex-row md:items-center md:justify-between">
-                      <div className="text-sm text-muted-foreground">
+                      <div className="text-sm text-muted-foreground leading-snug break-words">
                         {nextModeLabel ? `Next up: ${nextModeLabel}` : "All tasks completed."}
                       </div>
                       {study.cta?.type !== "none" && (
@@ -865,8 +901,9 @@ export default function ParticipantDashboard() {
                   </Card>
                 );
               })}
+                </div>
               {scopedStudies.length > 6 ? (
-                <div className="flex justify-center">
+                <div className="flex justify-center mt-3">
                   <Button
                     variant="outline"
                     size="sm"
@@ -876,7 +913,7 @@ export default function ParticipantDashboard() {
                   </Button>
                 </div>
               ) : null}
-              </>
+              </div>
             )}
           </section>
         );
@@ -898,6 +935,11 @@ export default function ParticipantDashboard() {
               ? "You can browse and join public studies during this guest session."
               : "Track your competency assessments and artifact assignments in one place."}
           </p>
+          {isGuest ? (
+            <p className="text-[11px] text-amber-700">
+              Guest sessions are temporary; register to keep your progress.
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading || publicLoading}>
@@ -953,13 +995,15 @@ export default function ParticipantDashboard() {
         layoutWithoutWelcome.forEach((widgetId) => {
           if (!pairedRendered && (widgetId === "assignments" || widgetId === "public")) {
             pairedRendered = true;
+            const first = layoutWithoutWelcome.find((id) => id === "assignments" || id === "public");
+            const order = first === "public" ? ["public", "assignments"] : ["assignments", "public"];
             rendered.push(
               <div
                 key="assignments-public-grid"
                 className="grid gap-6 lg:grid-cols-[1.6fr_1fr] xl:grid-cols-[1.8fr_1fr]"
               >
-                <div className="min-w-0">{renderWidget("assignments")}</div>
-                <div className="min-w-0">{renderWidget("public")}</div>
+                <div className="min-w-0">{renderWidget(order[0])}</div>
+                <div className="min-w-0">{renderWidget(order[1])}</div>
               </div>,
             );
           } else if (widgetId !== "assignments" && widgetId !== "public") {

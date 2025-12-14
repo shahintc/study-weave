@@ -33,6 +33,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -196,6 +204,10 @@ export default function AssessmentCreationPage() {
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+    const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+    const [inviteTarget, setInviteTarget] = useState(null); // assessment object
+    const [inviteSelections, setInviteSelections] = useState(new Set());
+    const [inviteSearch, setInviteSearch] = useState("");
     const [participantSearch, setParticipantSearch] = useState("");
     const [participants, setParticipants] = useState([]);
     const [participantsError, setParticipantsError] = useState("");
@@ -204,6 +216,7 @@ export default function AssessmentCreationPage() {
     const [user, setUser] = useState(null);
     const navigate = useNavigate();
     const [view, setView] = useState('list'); // 'list' or 'builder'
+    const [sortKey, setSortKey] = useState("recent"); // recent | title | duration | questions
     const [assessments, setAssessments] = useState([]);
     const [isLoadingAssessments, setIsLoadingAssessments] = useState(true);
     const [editingAssessment, setEditingAssessment] = useState(null);
@@ -406,13 +419,34 @@ export default function AssessmentCreationPage() {
     };
 
     const handleImportSuccess = (importedQuestions) => {
-        if (importedQuestions && importedQuestions.length > 0) {
-            // Use the 'replace' method from useFieldArray to update the UI
-            replaceQuestions(importedQuestions);
-        }
-    };
-    const handleDefineScoring = () => {
-        alert("Define Scoring Rules: Opens a modal to set up detailed scoring/thresholds.");
+        if (!Array.isArray(importedQuestions) || importedQuestions.length === 0) return;
+        const normalized = importedQuestions.map((q, idx) => {
+            const hasOptions = Array.isArray(q.options) && q.options.length > 0;
+            const type =
+                q.type === "multiple_choice" || q.type === "short_answer"
+                    ? q.type
+                    : hasOptions
+                        ? "multiple_choice"
+                        : "short_answer";
+            return {
+                id: q.id || `imported-${idx}`,
+                title: q.title || "",
+                type,
+                options:
+                    type === "multiple_choice"
+                        ? (Array.isArray(q.options)
+                            ? q.options.map((opt, optIdx) => ({
+                                  text: typeof opt?.text === "string" ? opt.text : String(opt ?? `Option ${optIdx + 1}`),
+                                  isCorrect: Boolean(opt?.isCorrect),
+                              }))
+                            : [])
+                        : [],
+            };
+        });
+
+        const mcq = normalized.filter((q) => q.type === "multiple_choice");
+        const open = normalized.filter((q) => q.type === "short_answer");
+        replaceQuestions([...mcq, ...open]);
     };
 
     const watchedDuration = form.watch("duration");
@@ -486,6 +520,79 @@ export default function AssessmentCreationPage() {
         setView('builder');
     };
 
+    const handleInvitePeople = (assessmentId) => {
+        const target = assessments.find(
+            (a) =>
+                String(a.id) === String(assessmentId) ||
+                String(a.assessmentId) === String(assessmentId),
+        );
+        const fallbackTarget = target || { id: assessmentId, assessmentId, title: "Assessment" };
+        const invitedList =
+            target?.metadata?.invitedParticipants ||
+            target?.invitedParticipants ||
+            [];
+        setInviteTarget(fallbackTarget);
+        setInviteSelections(new Set(invitedList));
+        setInviteSearch("");
+        setIsInviteModalOpen(true);
+    };
+
+    const filteredInviteCandidates = useMemo(() => {
+        if (!inviteSearch.trim()) return participants;
+        const term = inviteSearch.toLowerCase();
+        return participants.filter(
+            (p) =>
+                p.name?.toLowerCase().includes(term) ||
+                p.email?.toLowerCase().includes(term),
+        );
+    }, [inviteSearch, participants]);
+
+    const toggleInviteSelection = (participantId) => {
+        setInviteSelections((prev) => {
+            const next = new Set(prev);
+            if (next.has(participantId)) {
+                next.delete(participantId);
+            } else {
+                next.add(participantId);
+            }
+            return next;
+        });
+    };
+
+    const handleSaveInvites = async () => {
+        if (!inviteTarget) {
+            setIsInviteModalOpen(false);
+            return;
+        }
+        const invited = Array.from(inviteSelections);
+        try {
+            await api.put(`/api/competency/assessments/${inviteTarget.id || inviteTarget.assessmentId}`, {
+                ...inviteTarget,
+                invitedParticipants: invited,
+            });
+            setAssessments((prev) =>
+                prev.map((a) => {
+                    const isMatch =
+                        String(a.id) === String(inviteTarget.id || inviteTarget.assessmentId) ||
+                        String(a.assessmentId) === String(inviteTarget.id || inviteTarget.assessmentId);
+                    if (!isMatch) return a;
+                    return {
+                        ...a,
+                        metadata: {
+                            ...(a.metadata || {}),
+                            invitedParticipants: invited,
+                        },
+                        invitedParticipants: invited,
+                    };
+                }),
+            );
+            setIsInviteModalOpen(false);
+        } catch (error) {
+            console.error("Failed to save invites", error);
+            alert(error.response?.data?.message || "Unable to save invites right now.");
+        }
+    };
+
     const openDeleteDialog = (assessment) => {
         setAssessmentToDelete(assessment);
         setIsDeleteDialogOpen(true);
@@ -531,6 +638,42 @@ export default function AssessmentCreationPage() {
     };
 
     if (view === 'list') {
+        const totalQuestions = (assessment) => Array.isArray(assessment?.questions) ? assessment.questions.length : 0;
+        const sortAssessments = (list) => {
+            const sorted = [...list];
+            sorted.sort((a, b) => {
+                const aQuestions = totalQuestions(a);
+                const bQuestions = totalQuestions(b);
+                const aUpdated = new Date(a.updatedAt || a.createdAt || 0).getTime();
+                const bUpdated = new Date(b.updatedAt || b.createdAt || 0).getTime();
+                switch (sortKey) {
+                    case "title":
+                        return String(a.title || "").localeCompare(String(b.title || ""));
+                    case "duration":
+                        return (Number(a.criteria?.durationMinutes) || 0) - (Number(b.criteria?.durationMinutes) || 0);
+                    case "questions":
+                        return bQuestions - aQuestions;
+                    case "recent":
+                    default:
+                        return bUpdated - aUpdated;
+                }
+            });
+            return sorted;
+        };
+
+        const compactStats = (assessment) => {
+            const { mc, sa } = getQuestionCounts(assessment.questions);
+            const duration = assessment.criteria?.durationMinutes || "N/A";
+            const invited = assessment.metadata?.invitedParticipants?.length || 0;
+            return [
+                `${mc + sa} q`,
+                `${mc} MCQ`,
+                `${sa} SA`,
+                `${duration} min`,
+                `${invited} invited`,
+            ];
+        };
+
         return (
             <div className="container mx-auto max-w-7xl px-4 py-6 space-y-8">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -538,89 +681,131 @@ export default function AssessmentCreationPage() {
                         <h1 className="text-3xl font-bold">Competency Assessments</h1>
                         <p className="text-sm text-muted-foreground">Manage, create, and preview your participant quizzes.</p>
                     </div>
-                    <Button onClick={handleCreateNew}><Plus className="w-4 h-4 mr-2" /> Create New Assessment</Button>
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <span>Sort by</span>
+                            <Select value={sortKey} onValueChange={setSortKey}>
+                                <SelectTrigger className="h-9 w-32">
+                                    <SelectValue placeholder="Recent" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="recent">Most recent</SelectItem>
+                                    <SelectItem value="title">Title A-Z</SelectItem>
+                                    <SelectItem value="duration">Duration</SelectItem>
+                                    <SelectItem value="questions">Questions count</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <Button onClick={handleCreateNew}><Plus className="w-4 h-4 mr-2" /> Create New Assessment</Button>
+                    </div>
                 </div>
 
-                {/* Published Assessments */}
-                <section className="space-y-4">
-                    <h2 className="text-2xl font-semibold border-b pb-2">Published</h2>
-                    {isLoadingAssessments ? <p>Loading...</p> : publishedAssessments.length === 0 ? <p className="text-sm text-muted-foreground">No published assessments yet.</p> : (
-                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                            {publishedAssessments.map(assessment => (
-                                <Card key={assessment.id} className="flex flex-col">
-                                    <CardHeader>
-                                        <CardTitle className="truncate">{assessment.title}</CardTitle>
-                                        <CardDescription>Published on {new Date(assessment.updatedAt).toLocaleDateString()}</CardDescription>
-                                    </CardHeader>
-                                    <CardContent className="text-sm text-muted-foreground space-y-3 flex-grow">
-                                        <div className="flex items-center gap-2">
-                                            <ListChecks className="h-4 w-4" />
-                                            <span>{getQuestionCounts(assessment.questions).mc} MCQs</span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <FileText className="h-4 w-4" />
-                                            <span>{getQuestionCounts(assessment.questions).sa} Short Answers</span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <Clock className="h-4 w-4" />
-                                            <span>{assessment.criteria?.durationMinutes || 'N/A'} min duration</span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <Users className="h-4 w-4" />
-                                            <span>{assessment.metadata?.invitedParticipants?.length || 0} Participants Invited</span>
-                                        </div>
-                                    </CardContent>
-                                    <CardFooter className="flex justify-between">
-                                        <Button variant="outline" size="sm" onClick={() => { setEditingAssessment(assessment); setIsPreviewModalOpen(true); }}>
-                                            <Eye className="w-4 h-4 mr-2" /> Preview
-                                        </Button>
-                                    </CardFooter>
-                                </Card>
-                            ))}
-                        </div>
-                    )}
-                </section>
-
-                {/* Draft Assessments */}
-                <section className="space-y-4">
-                    <h2 className="text-2xl font-semibold border-b pb-2">Drafts</h2>
-                    {isLoadingAssessments ? <p>Loading...</p> : draftAssessments.length === 0 ? <p className="text-sm text-muted-foreground">No drafts. Click 'Create New' to start.</p> : (
-                        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                            {draftAssessments.map(assessment => (
-                                <Card key={assessment.id} className="flex flex-col">
-                                    <CardHeader>
-                                        <div className="flex justify-between items-start">
-                                            <div className="flex-1">
-                                                <CardTitle className="truncate pr-2">{assessment.title}</CardTitle>
-                                                <CardDescription>Last updated: {new Date(assessment.updatedAt).toLocaleDateString()}</CardDescription>
+                <div className="grid gap-6 lg:grid-cols-2">
+                    <Card className="min-w-0">
+                        <CardHeader className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <CardTitle>Published</CardTitle>
+                                <CardDescription>Live quizzes visible to participants.</CardDescription>
+                            </div>
+                            <Badge variant="outline">{publishedAssessments.length} live</Badge>
+                        </CardHeader>
+                        <CardContent>
+                            {isLoadingAssessments ? (
+                                <p className="text-sm text-muted-foreground">Loading...</p>
+                            ) : publishedAssessments.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">No published assessments yet.</p>
+                            ) : (
+                                <div className="space-y-3 max-h-[520px] overflow-auto pr-1">
+                                    {sortAssessments(publishedAssessments).map((assessment) => (
+                                        <div key={assessment.id} className="rounded-lg border p-3 shadow-sm bg-card/60">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0 space-y-1">
+                                                    <p className="text-sm font-semibold truncate">{assessment.title}</p>
+                                                    <p className="text-xs text-muted-foreground">
+                                                        Updated {new Date(assessment.updatedAt || assessment.createdAt).toLocaleDateString()}
+                                                    </p>
+                                                </div>
+                                                <Badge variant="secondary">Published</Badge>
                                             </div>
-                                            <DropdownMenu>
-                                                <DropdownMenuTrigger asChild>
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0">
-                                                        <MoreHorizontal className="h-4 w-4" />
-                                                    </Button>
-                                                </DropdownMenuTrigger>
-                                                <DropdownMenuContent align="end">
-                                                    <DropdownMenuItem onClick={() => handleEditDraft(assessment)}>Edit</DropdownMenuItem>
-                                                    <DropdownMenuItem onClick={() => openDeleteDialog(assessment)} className="text-red-600">Delete</DropdownMenuItem>
-                                                </DropdownMenuContent>
-                                            </DropdownMenu>
+                                            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                                                {compactStats(assessment).map((stat, idx) => (
+                                                    <span key={idx} className="rounded-full border px-2 py-1 bg-muted/50">
+                                                        {stat}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                                        <span>{assessment.metadata?.invitedParticipants?.length || 0} invited</span>
+                                        <div className="flex items-center gap-2">
+                                            <Button variant="outline" size="sm" onClick={() => { setEditingAssessment(assessment); setIsPreviewModalOpen(true); }}>
+                                                <Eye className="w-4 h-4 mr-2" /> Preview
+                                            </Button>
                                         </div>
-                                    </CardHeader>
-                                    <CardContent className="text-sm text-muted-foreground space-y-3 flex-grow">
-                                        <div className="flex items-center gap-2"><ListChecks className="h-4 w-4" /><span>{getQuestionCounts(assessment.questions).mc} MCQs</span></div>
-                                        <div className="flex items-center gap-2"><FileText className="h-4 w-4" /><span>{getQuestionCounts(assessment.questions).sa} Short Answers</span></div>
-                                        <div className="flex items-center gap-2"><Clock className="h-4 w-4" /><span>{assessment.criteria?.durationMinutes || 'N/A'} min duration</span></div>
-                                        <div className="flex items-center gap-2"><Users className="h-4 w-4" /><span>{assessment.metadata?.invitedParticipants?.length || 0} Participants</span></div>
-                                    </CardContent>
-                                    <CardFooter className="flex justify-end">
-                                        <Button size="sm" onClick={() => handleEditDraft(assessment)}>Edit Draft</Button>
-                                    </CardFooter>
-                                </Card>
+                                    </div>
+                                </div>
                             ))}
                         </div>
-                    )}
-                </section>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    <Card className="min-w-0">
+                        <CardHeader className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <CardTitle>Drafts</CardTitle>
+                                <CardDescription>Work in progress items.</CardDescription>
+                            </div>
+                            <Badge variant="outline">{draftAssessments.length} drafts</Badge>
+                        </CardHeader>
+                        <CardContent>
+                            {isLoadingAssessments ? (
+                                <p className="text-sm text-muted-foreground">Loading...</p>
+                            ) : draftAssessments.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">No drafts. Click "Create New" to start.</p>
+                            ) : (
+                                <div className="space-y-3 max-h-[520px] overflow-auto pr-1">
+                                    {sortAssessments(draftAssessments).map((assessment) => (
+                                        <div key={assessment.id} className="rounded-lg border p-3 shadow-sm bg-card/60">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0 space-y-1">
+                                                    <p className="text-sm font-semibold truncate">{assessment.title}</p>
+                                                    <p className="text-xs text-muted-foreground">
+                                                        Updated {new Date(assessment.updatedAt || assessment.createdAt).toLocaleDateString()}
+                                                    </p>
+                                                </div>
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0">
+                                                            <MoreHorizontal className="h-4 w-4" />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="end">
+                                                        <DropdownMenuItem onClick={() => handleEditDraft(assessment)}>Edit</DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => openDeleteDialog(assessment)} className="text-red-600">Delete</DropdownMenuItem>
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            </div>
+                                            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
+                                                {compactStats(assessment).map((stat, idx) => (
+                                                    <span key={idx} className="rounded-full border px-2 py-1 bg-muted/50">
+                                                        {stat}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                                                <span>{assessment.metadata?.invitedParticipants?.length || 0} participants</span>
+                                                <div className="flex items-center gap-2">
+                                                    <Button size="sm" onClick={() => handleEditDraft(assessment)}>Edit draft</Button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                </div>
+
                 <AssessmentPreviewModal
                     isOpen={isPreviewModalOpen}
                     onClose={() => setIsPreviewModalOpen(false)}
@@ -699,30 +884,17 @@ export default function AssessmentCreationPage() {
                                             </FormItem>
                                         )}
                                     />
-                                    <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
-                                        <FormField
-                                            control={form.control}
-                                            name="duration"
-                                            render={({ field }) => (
-                                                <FormItem className="flex-1">
-                                                    <FormLabel className="flex items-center"><Clock className="w-4 h-4 mr-2" />Duration (minutes)</FormLabel>
-                                                    <FormControl><Input type="number" placeholder="60" {...field} /></FormControl>
-                                                    <FormMessage />
-                                                </FormItem>
-                                            )}
-                                        />
-                                        <FormField
-                                            control={form.control}
-                                            name="passingThreshold"
-                                            render={({ field }) => (
-                                                <FormItem className="flex-1">
-                                                    <FormLabel className="flex items-center"><TrendingUp className="w-4 h-4 mr-2" />Passing Threshold (%)</FormLabel>
-                                                    <FormControl><Input type="number" placeholder="70" {...field} /></FormControl>
-                                                    <FormMessage />
-                                                </FormItem>
-                                            )}
-                                        />
-                                    </div>
+                                    <FormField
+                                        control={form.control}
+                                        name="duration"
+                                        render={({ field }) => (
+                                            <FormItem className="flex-1">
+                                                <FormLabel className="flex items-center"><Clock className="w-4 h-4 mr-2" />Duration (minutes)</FormLabel>
+                                                <FormControl><Input type="number" placeholder="60" {...field} /></FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
                                     <FormField
                                         control={form.control}
                                         name="instructions"
@@ -735,10 +907,7 @@ export default function AssessmentCreationPage() {
                                                 <FormMessage />
                                             </FormItem>
                                         )}
-                                    />
-                                    <Button type="button" variant="outline" className="w-full" onClick={handleDefineScoring}>
-                                        Define detailed scoring rules
-                                    </Button>
+                                      />
                                 </CardContent>
                             </Card>
 
@@ -905,7 +1074,7 @@ export default function AssessmentCreationPage() {
                                     </Button>
                                 </CardContent>
                             </Card>
-                            <Card>
+                            <Card id="participants-section">
                                 <CardHeader>
                                     <CardTitle>Participants directory</CardTitle>
                                     <CardDescription>Select who should receive this competency quiz.</CardDescription>
@@ -916,7 +1085,7 @@ export default function AssessmentCreationPage() {
                                             <Users className="h-4 w-4" />
                                             {isParticipantsLoading
                                                 ? "Loading..."
-                                                : `${selectedParticipants.length} selected`}
+                                                : `${selectedParticipants.size} selected`}
                                         </div>
                                         <Button
                                             type="button"
@@ -998,6 +1167,64 @@ export default function AssessmentCreationPage() {
                 onClose={() => setIsImportModalOpen(false)}
                 onImportSuccess={handleImportSuccess}
             />
+            <Dialog open={isInviteModalOpen} onOpenChange={setIsInviteModalOpen}>
+                <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                        <DialogTitle>Invite participants</DialogTitle>
+                        <DialogDescription>
+                            Choose who should receive "{inviteTarget?.title || "this assessment"}".
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-3">
+                        <div className="flex items-center gap-2 rounded-md border px-3 py-2">
+                            <Search className="h-4 w-4 text-muted-foreground" />
+                            <Input
+                                placeholder="Search by name or email"
+                                value={inviteSearch}
+                                onChange={(e) => setInviteSearch(e.target.value)}
+                            />
+                        </div>
+                        {participantsError ? (
+                            <p className="text-xs text-destructive">{participantsError}</p>
+                        ) : null}
+                        <div className="max-h-80 overflow-auto space-y-2 pr-1">
+                            {isParticipantsLoading ? (
+                                <p className="py-4 text-center text-sm text-muted-foreground">Loading participants…</p>
+                            ) : filteredInviteCandidates.length ? (
+                                filteredInviteCandidates.map((participant) => (
+                                    <div
+                                        key={participant.id}
+                                        className={`flex items-center justify-between rounded-md border p-2 text-sm ${inviteSelections.has(participant.id) ? "border-primary bg-primary/5" : "border-muted"}`}
+                                    >
+                                        <div>
+                                            <p className="font-medium">{participant.name || "Participant"}</p>
+                                            <p className="text-xs text-muted-foreground">{participant.email}</p>
+                                        </div>
+                                        <Checkbox
+                                            checked={inviteSelections.has(participant.id)}
+                                            onCheckedChange={() => toggleInviteSelection(participant.id)}
+                                            aria-label={`Invite ${participant.name || participant.email || participant.id}`}
+                                        />
+                                    </div>
+                                ))
+                            ) : (
+                                <p className="py-4 text-center text-sm text-muted-foreground">No participants match this search.</p>
+                            )}
+                        </div>
+                    </div>
+                    <DialogFooter className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">
+                            {inviteSelections.size} selected
+                        </span>
+                        <div className="flex gap-2">
+                            <Button variant="outline" onClick={() => setIsInviteModalOpen(false)}>
+                                Cancel
+                            </Button>
+                            <Button onClick={handleSaveInvites}>Save invites</Button>
+                        </div>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
             <AssessmentPreviewModal
                 isOpen={isPreviewModalOpen}
                 onClose={() => setIsPreviewModalOpen(false)}
