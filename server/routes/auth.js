@@ -174,6 +174,9 @@ router.post('/reset-password', async (req, res) => {
     if (!email || !code || !password) {
       return res.status(400).json({ message: 'Email, code, and new password are required.' });
     }
+    if (password === code || password === email) {
+      return res.status(400).json({ message: 'New password cannot be the same as your current credentials.' });
+    }
     if (!requirePasswordPolicy(password)) {
       return res.status(400).json({
         message: 'Password must be at least 6 characters and include one uppercase letter.',
@@ -182,6 +185,10 @@ router.post('/reset-password', async (req, res) => {
     const user = await User.findByEmail(email);
     if (!user || !user.resetCode) {
       return res.status(400).json({ message: 'Invalid reset request.' });
+    }
+    const sameAsOld = await User.comparePassword(password, user.password);
+    if (sameAsOld) {
+      return res.status(400).json({ message: 'New password must be different from your current password.' });
     }
     if (isExpired(user.resetExpires)) {
       return res.status(400).json({ message: 'Reset code expired. Request a new one.' });
@@ -392,6 +399,9 @@ router.post('/change-password', auth, async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ message: 'Current and new password are required.' });
+    }
+    if (newPassword === currentPassword) {
+      return res.status(400).json({ message: 'New password must be different from the current password.' });
     }
     if (!requirePasswordPolicy(newPassword)) {
       return res.status(400).json({

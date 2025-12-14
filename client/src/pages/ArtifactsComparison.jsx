@@ -2313,22 +2313,22 @@ export default function ArtifactsComparison() {
     const summary = side === "left" ? leftSummary : rightSummary;
     const status = side === "left" ? leftSummaryStatus : rightSummaryStatus;
     return (
-      <div className="border-t p-3 bg-gray-50/50">
+      <div className="border-t p-3 bg-slate-900 text-slate-100">
         <div className="flex justify-between items-center mb-1">
-          <span className="text-xs font-semibold text-gray-600">
+          <span className="text-xs font-semibold text-slate-50">
             AI Summary
           </span>
           <Button
             variant="outline"
             size="sm"
-            className="h-6 text-[10px] px-2"
+            className="h-6 text-[10px] px-2 bg-slate-800 text-slate-50 hover:bg-slate-700 border-slate-700"
             onClick={() => summarizeSide(side)}
             disabled={status === "loading"}
           >
             {status === "loading" ? "..." : "Generate"}
           </Button>
         </div>
-        <p className="text-xs text-gray-500 leading-relaxed">
+        <p className="text-xs text-slate-200 leading-relaxed">
           {summary || "No summary generated yet."}
         </p>
       </div>
@@ -2507,11 +2507,11 @@ export default function ArtifactsComparison() {
         setAssessmentError("A comment is required to submit.");
         return;
       }
-      if (words.length < 20) {
+      if (words.length < 5) {
         setAssessmentError(
           mode === "patch"
-            ? "Please provide at least 20 words explaining your clone decision."
-            : "Please provide at least 20 words in the comment."
+            ? "Please provide at least 5 words explaining your clone decision."
+            : "Please provide at least 5 words in the comment."
         );
         return;
       }
@@ -2658,7 +2658,7 @@ export default function ArtifactsComparison() {
 
     return (
       <div className={`min-h-screen bg-background p-6 text-foreground font-sans ${formDisabled ? "opacity-95" : ""}`}>
-        <div className="max-w-[1400px] mx-auto space-y-6">
+        <div className="max-w-[1400px] mx-auto space-y-6 pb-0">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex flex-col gap-1">
             <span className="text-xs uppercase tracking-wide text-gray-500">

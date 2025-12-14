@@ -833,34 +833,39 @@ function StudyCreationWizard() {
                 </p>
               </div>
               {studyMode === "custom" && (
-                <div className="space-y-4 rounded-md border p-4 bg-slate-50">
+                <div className="space-y-4 rounded-md border border-slate-700 bg-slate-900/70 p-4 text-slate-100">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="font-semibold">Custom stage questions</p>
-                      <p className="text-xs text-muted-foreground">
+                      <p className="font-semibold text-slate-100">Custom stage questions</p>
+                      <p className="text-xs text-slate-300">
                         Add single-select multiple choice, dropdown, or open-answer prompts. At least one question is required.
                       </p>
                     </div>
-                    <Badge variant="outline">Custom</Badge>
+                    <Badge variant="outline" className="border-slate-600 bg-slate-800 text-slate-100">
+                      Custom
+                    </Badge>
                   </div>
                   <div className="space-y-3">
                     <div className="space-y-2">
-                      <Label htmlFor="custom-question">Question prompt</Label>
+                      <Label htmlFor="custom-question" className="text-slate-200">
+                        Question prompt
+                      </Label>
                       <Input
                         id="custom-question"
                         placeholder="e.g., Which API is more readable?"
                         value={questionPrompt}
                         onChange={(e) => setQuestionPrompt(e.target.value)}
+                        className="border-slate-600 bg-slate-800 text-slate-100 placeholder:text-slate-500"
                       />
                     </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="space-y-2">
-                        <Label>Question type</Label>
+                        <Label className="text-slate-200">Question type</Label>
                         <Select value={questionType} onValueChange={setQuestionType}>
-                          <SelectTrigger>
+                          <SelectTrigger className="border-slate-600 bg-slate-800 text-slate-100">
                             <SelectValue placeholder="Choose type" />
                           </SelectTrigger>
-                          <SelectContent>
+                          <SelectContent className="border-slate-700 bg-slate-900 text-slate-100">
                             {CUSTOM_QUESTION_TYPES.map((type) => (
                               <SelectItem key={type.value} value={type.value}>
                                 {type.label}
@@ -871,7 +876,7 @@ function StudyCreationWizard() {
                       </div>
                       {(questionType === "mcq" || questionType === "dropdown") && (
                         <div className="space-y-2">
-                          <Label>Options (min 2)</Label>
+                          <Label className="text-slate-200">Options (min 2)</Label>
                           <div className="space-y-2">
                             {questionOptions.map((opt, idx) => (
                               <div className="flex items-center gap-2" key={`opt-${idx}`}>
@@ -879,6 +884,7 @@ function StudyCreationWizard() {
                                   value={opt}
                                   placeholder={`Option ${idx + 1}`}
                                   onChange={(e) => updateQuestionOption(idx, e.target.value)}
+                                  className="border-slate-600 bg-slate-800 text-slate-100 placeholder:text-slate-500"
                                 />
                                 {questionOptions.length > 2 && (
                                   <Button
@@ -886,6 +892,7 @@ function StudyCreationWizard() {
                                     size="icon"
                                     onClick={() => removeQuestionOption(idx)}
                                     title="Remove option"
+                                    className="text-slate-200 hover:bg-slate-800"
                                   >
                                     x
                                   </Button>
@@ -893,7 +900,12 @@ function StudyCreationWizard() {
                               </div>
                             ))}
                           </div>
-                          <Button variant="outline" size="sm" onClick={addQuestionOption}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={addQuestionOption}
+                            className="border-slate-600 text-slate-100 hover:bg-slate-800"
+                          >
                             Add option
                           </Button>
                         </div>
@@ -907,21 +919,21 @@ function StudyCreationWizard() {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <p className="text-sm font-semibold">Questions ({customQuestions.length})</p>
+                    <p className="text-sm font-semibold text-slate-100">Questions ({customQuestions.length})</p>
                     {customQuestions.length === 0 ? (
-                      <p className="text-xs text-muted-foreground">No questions added yet.</p>
+                      <p className="text-xs text-slate-400">No questions added yet.</p>
                     ) : (
                       <div className="space-y-2">
                         {customQuestions.map((q, idx) => (
                           <div
                             key={q.id}
-                            className="flex items-center justify-between rounded-md border bg-white p-3"
+                            className="flex items-center justify-between rounded-md border border-slate-700 bg-slate-800 p-3 text-slate-100"
                           >
                             <div>
-                              <p className="text-sm font-semibold">
+                              <p className="text-sm font-semibold text-slate-100">
                                 Q{idx + 1}. {q.prompt}
                               </p>
-                              <p className="text-xs text-muted-foreground capitalize">
+                              <p className="text-xs text-slate-300 capitalize">
                                 {q.type}
                                 {q.options?.length ? ` • ${q.options.length} options` : ""}
                               </p>
@@ -930,6 +942,7 @@ function StudyCreationWizard() {
                               variant="ghost"
                               size="sm"
                               onClick={() => handleRemoveCustomQuestion(q.id)}
+                              className="text-slate-200 hover:bg-slate-700"
                             >
                               Remove
                             </Button>
@@ -1268,17 +1281,6 @@ function StudyCreationWizard() {
                     </p>
                   )}
                 </div>
-              </div>
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="auto-invite"
-                  checked={autoInvite}
-                  onCheckedChange={setAutoInvite}
-                  disabled={participantSelectionDisabled}
-                />
-                <Label htmlFor="auto-invite" className="font-normal">
-                  Auto-invite participants who pass the quiz
-                </Label>
               </div>
             </>
           ) : null}
