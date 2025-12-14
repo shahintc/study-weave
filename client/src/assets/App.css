@@ -153,7 +153,14 @@
   }
 
   ::selection {
-    background: hsla(var(--primary), 0.2);
+    background: rgba(64, 116, 255, 0.35);
+    color: hsl(var(--foreground));
+  }
+
+  input::selection,
+  textarea::selection,
+  .auth-form input::selection {
+    background: rgba(64, 116, 255, 0.5);
     color: hsl(var(--foreground));
   }
 }

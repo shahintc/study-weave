@@ -47,6 +47,15 @@ const resolveAvatarUrl = (value) => {
 export default function Profile() {
   const location = useLocation();
   const [profile, setProfile] = useState(null);
+  const storedUserRole = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = window.localStorage.getItem("user");
+      return raw ? JSON.parse(raw)?.role || null : null;
+    } catch {
+      return null;
+    }
+  }, []);
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [error, setError] = useState("");
   const fileInputRef = useRef(null);
@@ -193,6 +202,13 @@ export default function Profile() {
       setPasswordStatus({ type: "error", message: "Please fill out all password fields." });
       return;
     }
+    if (passwordForm.newPassword === passwordForm.currentPassword) {
+      setPasswordStatus({
+        type: "error",
+        message: "New password must be different from your current password.",
+      });
+      return;
+    }
     if (passwordForm.newPassword !== passwordForm.confirmPassword) {
       setPasswordStatus({ type: "error", message: "New passwords do not match." });
       return;
@@ -305,7 +321,13 @@ export default function Profile() {
 
   const isBusy = loadingProfile && !profile;
   const profileLoaded = Boolean(profile);
-  const dashboardPath = profile?.role === "researcher" ? "/researcher" : "/participant";
+  const effectiveRole = profile?.role || storedUserRole;
+  const dashboardPath =
+    effectiveRole === "researcher"
+      ? "/researcher"
+      : effectiveRole === "reviewer"
+      ? "/researcher/reviewer"
+      : "/participant";
 
   return (
     <div className="min-h-screen bg-muted/20 py-10">

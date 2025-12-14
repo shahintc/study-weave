@@ -41,6 +41,9 @@ export default function ForgotPassword() {
     if (password !== confirm) {
       return setError("Passwords do not match.");
     }
+    if (password === email) {
+      return setError("New password must be different from your current password.");
+    }
     if (!PASSWORD_POLICY.test(password)) {
       return setError("Password must be at least 6 characters and include one uppercase letter.");
     }
