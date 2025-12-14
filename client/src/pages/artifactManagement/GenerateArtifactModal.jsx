@@ -318,7 +318,7 @@ export function GenerateArtifactModal({ isOpen, setIsOpen, onGenerateSuccess, cu
                 <Label htmlFor="generated-artifact">Generated Artifact</Label>
                 <Textarea
                   id="generated-artifact"
-                  readOnly
+                  onChange={(e) => setGeneratedArtifact(e.target.value)}
                   value={generatedArtifact}
                   className="min-h-[150px]"
                 />

@@ -23,6 +23,25 @@ const LLM_INSTRUCTION_MAP = {
             'Be crisp, avoid filler, and do not include any preamble beyond the bullets.'
         ].join(' '),
         contentProvider: 'llmContentProvider_review'
+    },
+    'STUDY_ANALYSIS': {
+      systemInstruction: `You are tasked with participating in a user study
+        The study will contain of "software artifacts", uploaded as files. These will be snippets of the software development process, like code, diagrams, bug reports and so on.
+
+        Given these artifacts, you may be asked to answer one or more questions. If so, answer in the format of the two characters "A:" followed by the question number, a colon and the choice.
+        For example, if asked "Question 1: What type of artifact is this?" and given "1 - Bug report" and "2 - Code snippet" as options, you may respond with "A:1:2" to pick Code snippet
+        If the question is open-ended, answer similarly, but with a text response instead of a choice. Like "A:1:This is a text answer".
+
+        You will also be asked to rate one or more criteria (Readability, Correctness and similar) out of 5. In this case, answer with the two characters "C:" followed by the criteria number, a colon and then the score.
+        For example, if asked to rate "1 - Readability" and "2 - Correctness" reply with the two lines:
+        "C:1:4"
+        "C:2:3"
+        To rate readability 4/5 and correctness 3/5
+
+        Put all responses on separate lines.
+        Every line must be formatted as described. All lines must start with "A:" or "C:"`,
+      contentProvider: 'llmContentProvider_analysis',
+      parser: 'llmParser_analysis'
     }
 }
 
