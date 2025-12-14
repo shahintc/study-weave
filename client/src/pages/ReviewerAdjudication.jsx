@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle, CheckCircle2, Eye, RefreshCcw, Timer, Sparkles, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Eye, RefreshCcw, Timer, Sparkles, Loader2, Zap, AlertCircle as AlertCircleIcon } from "lucide-react";
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All" },
@@ -47,7 +47,61 @@ const STAGE_LABELS = {
   snapshot: "Snapshot intent",
 };
 
-const getStageLabel = (mode) => STAGE_LABELS[mode] || mode || "—";
+const getStageLabel = (mode) => STAGE_LABELS[mode] || mode;
+
+const BUG_CATEGORIES = [
+  "Configuration Issue",
+  "Network Issue",
+  "Authentication/Authorization Bug",
+  "Data Inconsistency",
+  "Performance Issue",
+  "UI/UX Glitch",
+  "Security Vulnerability",
+  "Compatibility Issue",
+  "Logic Error",
+  "Integration Issue",
+  "Typo/Content Error",
+];
+
+const PATCHES_ARE_CLONES = [
+  "yes",
+  "no"
+]
+
+const SOLID_VIOLATIONS = [
+  { id: "srp", label: "SRP – Single Responsibility Principle" },
+  { id: "ocp", label: "OCP – Open/Closed Principle" },
+  { id: "lsp", label: "LSP – Liskov Substitution Principle" },
+  { id: "isp", label: "ISP – Interface Segregation Principle" },
+  { id: "dip", label: "DIP – Dependency Inversion Principle" },
+];
+
+const COMPLEXITY_LEVELS = ["EASY", "MEDIUM", "HARD"];
+
+/** Clone categories for patch mode */
+const PATCH_CLONE_TYPES = [
+  { id: "type1", label: "Type-1 – Exact (whitespace/comments only)" },
+  { id: "type2", label: "Type-2 – Same structure, different identifiers" },
+  { id: "type3", label: "Type-3 – Copied with added/removed/modified lines" },
+  { id: "type4", label: "Type-4 – Semantically similar, different implementation"},
+];
+
+/** Snapshot study outcomes */
+const SNAPSHOT_OUTCOMES = [
+  { id: "failure", label: "Actual failure" },
+  { id: "intended", label: "Intended UI change" },
+  { id: "unclear", label: "Unclear / not sure" },
+];
+
+const SNAPSHOT_CHANGE_TYPES = [
+  { id: "color", label: "Color / theme change" },
+  { id: "layout", label: "Layout or spacing shift" },
+  { id: "text", label: "Copy / text update" },
+  { id: "icon", label: "Iconography or asset swap" },
+  { id: "content", label: "Missing or extra content" },
+  { id: "animation", label: "Animation / interaction regression" },
+  { id: "other", label: "Other (describe)" },
+];
 
 const normalizeCriteriaRatings = (payload) => {
   if (!payload || typeof payload !== "object") return [];
@@ -156,6 +210,9 @@ export default function ReviewerAdjudication() {
   const [aiSummary, setAiSummary] = useState("");
   const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
   const [aiSummaryError, setAiSummaryError] = useState("");
+  const [aiEvaluationLoading, setAiEvaluationLoading] = useState(false);
+  const [aiEvaluationResult, setAiEvaluationResult] = useState(null); // Placeholder for AI evaluation result
+  const [aiEvaluationError, setAiEvaluationError] = useState("");
   const [artifactSummaries, setArtifactSummaries] = useState({
     primary: { text: "", loading: false, error: "" },
     secondary: { text: "", loading: false, error: "" },
@@ -425,6 +482,87 @@ export default function ReviewerAdjudication() {
         ...prev,
         [key]: { ...prev[key], loading: false, error: message },
       }));
+    }
+  };
+
+  const handleGenerateAiEvaluation = async () => {
+    if (!selected) {
+      return;
+    }
+    setAiEvaluationLoading(true);
+    setAiEvaluationError("");
+    setAiEvaluationResult(null);
+
+    // Placeholder for actual AI evaluation API call
+    try {
+      const mode = selected.participantAnswer.payload.mode;
+      let prompt = "";
+
+      switch (mode) {
+        case "stage1":
+          console.log("Generating AI evaluation for bug adjudication:", selected.id);
+          prompt = "QUESTION 1: Select bug category\n";
+          BUG_CATEGORIES.forEach((category, index) => {
+            prompt += `${index + 1}) ${category}\n`;
+          });
+          break;
+        case "solid":
+          console.log("Generating AI evaluation for SOLID adjudication:", selected.id);
+          prompt = "QUESTION 1: Select SOLID violation present\n";
+          SOLID_VIOLATIONS.forEach((category, index) => {
+            prompt += `${index + 1}) ${category.label}\n`;
+          });
+
+          prompt += "QUESTION 2: Select complexity level\n";
+          COMPLEXITY_LEVELS.forEach((level, index) => {
+            prompt += `${index + 1}) ${level}\n`;
+          });
+
+          prompt += "QUESTION 3 (Open ended): Give fixed version of the code\n";
+          break;
+        case "patch":
+          prompt = "QUESTION 1: Are the given artifacts clones/similar?\n"
+          prompt += "1) Yes\n";
+          prompt += "2) No\n";
+
+          prompt += "QUESTION 2: How do the artifacts relate?\n"
+          PATCH_CLONE_TYPES.forEach((type, index) => {
+            prompt += `${index + 1}) ${type.label}\n`;
+          });
+          break;
+        case "snapshot":
+          prompt += "QUESTION 1: Given the before/after, what is the outcome of the change?\n";
+          SNAPSHOT_OUTCOMES.forEach((type, index) => {
+            prompt += `${index + 1}) ${type.label}\n`;
+          });
+          prompt += "QUESTION 2: What has been changed?\n";
+          SNAPSHOT_CHANGE_TYPES.forEach((type, index) => {
+            prompt += `${index + 1}) ${type.label}\n`;
+          });
+          break;
+        case "custom":
+          break;
+      }
+      prompt += "\nCRITERIA:\n";
+      const criteria = normalizeCriteriaRatings(selected.participantAnswer.payload);
+      criteria.forEach((criterion, index) => {
+        prompt += `${index + 1}) ${criterion.label}\n`;
+      });
+
+      const { data } = await api.post("/api/llm", {
+        key: "STUDY_ANALYSIS",
+        prompt: prompt,
+        id: selected.id,
+      });
+
+      console.log(data?.response);
+      setAiEvaluationResult(data); // Store the entire data object
+    } catch (err) {
+      console.error("AI evaluation error", err);
+      const message = err.response?.data?.error || "Failed to generate AI evaluation.";
+      setAiEvaluationError(message);
+    } finally {
+      setAiEvaluationLoading(false);
     }
   };
 
@@ -709,38 +847,172 @@ export default function ReviewerAdjudication() {
               <section className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-sm font-semibold text-muted-foreground">AI comparison (coming soon)</h3>
+                    <h3 className="text-sm font-semibold text-muted-foreground">AI evaluation</h3>
                     <p className="text-xs text-muted-foreground">
-                      Request an automated evaluation to compare against the participant’s submission.
+                      Generate an AI evaluation for this adjudication.
                     </p>
                   </div>
-                  <Button variant="outline" size="sm" disabled>
-                    Queue AI evaluation
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleGenerateAiEvaluation}
+                    disabled={aiEvaluationLoading || !selected}
+                  >
+                    {aiEvaluationLoading ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Zap className="mr-2 h-4 w-4" />
+                    )}
+                    {aiEvaluationLoading ? "Generating..." : "Generate AI evaluation"}
                   </Button>
                 </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded-lg border p-3 bg-muted/40">
-                    <p className="text-xs font-semibold text-muted-foreground mb-1">Participant</p>
-                    <p className="text-sm">
-                      {selected.participant?.name || "Participant"} · {formatDateTime(selected.submittedAt)}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-1">Reviewed above</p>
-                  </div>
-                  <div className="rounded-lg border p-3 border-dashed">
-                    <p className="text-xs font-semibold text-muted-foreground mb-1">AI evaluation</p>
-                    <p className="text-sm text-muted-foreground">Not requested yet.</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      When enabled, AI results and diffs will appear here for side-by-side adjudication.
-                    </p>
-                  </div>
-                </div>
-              </section>
+                {aiEvaluationResult && (
+                  <div className="grid gap-3 md:grid-cols-2 mt-4">
+                    {/* Participant's Card */}
+                    <div className="rounded-lg border p-4 bg-sky-50">
+                      <h4 className="font-semibold text-sm mb-2">Participant's Evaluation</h4>
+                      {selected.participantAnswer?.payload?.mode === "stage1" && (
+                        <div className="text-sm mt-2 space-y-1">
+                          <p>Bug category: {selected.participantAnswer?.payload?.leftCategory || selected.participantAnswer?.payload?.finalCategory || "—"}</p>
+                        </div>
+                      )}
+                      {selected.participantAnswer?.payload?.mode === "solid" && (
+                        <div className="text-sm mt-2 space-y-1">
+                          <p>Violation: {selected.participantAnswer?.payload?.solidViolation || selected.participantAnswer?.payload?.solid_violation || "—"}</p>
+                          <p>Complexity: {selected.participantAnswer?.payload?.solidComplexity || selected.participantAnswer?.payload?.solid_complexity || "—"}</p>
+                          <p>Refactor:</p>
+                          <Textarea
+                            id="generated-artifact"
+                            readOnly={true}
+                            value={selected.participantAnswer?.payload?.solidFixedCode || selected.participantAnswer?.payload?.solid_fixed_code || "No refactor response."}
+                            className="min-h-[150px]"
+                          />
+                        </div>
+                      )}
+                      {selected.participantAnswer?.payload?.mode === "patch" && (
+                        <div className="text-sm mt-2 space-y-1">
+                          <p>Are patches clones? {selected.participantAnswer?.payload?.patchAreClones || "—"}</p>
+                          <p>Clone type: {selected.participantAnswer?.payload?.patchCloneType || "—"}</p>
+                        </div>
+                      )}
+                      {selected.participantAnswer?.payload?.mode === "snapshot" && (
+                        <div className="text-sm mt-2 space-y-1">
+                          <p>Outcome: {selected.participantAnswer?.payload?.snapshotOutcome || "—"}</p>
+                          <p>Change type: {selected.participantAnswer?.payload?.snapshotChangeType || "—"}</p>
+                        </div>
+                      )}
+                      <Separator className="my-3" />
+                      <p className="text-xs font-semibold text-muted-foreground mb-1">Criteria Scores:</p>
+                      <div className="space-y-1">
+                        {normalizeCriteriaRatings(selected.participantAnswer.payload).map((item) => (
+                          <div key={item.label} className="flex items-center justify-between text-sm">
+                            <span>{item.label}:</span>
+                            <StarRow value={item.rating} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
 
-              <Separator className="my-4" />
+                    {/* AI's Card */}
+                    <div className="rounded-lg border p-4 bg-muted/40 bg-violet-50">
+                      <h4 className="font-semibold text-sm mb-2">AI Evaluation</h4>
+                        {selected.participantAnswer?.payload?.mode === "stage1" && (
+                          <div className="text-sm mt-2 space-y-1">
+                            <p className="flex items-center gap-2">Bug category: {BUG_CATEGORIES[aiEvaluationResult.response.options[0]] || "—"}
+                              {BUG_CATEGORIES[aiEvaluationResult.response.options[0]] !==
+                                (selected.participantAnswer?.payload?.leftCategory || selected.participantAnswer?.payload?.finalCategory) && (
+                                <AlertCircleIcon className="h-4 w-4 text-orange-500" />
+                              )}</p>
+                          </div>
+                        )}
+                        {selected.participantAnswer?.payload?.mode === "solid" && (
+                          <div className="text-sm mt-2 space-y-1">
+                            <p className="flex items-center gap-2">
+                              Violation: {SOLID_VIOLATIONS[aiEvaluationResult.response?.options[0]].id || "—"}
+                              {(SOLID_VIOLATIONS[aiEvaluationResult.response?.options[0]].id || "") !==
+                                (selected.participantAnswer?.payload?.solidViolation || selected.participantAnswer?.payload?.solid_violation || "") && (
+                                <AlertCircleIcon className="h-4 w-4 text-orange-500" />
+                              )}
+                            </p>
+                            <p className="flex items-center gap-2">
+                              Complexity: {COMPLEXITY_LEVELS[aiEvaluationResult.response?.options[1]] || "—"}
+                              {(COMPLEXITY_LEVELS[aiEvaluationResult.response?.options[1]] || "") !==
+                                (selected.participantAnswer?.payload?.solidComplexity || selected.participantAnswer?.payload?.solid_complexity || "") && (
+                                <AlertCircleIcon className="h-4 w-4 text-orange-500" />
+                              )}
+                            </p>
+                            <p className="flex items-center gap-2">
+                              Refactor:
+                            </p>
+                            <Textarea
+                              id="generated-artifact"
+                              readOnly={true}
+                              value={aiEvaluationResult.response?.options[2] || "No refactor response."}
+                              className="min-h-[150px]"
+                            />
+                          </div>
+                        )}
+                        {selected.participantAnswer?.payload?.mode === "patch" && (
+                          <div className="text-sm mt-2 space-y-1">
+                            <p className="flex items-center gap-2">
+                              Are patches clones?: {PATCHES_ARE_CLONES[aiEvaluationResult.response?.options[0]] || "—"}
+                              {(PATCHES_ARE_CLONES[aiEvaluationResult.response?.options[0]] || "") !==
+                                (selected.participantAnswer?.payload?.patchAreClones || "") && (
+                                <AlertCircleIcon className="h-4 w-4 text-orange-500" />
+                              )}
+                            </p>
+                            <p className="flex items-center gap-2">
+                              Clone type: {PATCH_CLONE_TYPES[aiEvaluationResult.response?.options[1]].id || "—"}
+                              {(PATCH_CLONE_TYPES[aiEvaluationResult.response?.options[1]].id || "") !==
+                                (selected.participantAnswer?.payload?.patchCloneType || "") && (
+                                <AlertCircleIcon className="h-4 w-4 text-orange-500" />
+                              )}
+                            </p>
+                          </div>
+                        )}
+                        {selected.participantAnswer?.payload?.mode === "snapshot" && (
+                          <div className="text-sm mt-2 space-y-1">
+                            <p className="flex items-center gap-2">
+                              Outcome: {SNAPSHOT_OUTCOMES[aiEvaluationResult.response?.options[0]].id || "—"}
+                              {(SNAPSHOT_OUTCOMES[aiEvaluationResult.response?.options[0]].id || "") !==
+                                (selected.participantAnswer?.payload?.snapshotOutcome || "") && (
+                                <AlertCircleIcon className="h-4 w-4 text-orange-500" />
+                              )}
+                            </p>
+                            <p className="flex items-center gap-2">
+                              Change type: {SNAPSHOT_CHANGE_TYPES[aiEvaluationResult.response?.options[1]].id || "—"}
+                              {(SNAPSHOT_CHANGE_TYPES[aiEvaluationResult.response?.options[1]].id || "") !==
+                                (selected.participantAnswer?.payload?.snapshotChangeType || "") && (
+                                <AlertCircleIcon className="h-4 w-4 text-orange-500" />
+                              )}
+                            </p>
+                          </div>
+                        )}
+                      <Separator className="my-3" />
+                      <p className="text-xs font-semibold text-muted-foreground mb-1">Criteria Scores:</p>
+                      <div className="space-y-1">
+                        {normalizeCriteriaRatings(selected.participantAnswer.payload).map((participantCriterion, index) => {
+                          const aiScore = aiEvaluationResult.response?.criteria?.[index] ?? 0;
+                          const participantScore = participantCriterion.rating ?? 0;
+                          const isDifferent = aiScore !== participantScore;
 
-              <section className="space-y-4">
-                <h3 className="text-sm font-semibold text-muted-foreground">LLM / ground truth</h3>
-                <GroundTruthSummary groundTruth={selected.groundTruth} />
+                          return participantCriterion ? (
+                            <div key={participantCriterion.label} className="flex items-center justify-between text-sm">
+                              <div className="flex items-center gap-2">
+                                <span>{participantCriterion.label}:</span>
+                                {isDifferent && <AlertCircleIcon className="h-4 w-4 text-orange-500" />}
+                              </div>
+                              <StarRow value={aiScore} />
+                            </div>
+                          ) : null;
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {aiEvaluationError && (
+                  <p className="text-sm text-red-500 mt-2">{aiEvaluationError}</p>
+                )}
               </section>
 
               <Separator className="my-4" />

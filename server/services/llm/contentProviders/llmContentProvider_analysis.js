@@ -1,6 +1,6 @@
-import Artifact from "../../../sequelize-models/artifact";
-import StudyComparison from "../../../sequelize-models/studyComparison";
-import StudyArtifact from "../../../sequelize-models/studyArtifact";
+import Artifact from "../../../sequelize-models/artifact.js";
+import StudyComparison from "../../../sequelize-models/studyComparison.js";
+import StudyArtifact from "../../../sequelize-models/studyArtifact.js";
 
 export async function getContent(comparisonId) {
   try {
@@ -8,12 +8,12 @@ export async function getContent(comparisonId) {
       include: [
         {
           model: StudyArtifact,
-          as: 'primaryStudyArtifact', // Alias from studyComparison.js
+          as: 'primaryArtifact', // Changed from primaryStudyArtifact
           include: [{ model: Artifact, as: 'artifact' }] // Alias from studyArtifact.js
         },
         {
           model: StudyArtifact,
-          as: 'secondaryStudyArtifact', // Alias from studyComparison.js
+          as: 'secondaryArtifact', // Changed from secondaryStudyArtifact
           include: [{ model: Artifact, as: 'artifact' }]
         }
       ]
@@ -24,8 +24,8 @@ export async function getContent(comparisonId) {
     }
 
     // Access nested artifact data from models
-    const primary = comparison.primaryStudyArtifact.artifact;
-    const secondary = comparison.secondaryStudyArtifact.artifact;
+    const primary = comparison.primaryArtifact.artifact; // Changed from primaryStudyArtifact
+    const secondary = comparison.secondaryArtifact.artifact; // Changed from secondaryStudyArtifact
 
     // Return as an array of objects with requested capitalization
     return [
