@@ -693,9 +693,9 @@ function NavRail({ nav = [], activePath = "", onSelect, roleLabel = "Participant
       <div className="space-y-1">
         {nav.map((item) => {
           const Icon = iconMap[item.to] || LayoutDashboard;
-          const isActive =
-            activePath === item.to ||
-            activePath.startsWith(`${item.to}/`);
+          const matchesExact = activePath === item.to;
+          const matchesNested = item.to !== "/participant" && activePath.startsWith(`${item.to}/`);
+          const isActive = matchesExact || matchesNested;
           return (
             <button
               key={item.to}
