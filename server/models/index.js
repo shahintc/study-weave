@@ -25,8 +25,8 @@ User.hasMany(Artifact, { foreignKey: 'userId', as: 'artifacts' });
 Artifact.belongsTo(User, { foreignKey: 'userId', as: 'uploader' });
 
 // Many-to-many association between Artifact and Tag
-Artifact.belongsToMany(Tag, { through: 'ArtifactTag', foreignKey: 'artifactId', as: 'tags' });
-Tag.belongsToMany(Artifact, { through: 'ArtifactTag', foreignKey: 'tagId', as: 'artifacts' });
+Artifact.belongsToMany(Tag, { through: 'ArtifactTag', foreignKey: 'artifactId', as: 'tags', onDelete: 'CASCADE' });
+Tag.belongsToMany(Artifact, { through: 'ArtifactTag', foreignKey: 'tagId', as: 'artifacts', onDelete: 'CASCADE' });
 
 // User / ArtifactCollection
 User.hasMany(ArtifactCollection, { foreignKey: 'userId', as: 'artifactCollections' });

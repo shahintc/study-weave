@@ -144,6 +144,34 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// POST /api/artifact-collections/:collectionId/artifacts - Add multiple artifacts to a collection
+router.post('/:collectionId/artifacts', async (req, res) => {
+  try {
+    const { collectionId } = req.params;
+    const { userId, artifactIds } = req.body;
+
+    if (!collectionId || isNaN(parseInt(collectionId))) {
+      return res.status(400).json({ message: 'A valid collectionId is required.' });
+    }
+    if (!userId || isNaN(parseInt(userId))) {
+      return res.status(400).json({ message: 'A valid userId is required for authorization.' });
+    }
+    if (!artifactIds || !Array.isArray(artifactIds) || artifactIds.length === 0 || !artifactIds.every(id => typeof id === 'number')) {
+      return res.status(400).json({ message: 'artifactIds must be a non-empty array of numbers.' });
+    }
+
+    const updatedCollection = await ArtifactCollection.addMultipleArtifactsToCollection(
+      parseInt(collectionId),
+      parseInt(userId),
+      artifactIds
+    );
+    res.status(200).json({ message: 'Artifacts added to collection successfully', collection: updatedCollection });
+  } catch (error) {
+    console.error('Error adding multiple artifacts to collection:', error);
+    res.status(500).json({ message: error.message || 'Failed to add artifacts to collection.' });
+  }
+});
+
 // POST /api/artifact-collections/:collectionId/artifacts/:artifactId - Add a single artifact to a collection
 router.post('/:collectionId/artifacts/:artifactId', async (req, res) => {
   try {

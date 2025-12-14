@@ -12,7 +12,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuCheckboxItem
 } from "@/components/ui/dropdown-menu";
-import { IconPlus, IconBolt } from "@tabler/icons-react";
+import { IconPlus, IconBolt, IconDotsVertical } from "@tabler/icons-react";
 // import { FileUploadModal } from '@/pages/artifactManagement/UploadModal'; // Import the FileUploadModal (for replacements) - No longer needed
 import { DetailedUploadModal } from '@/pages/artifactManagement/DetailedUploadModal'; // Import the DetailedUploadModal (for new artifacts)
 import { ManageModal } from '@/pages/artifactManagement/ManageModal'; // Import the ManageModal
@@ -20,6 +20,7 @@ import { GenerateArtifactModal } from "./GenerateArtifactModal";
 import { CreateCollectionModal } from './CreateCollectionModal';
 import { ViewCollectionModal } from './ViewCollectionModal';
 import { Separator } from '@/components/ui/separator'; // Import Separator
+import { ManageTagsModal } from "./ManageTagsModal";
 
 export default function ResearcherDashboard() {
   const navigate = useNavigate();
@@ -35,6 +36,7 @@ export default function ResearcherDashboard() {
   const [isManageModalOpen, setIsManageModalOpen] = useState(false);
   const [isCreateCollectionModalOpen, setIsCreateCollectionModalOpen] = useState(false);
   const [isViewCollectionModalOpen, setIsViewCollectionModalOpen] = useState(false); // New state for ViewCollectionModal
+  const [isManageTagsModalOpen, setIsManageTagsModalOpen] = useState(false); // State for ManageTagsModal
   const [collectionToViewId, setCollectionToViewId] = useState(null); // To track which collection is being viewed
   const [artifactToManage, setArtifactToManage] = useState(null);
   const [artifactToReplaceId, setArtifactToReplaceId] = useState(null); // To track which artifact's file is being replaced by the
@@ -249,6 +251,18 @@ export default function ResearcherDashboard() {
                 <IconBolt className="h-4 w-4" />
                 Generate Artifact
               </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon">
+                    <IconDotsVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => setIsManageTagsModalOpen(true)}>
+                    Manage Tags
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Separator orientation="vertical" className="h-8 mx-2" /> {/* Separator */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -464,6 +478,17 @@ export default function ResearcherDashboard() {
         currentUserId={currentUserId}
         onCollectionUpdated={handleCollectionUpdated}
         onCollectionDeleted={handleCollectionDeleted}
+      />
+
+      <ManageTagsModal
+        isOpen={isManageTagsModalOpen}
+        setIsOpen={setIsManageTagsModalOpen}
+        onClose={() => {
+          setIsManageTagsModalOpen(false);
+          fetchArtifacts();      // Refresh artifact list
+          fetchAvailableTags();  // Refresh available tags in the filter dropdown
+        }}
+        currentUserId={currentUserId}
       />
 
     </div>

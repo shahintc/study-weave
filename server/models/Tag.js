@@ -52,6 +52,31 @@ class Tag {
       throw error;
     }
   }
+
+  /**
+   * Deletes a tag by its ID.
+   * Also removes its linkage from any artifacts it's a part of if cascade delete is configured.
+   * @param {number} id The ID of the tag to delete.
+   * @returns {Promise<boolean>} A promise that resolves to true if the tag was deleted, false otherwise.
+   * @throws {Error} If the tag ID is invalid or if there's a database error.
+   */
+  static async delete(id) {
+    if (!id || typeof id !== 'number' || id <= 0) {
+      throw new Error('Valid tag ID is required for deletion.');
+    }
+
+    try {
+      // Sequelize's destroy method returns the number of rows deleted.
+      // If associations have onDelete: 'CASCADE', linked records will also be removed.
+      const deletedRowCount = await SequelizeTag.destroy({
+        where: { id: id }
+      });
+      return deletedRowCount > 0; // True if one or more rows were deleted, false otherwise
+    } catch (error) {
+      console.error(`Error deleting tag with ID "${id}":`, error);
+      throw error;
+    }
+  }
 }
 
 module.exports = Tag;
