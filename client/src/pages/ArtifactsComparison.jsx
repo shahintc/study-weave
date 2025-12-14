@@ -2219,13 +2219,13 @@ export default function ArtifactsComparison() {
         className="h-full w-full overflow-auto bg-muted/40 flex items-start justify-center p-8 relative"
       >
         <div
-          className="relative shadow-lg bg-card transition-transform origin-top border border-border/70 rounded-lg"
+          className="relative shadow-lg bg-card transition-transform origin-top border border-border/70 rounded-lg max-w-full"
           style={{ transform: `scale(${zoom})` }}
         >
           {data.type === "image" && (
             <img
               src={data.url}
-              className="block max-w-none select-none"
+              className="block max-w-full select-none h-auto"
               alt="Artifact"
               onLoad={() => refreshCanvas(side, isBig)}
             />
@@ -2235,7 +2235,7 @@ export default function ArtifactsComparison() {
             <object
               data={displayUrl}
               type="application/pdf"
-              className="block w-[800px] h-[1100px] border-none"
+              className="block w-full max-w-[800px] h-[1100px] border-none"
               style={{ pointerEvents: isDraw ? "none" : "auto" }}
             >
               <div className="p-4 text-center text-gray-500">
@@ -2952,7 +2952,7 @@ export default function ArtifactsComparison() {
 
         {/* MAIN VIEWER */}
         {mode !== "custom" && (
-          <div className="flex border border-border/70 rounded-lg h-[650px] shadow-sm overflow-hidden bg-card/60">
+          <div className="flex w-full max-w-full border border-border/70 rounded-lg h-[650px] shadow-sm overflow-hidden bg-card/60">
             {/* LEFT always visible */}
             <div
               className={`flex-1 flex flex-col min-w-0 border-r relative ${
