@@ -32,7 +32,7 @@ const LLM_INSTRUCTION_MAP = {
         For example, if asked "Question 1: What type of artifact is this?" and given "1 - Bug report" and "2 - Code snippet" as options, you may respond with "A:1:2" to pick Code snippet
         If the question is open-ended, answer similarly, but with a text response instead of a choice. Like "A:1:This is a text answer".
 
-        You will also be asked to rate one or more criteria (Readability, Correctness and similar) out of 5. In this case, answer with the two characters "C:" followed by the criteria number, a colon and then the score.
+        You will also be asked to rate one or more criteria (Readability, Correctness and similar) 1-to-5. In this case, answer with the two characters "C:" followed by the criteria number, a colon and then the score.
         For example, if asked to rate "1 - Readability" and "2 - Correctness" reply with the two lines:
         "C:1:4"
         "C:2:3"

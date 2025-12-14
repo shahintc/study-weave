@@ -1,45 +1,68 @@
 import Artifact from "../../../sequelize-models/artifact.js";
-import StudyComparison from "../../../sequelize-models/studyComparison.js";
-import StudyArtifact from "../../../sequelize-models/studyArtifact.js";
+import Evaluation from "../../../sequelize-models/evaluation.js"; // Import the Evaluation model
 
-export async function getContent(comparisonId) {
+export async function getContent(evaluationId) {
   try {
-    const comparison = await StudyComparison.findByPk(comparisonId, {
-      include: [
-        {
-          model: StudyArtifact,
-          as: 'primaryArtifact', // Changed from primaryStudyArtifact
-          include: [{ model: Artifact, as: 'artifact' }] // Alias from studyArtifact.js
-        },
-        {
-          model: StudyArtifact,
-          as: 'secondaryArtifact', // Changed from secondaryStudyArtifact
-          include: [{ model: Artifact, as: 'artifact' }]
-        }
-      ]
-    });
+    // a) Fetch the evaluation with that id
+    const evaluation = await Evaluation.findByPk(evaluationId);
 
-    if (!comparison) {
-      throw new Error('StudyComparison not found');
+    if (!evaluation) {
+      throw new Error(`Evaluation with ID ${evaluationId} not found`);
     }
 
-    // Access nested artifact data from models
-    const primary = comparison.primaryArtifact.artifact; // Changed from primaryStudyArtifact
-    const secondary = comparison.secondaryArtifact.artifact; // Changed from secondaryStudyArtifact
+    // Initialize an array to hold all artifact IDs
+    let allArtifactIds = [];
 
-    // Return as an array of objects with requested capitalization
-    return [
-      {
-        filepath: primary.filePath,
-        mimeType: primary.fileMimeType
-      },
-      {
-        filepath: secondary.filePath,
-        mimeType: secondary.fileMimeType
+    // Check participantPayload.left.artifactId
+    const leftArtifactId = evaluation.participantPayload?.left?.artifactId;
+    if (typeof leftArtifactId === 'number') {
+      allArtifactIds.push(leftArtifactId);
+    }
+
+    // Check participantPayload.right.artifactId
+    const rightArtifactId = evaluation.participantPayload?.right?.artifactId;
+    if (typeof rightArtifactId === 'number') {
+      allArtifactIds.push(rightArtifactId);
+    }
+
+    // b) Look at Evaluation.participantPayload.customArtifacts (a list of objects, each with an artifact id)
+    const customArtifactsPayload = evaluation.participantPayload?.customArtifacts;
+
+    if (customArtifactsPayload && Array.isArray(customArtifactsPayload) && customArtifactsPayload.length > 0) {
+      const customArtifactIds = customArtifactsPayload
+        .map(item => item.artifactId)
+        .filter(id => typeof id === 'number');
+      allArtifactIds = allArtifactIds.concat(customArtifactIds);
+    }
+
+    // Ensure unique artifact IDs
+    allArtifactIds = [...new Set(allArtifactIds)];
+
+    if (allArtifactIds.length === 0) {
+      console.warn(`No valid artifact IDs found in participantPayload for Evaluation ID ${evaluationId}`);
+      return [];
+    }
+
+    // c) Fetch all the artifacts with these ids
+    const artifacts = await Artifact.findAll({
+      where: {
+        id: allArtifactIds
       }
-    ];
+    });
+
+    if (artifacts.length === 0) {
+      console.warn(`No artifacts found for the given IDs: ${allArtifactIds.join(', ')} from Evaluation ID ${evaluationId}`);
+      return [];
+    }
+
+    // d) Return the appropriate filepath and mimeType as is done already
+    return artifacts.map(artifact => ({
+      filepath: artifact.filePath,
+      mimeType: artifact.fileMimeType
+    }));
+
   } catch (error) {
-    console.error('Error fetching artifact details:', error);
+    console.error(`Error fetching artifact details for Evaluation ID ${evaluationId}:`, error);
     throw error;
   }
 }

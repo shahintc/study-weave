@@ -106,6 +106,7 @@ const SNAPSHOT_CHANGE_TYPES = [
 ];
 
 const normalizeCriteriaRatings = (payload) => {
+  console.log(payload);
   if (!payload || typeof payload !== "object") return [];
   const candidates = [
     payload.criteriaRatings,
@@ -510,6 +511,7 @@ export default function ReviewerAdjudication() {
     setFeedbackForm({ comment: "", rating: "none" });
     setNoteSaving(false);
     setDeletingNoteId(null);
+    setAiEvaluationResult(null);
   };
 
   const handleDecisionChange = (field, value) => {
@@ -645,6 +647,16 @@ export default function ReviewerAdjudication() {
           });
           break;
         case "custom":
+          selected.participantAnswer.payload.customQuestions.forEach((question, index) => {
+            if (question.type === "answer"){
+              prompt += `QUESTION ${index + 1} (Open ended): ${question.prompt}\n`;
+            } else {
+              prompt += `QUESTION ${index + 1}: ${question.prompt}\n`;
+            }
+            question.options.forEach((option, index) => {
+              prompt += `${index + 1}) ${option}\n`;
+            });
+          })
           break;
       }
       prompt += "\nCRITERIA:\n";
@@ -1064,6 +1076,16 @@ export default function ReviewerAdjudication() {
                           <p>Change type: {selected.participantAnswer?.payload?.snapshotChangeType || "—"}</p>
                         </div>
                       )}
+                      {selected.participantAnswer?.payload?.mode === "custom" && (
+                        <div className="text-sm mt-2 space-y-1">
+                          {(selected.participantAnswer?.payload?.customQuestions || []).map((q) => (
+                            <div key={q.id}>
+                              <p>{q.prompt}:</p>
+                              <p className="text-muted-foreground">{selected.participantAnswer?.payload?.customResponses?.[q.id] || "N/A"}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <Separator className="my-3" />
                       <p className="text-xs font-semibold text-muted-foreground mb-1">Criteria Scores:</p>
                       <div className="space-y-1">
@@ -1149,6 +1171,38 @@ export default function ReviewerAdjudication() {
                                 <AlertCircleIcon className="h-4 w-4 text-orange-500" />
                               )}
                             </p>
+                          </div>
+                        )}
+                        {selected.participantAnswer?.payload?.mode === "custom" && (
+                          <div className="text-sm mt-2 space-y-1">
+                            <p className="font-semibold mb-1">Custom Questions:</p>
+                            {(selected.participantAnswer?.payload?.customQuestions || []).map((q, qIndex) => {
+                              const participantAnswer = selected.participantAnswer?.payload?.customResponses?.[q.id] || "N/A";
+                              let aiAnswer = "—";
+                              const aiOptionIndex = aiEvaluationResult.response?.options?.[qIndex];
+
+                              if (aiOptionIndex !== undefined && aiOptionIndex !== null) {
+                                if (q.type === "mcq" || q.type === "dropdown") {
+                                  aiAnswer = q.options?.[aiOptionIndex-1] || "N/A";
+                                } else if (q.type === "answer") {
+                                  aiAnswer = String(aiOptionIndex); // Assuming idx itself is the answer
+                                }
+                              }
+
+                              const isDifferent = aiAnswer !== participantAnswer;
+
+                              return (
+                                <div key={q.id} className="space-y-1">
+                                  <p className="font-medium flex items-center gap-2">
+                                    {q.prompt}
+                                    {(isDifferent && q.type !== "answer") && <AlertCircleIcon className="h-4 w-4 text-orange-500" />}
+                                  </p>
+                                  <p className="text-muted-foreground">
+                                    {aiAnswer}
+                                  </p>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       <Separator className="my-3" />
