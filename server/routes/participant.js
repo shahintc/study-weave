@@ -103,6 +103,19 @@ const normalizeCustomArtifactIds = (value) => {
     .filter((val) => Number.isFinite(val));
 };
 
+const normalizeTimerState = (timer = {}) => {
+  const elapsedMs = Math.max(0, Number(timer.elapsedMs) || 0);
+  const lastStart = Number(timer.lastStart);
+  return {
+    elapsedMs,
+    running: Boolean(timer.running),
+    submitted: Boolean(timer.submitted),
+    lastStart: Number.isFinite(lastStart) ? lastStart : null,
+    studyArtifactId: timer.studyArtifactId ? Number(timer.studyArtifactId) : null,
+    updatedAt: timer.updatedAt || new Date().toISOString(),
+  };
+};
+
 async function buildPanePayload(studyArtifactEntry, role = 'primary') {
   if (!studyArtifactEntry) {
     return null;
@@ -595,6 +608,104 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
   }
 });
 
+router.get('/timer', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || !['participant', 'guest'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only participants can view their timer.' });
+    }
+
+    const studyId = Number(req.query.studyId);
+    const studyArtifactId = Number(req.query.studyArtifactId);
+    const studyParticipantId = Number(req.query.studyParticipantId);
+
+    if (!Number.isFinite(studyId) || !Number.isFinite(studyArtifactId)) {
+      return res.status(400).json({ message: 'studyId and studyArtifactId are required.' });
+    }
+
+    const participantWhere = { studyId, participantId: req.user.id };
+    if (Number.isFinite(studyParticipantId)) {
+      participantWhere.id = studyParticipantId;
+    }
+
+    const participant = await StudyParticipant.findOne({ where: participantWhere });
+    if (!participant) {
+      return res.status(404).json({ message: 'Participant record not found for this study.' });
+    }
+
+    const checkpoint = normalizeJson(participant.lastCheckpoint);
+    const timer = checkpoint?.timer ? normalizeTimerState(checkpoint.timer) : null;
+    if (!timer) {
+      return res.status(404).json({ message: 'No timer found for this study artifact.' });
+    }
+    if (timer.studyArtifactId && timer.studyArtifactId !== studyArtifactId) {
+      return res.status(404).json({ message: 'No timer found for this study artifact.' });
+    }
+    return res.json({ timer });
+  } catch (error) {
+    console.error('Timer fetch error', error);
+    return res.status(500).json({ message: 'Unable to load timer right now.' });
+  }
+});
+
+router.post('/timer', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || !['participant', 'guest'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only participants can update their timer.' });
+    }
+
+    const {
+      studyId: rawStudyId,
+      studyArtifactId: rawStudyArtifactId,
+      studyParticipantId: rawStudyParticipantId,
+      elapsedMs,
+      running,
+      submitted,
+      lastStart,
+    } = req.body;
+
+    const studyId = Number(rawStudyId);
+    const studyArtifactId = Number(rawStudyArtifactId);
+    const studyParticipantId = Number(rawStudyParticipantId);
+
+    if (!Number.isFinite(studyId) || !Number.isFinite(studyArtifactId)) {
+      return res.status(400).json({ message: 'studyId and studyArtifactId are required.' });
+    }
+
+    const participantWhere = { studyId, participantId: req.user.id };
+    if (Number.isFinite(studyParticipantId)) {
+      participantWhere.id = studyParticipantId;
+    }
+
+    const participant = await StudyParticipant.findOne({ where: participantWhere });
+    if (!participant) {
+      return res.status(404).json({ message: 'Participant record not found for this study.' });
+    }
+
+    const existingCheckpoint = normalizeJson(participant.lastCheckpoint);
+    const nextTimer = normalizeTimerState({
+      ...(existingCheckpoint?.timer || {}),
+      elapsedMs,
+      running,
+      submitted,
+      lastStart,
+      studyArtifactId,
+      updatedAt: new Date().toISOString(),
+    });
+
+    participant.lastCheckpoint = {
+      ...existingCheckpoint,
+      timer: nextTimer,
+    };
+
+    await participant.save();
+
+    return res.json({ timer: nextTimer });
+  } catch (error) {
+    console.error('Timer persist error', error);
+    return res.status(500).json({ message: 'Unable to persist timer right now.' });
+  }
+});
+
 function normalizeSnapshotArtifactsConfig(raw) {
   if (!raw || typeof raw !== 'object') {
     return null;
@@ -689,6 +800,7 @@ function formatEnrollment(entry) {
     lastUpdatedAt: plain.updatedAt ? new Date(plain.updatedAt).toISOString() : null,
     studyWindow: buildStudyWindow(study.timelineStart, study.timelineEnd),
     defaultArtifactMode: defaultMode,
+    lastCheckpoint: normalizeJson(plain.lastCheckpoint),
   };
 }
 

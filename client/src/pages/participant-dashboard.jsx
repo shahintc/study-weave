@@ -126,6 +126,28 @@ const dedupeNotifications = (list = []) => {
   return result;
 };
 
+const normalizeTimerSnapshot = (timer) => {
+  if (!timer) return null;
+  return {
+    elapsedMs: Math.max(0, Number(timer.elapsedMs) || 0),
+    running: Boolean(timer.running),
+    submitted: Boolean(timer.submitted),
+  };
+};
+
+const buildTimerKeyForStudy = (study, artifactId) => {
+  if (artifactId) {
+    return buildStudyTimerKey({
+      studyId: study.studyId,
+      studyArtifactId: artifactId,
+      studyParticipantId: study.studyParticipantId,
+    });
+  }
+  return study.studyId
+    ? `study:${study.studyId}:${study.studyParticipantId || "self"}`
+    : null;
+};
+
 export default function ParticipantDashboard() {
   const navigate = useNavigate();
   const [user, setUser] = useState(null);
@@ -262,26 +284,68 @@ export default function ParticipantDashboard() {
     }
   }, [authToken, navigate]);
 
-  const refreshTimerSnapshots = useCallback(() => {
-    if (typeof window === "undefined") return;
+  const refreshTimerSnapshots = useCallback(async () => {
+    if (!studies.length) {
+      setTimerSnapshots({});
+      return;
+    }
+    const token =
+      authToken ||
+      (typeof window !== "undefined"
+        ? window.localStorage.getItem("token")
+        : null);
     const next = {};
-    studies.forEach((study) => {
-      const timerKey = buildStudyTimerKey({
-        studyId: study.studyId,
-        studyArtifactId:
+    await Promise.all(
+      studies.map(async (study) => {
+        const checkpointTimer = normalizeTimerSnapshot(study.lastCheckpoint?.timer);
+        const fallbackStudyArtifactId =
           study.nextAssignment?.studyArtifactId ||
           study.cta?.studyArtifactId ||
-          null,
-        studyParticipantId: study.studyParticipantId,
-      });
-      if (!timerKey) return;
-      const snapshot = readTimerSnapshot(timerKey);
-      if (snapshot) {
-        next[timerKey] = snapshot;
-      }
-    });
+          study.lastCheckpoint?.timer?.studyArtifactId ||
+          null;
+
+        const timerKey = buildTimerKeyForStudy(study, fallbackStudyArtifactId);
+        if (!timerKey) return;
+
+        const fallbackSnapshot =
+          typeof window !== "undefined" ? readTimerSnapshot(timerKey) : null;
+        const studyArtifactId = fallbackStudyArtifactId;
+        if (!study.studyId || !studyArtifactId || !token) {
+          if (checkpointTimer) {
+            next[timerKey] = checkpointTimer;
+          } else if (fallbackSnapshot) {
+            next[timerKey] = fallbackSnapshot;
+          }
+          return;
+        }
+        try {
+          const { data } = await axios.get("/api/participant/timer", {
+            params: {
+              studyId: study.studyId,
+              studyArtifactId,
+              studyParticipantId: study.studyParticipantId || undefined,
+            },
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          const serverTimer = normalizeTimerSnapshot(data?.timer);
+          if (serverTimer) {
+            next[timerKey] = serverTimer;
+            return;
+          }
+        } catch (err) {
+          if (err?.response?.status !== 404) {
+            console.warn("Timer refresh failed", err);
+          }
+        }
+        if (checkpointTimer) {
+          next[timerKey] = checkpointTimer;
+        } else if (fallbackSnapshot) {
+          next[timerKey] = fallbackSnapshot;
+        }
+      }),
+    );
     setTimerSnapshots(next);
-  }, [studies]);
+  }, [authToken, studies]);
 
   useEffect(() => {
     if (!user || !authToken) {
@@ -295,7 +359,10 @@ export default function ParticipantDashboard() {
 
   useEffect(() => {
     refreshTimerSnapshots();
-    const id = setInterval(refreshTimerSnapshots, 1000);
+    const tick = () => {
+      refreshTimerSnapshots();
+    };
+    const id = setInterval(tick, 5000);
     return () => clearInterval(id);
   }, [refreshTimerSnapshots]);
 
@@ -647,21 +714,33 @@ export default function ParticipantDashboard() {
             ) : (
               scopedStudies.map((study) => {
                 const cardStatus = deriveCardStatus(study, visitedStudies);
-                const statusMeta = getParticipationStatusMeta(cardStatus);
-            const progressPercent = deriveProgressPercent(cardStatus);
                 const competency = study.competency || {};
                 const nextModeLabel = study.nextAssignment?.modeLabel || null;
                 const artifactTotals = study.artifactProgress?.totals?.submitted || 0;
                 const isClosed = Boolean(study.isPastDeadline);
-                const timerKey = buildStudyTimerKey({
-                  studyId: study.studyId,
-                  studyArtifactId:
-                    study.nextAssignment?.studyArtifactId ||
+                const timerKey = buildTimerKeyForStudy(
+                  study,
+                  study.nextAssignment?.studyArtifactId ||
                     study.cta?.studyArtifactId ||
+                    study.lastCheckpoint?.timer?.studyArtifactId ||
                     null,
-                  studyParticipantId: study.studyParticipantId,
-                });
-                const timerSnapshot = timerKey ? timerSnapshots[timerKey] : null;
+                );
+                const fallbackTimerSnapshot = normalizeTimerSnapshot(
+                  study.lastCheckpoint?.timer,
+                );
+                const timerSnapshot = timerKey
+                  ? timerSnapshots[timerKey] || fallbackTimerSnapshot
+                  : fallbackTimerSnapshot;
+                const timerNotStarted =
+                  !timerSnapshot ||
+                  (!timerSnapshot.running &&
+                    !timerSnapshot.submitted &&
+                    (!timerSnapshot.elapsedMs || timerSnapshot.elapsedMs === 0));
+                const effectiveCardStatus = timerNotStarted
+                  ? "not_started"
+                  : cardStatus;
+                const statusMeta = getParticipationStatusMeta(effectiveCardStatus);
+                const progressPercent = deriveProgressPercent(effectiveCardStatus);
                 const timerIndicatorClass = timerSnapshot?.submitted
                   ? "bg-slate-400"
                   : timerSnapshot?.running
