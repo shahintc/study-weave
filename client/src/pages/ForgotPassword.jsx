@@ -25,7 +25,8 @@ export default function ForgotPassword() {
     try {
       const res = await axios.post("/api/auth/request-password-reset", { email });
       setStep("reset");
-      setMessage(res.data?.message || "If an account exists, a reset code was sent.");
+      setMessage("");
+      setError("");
     } catch (err) {
       setError(err.response?.data?.message || "Request failed");
     } finally {
@@ -67,8 +68,12 @@ export default function ForgotPassword() {
           ? "Check your email for the 6-digit code, then choose a new password."
           : "Enter your email to receive a password reset code."}
       </p>
-      {error ? <div className="auth-error">{error}</div> : null}
-      {message ? <div className="auth-success">{message}</div> : null}
+      {error ? (
+        <div className="auth-error" style={{ color: "red" }}>
+          {error}
+        </div>
+      ) : null}
+      {message && step !== "reset" ? <div className="auth-success">{message}</div> : null}
 
       {step === "reset" ? (
         <form onSubmit={handleReset} className="auth-form">
@@ -77,7 +82,9 @@ export default function ForgotPassword() {
             placeholder="Email"
             required
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            readOnly
+            disabled
+            style={{ backgroundColor: "#f3f4f6", color: "#6b7280", cursor: "not-allowed" }}
           />
           <input
             type="text"

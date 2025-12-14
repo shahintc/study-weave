@@ -143,9 +143,9 @@ router.post('/request-password-reset', async (req, res) => {
     }
     const user = await User.findByEmail(email);
     if (!user) {
-      return res
-        .status(200)
-        .json({ message: 'If an account exists for this email, a reset code was sent.' });
+      return res.status(404).json({
+        message: 'We could not find an account with that email address.',
+      });
     }
 
     const code = generateCode();
