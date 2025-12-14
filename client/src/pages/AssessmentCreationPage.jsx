@@ -748,11 +748,11 @@ export default function AssessmentCreationPage() {
                                 <CardContent className="space-y-6">
                                     {/* --- MULTIPLE CHOICE SECTION --- */}
                                     <div className="space-y-4">
-                                        <h3 className="text-xl font-semibold text-gray-800 border-b pb-2">Multiple Choice Questions</h3>
+                                        <h3 className="text-xl font-semibold text-foreground border-b border-slate-700 pb-2">Multiple Choice Questions</h3>
                                         {multipleChoiceQuestions.map(({ field: qField, index: qIndex }, displayIndex) => (
-                                            <div key={qField.id} className="border p-4 rounded-lg space-y-4 bg-gray-50/50">
+                                            <div key={qField.id} className="border border-slate-700 bg-slate-800/80 p-4 rounded-lg space-y-4">
                                                 <div className="flex justify-between items-center">
-                                                    <h4 className="text-lg font-semibold text-gray-700">Question {displayIndex + 1}</h4>
+                                                    <h4 className="text-lg font-semibold text-foreground">Question {displayIndex + 1}</h4>
                                                     <Button type="button" variant="destructive" size="sm" onClick={() => removeQuestion(qIndex)}>
                                                         <Trash2 className="w-4 h-4 mr-2" /> Delete
                                                     </Button>
@@ -791,11 +791,11 @@ export default function AssessmentCreationPage() {
 
                                     {/* --- SHORT ANSWER SECTION --- */}
                                     <div className="space-y-4">
-                                        <h3 className="text-xl font-semibold text-gray-800 border-b pb-2">Short Answer Questions</h3>
+                                        <h3 className="text-xl font-semibold text-foreground border-b border-slate-700 pb-2">Short Answer Questions</h3>
                                         {shortAnswerQuestions.map(({ field: qField, index: qIndex }, displayIndex) => (
-                                            <div key={qField.id} className="border p-4 rounded-lg space-y-4 bg-gray-50/50">
+                                            <div key={qField.id} className="border border-slate-700 bg-slate-800/80 p-4 rounded-lg space-y-4">
                                                 <div className="flex justify-between items-center">
-                                                    <h4 className="text-lg font-semibold text-gray-700">Question {displayIndex + 1}</h4>
+                                                    <h4 className="text-lg font-semibold text-foreground">Question {displayIndex + 1}</h4>
                                                     <Button type="button" variant="destructive" size="sm" onClick={() => removeQuestion(qIndex)}>
                                                         <Trash2 className="w-4 h-4 mr-2" /> Delete
                                                     </Button>
@@ -811,7 +811,7 @@ export default function AssessmentCreationPage() {
                                                         </FormItem>
                                                     )}
                                                 />
-                                                <div className="rounded-md bg-white p-3 text-sm text-muted-foreground">
+                                                <div className="rounded-md bg-slate-900 p-3 text-sm text-muted-foreground border border-slate-700">
                                                     Participants will respond with a short paragraph. Scoring for these questions is manual.
                                                 </div>
                                             </div>
