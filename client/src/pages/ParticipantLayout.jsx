@@ -47,6 +47,7 @@ export default function ParticipantLayout() {
   const [resumeChip, setResumeChip] = useState(null);
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [showGuestCompetencyModal, setShowGuestCompetencyModal] = useState(false);
+  const [showGuestProfileModal, setShowGuestProfileModal] = useState(false);
 
   const refreshNotifications = useCallback(async () => {
     if (!user || user.role !== "participant") return;
@@ -365,6 +366,8 @@ export default function ParticipantLayout() {
                   displayName={user?.name || (isGuest ? "Guest Participant" : "Participant")}
                   avatarUrl={avatarUrl}
                   onLogout={handleLogout}
+                  isGuest={isGuest}
+                  onGuestProfileBlocked={() => setShowGuestProfileModal(true)}
                 />
               </div>
             </div>
@@ -389,6 +392,30 @@ export default function ParticipantLayout() {
             <Button
               onClick={() => {
                 setShowGuestCompetencyModal(false);
+                handleLogout();
+              }}
+            >
+              Go to login
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showGuestProfileModal} onOpenChange={setShowGuestProfileModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Profile changes require an account</DialogTitle>
+            <DialogDescription>
+              You're browsing as a guest. Register or sign in to edit your profile and account settings.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-col items-stretch gap-2 sm:flex-row sm:justify-end sm:gap-2">
+            <Button variant="outline" onClick={() => setShowGuestProfileModal(false)}>
+              Close
+            </Button>
+            <Button
+              onClick={() => {
+                setShowGuestProfileModal(false);
                 handleLogout();
               }}
             >
@@ -618,7 +645,7 @@ function dedupeNotifications(list = []) {
   return result;
 }
 
-function UserNav({ displayName = "Participant", avatarUrl = "", onLogout }) {
+function UserNav({ displayName = "Participant", avatarUrl = "", onLogout, isGuest = false, onGuestProfileBlocked }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -633,12 +660,24 @@ function UserNav({ displayName = "Participant", avatarUrl = "", onLogout }) {
       <DropdownMenuContent align="end">
         <DropdownMenuLabel>My Account</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem asChild>
-          <Link to="/profile">Profile</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link to="/profile">Settings</Link>
-        </DropdownMenuItem>
+        {isGuest ? (
+          <>
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault();
+                onGuestProfileBlocked?.();
+              }}
+            >
+              Profile
+            </DropdownMenuItem>
+          </>
+        ) : (
+          <>
+            <DropdownMenuItem asChild>
+              <Link to="/profile">Profile</Link>
+            </DropdownMenuItem>
+          </>
+        )}
         <DropdownMenuItem onClick={onLogout}>Logout</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
