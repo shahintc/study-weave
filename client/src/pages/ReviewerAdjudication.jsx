@@ -44,6 +44,7 @@ const STAGE_LABELS = {
   solid: "SOLID review",
   patch: "Patch/Clone check",
   snapshot: "Snapshot intent",
+  custom: "Custom stage",
 };
 
 const getStageLabel = (mode) =>
@@ -282,6 +283,21 @@ export default function ReviewerAdjudication() {
           ? payload.snapshotChangeTypeOther || "Other (unspecified)"
           : payload.snapshotChangeType || "—";
       lines.push(`Change type: ${changeType}`);
+      if (payload.assessmentComment) lines.push(`Notes: ${payload.assessmentComment}`);
+    } else if (normalizedMode === "custom") {
+      const responses =
+        payload.customResponses && typeof payload.customResponses === "object"
+          ? payload.customResponses
+          : {};
+      const questions = Array.isArray(payload.customQuestions) ? payload.customQuestions : [];
+      if (questions.length === 0) {
+        lines.push("Custom responses: none provided.");
+      } else {
+        questions.forEach((q, idx) => {
+          const answer = responses[q.id] ?? "—";
+          lines.push(`Q${idx + 1}: ${q.prompt} → ${answer}`);
+        });
+      }
       if (payload.assessmentComment) lines.push(`Notes: ${payload.assessmentComment}`);
     }
     // Include participant-provided panes for LLM context
@@ -1282,9 +1298,16 @@ function AnswerSummary({ answer }) {
   const solidComplexity = payload.solidComplexity || payload.solid_complexity;
   const solidFixedCode = payload.solidFixedCode || payload.solid_fixed_code;
   const solidComment = payload.assessmentComment || payload.assessment_comment;
-  const leftData = payload.left || null;
-  const rightData = payload.right || null;
+  const paneHasContent = (pane) => {
+    if (!pane) return false;
+    if (pane.type === "text") return Boolean(pane.text && String(pane.text).trim());
+    if (pane.type === "image" || pane.type === "pdf") return Boolean(pane.url);
+    return false;
+  };
+  const leftData = paneHasContent(payload.left) ? payload.left : null;
+  const rightData = paneHasContent(payload.right) ? payload.right : null;
   const snapshotDiff = payload.snapshotDiffData || payload.snapshot_diff_data || null;
+  const customArtifacts = Array.isArray(payload.customArtifacts) ? payload.customArtifacts : [];
   const criteriaRatings = normalizeCriteriaRatings(payload);
   const criteriaSummary = summarizeCriteriaRatings(criteriaRatings);
 
@@ -1312,6 +1335,23 @@ function AnswerSummary({ answer }) {
           ? payload.snapshotChangeTypeOther || "Other (unspecified)"
           : payload.snapshotChangeType || "—",
     });
+    if (payload.assessmentComment) qa.push({ q: "Notes", a: payload.assessmentComment });
+  } else if (normalizedMode === "custom") {
+    const responses =
+      payload.customResponses && typeof payload.customResponses === "object"
+        ? payload.customResponses
+        : {};
+    const questions = Array.isArray(payload.customQuestions) ? payload.customQuestions : [];
+    if (questions.length === 0) {
+      qa.push({ q: "Custom questions", a: "No questions configured" });
+    } else {
+      questions.forEach((q, idx) => {
+        qa.push({
+          q: `Q${idx + 1}: ${q.prompt}`,
+          a: responses[q.id] ?? "—",
+        });
+      });
+    }
     if (payload.assessmentComment) qa.push({ q: "Notes", a: payload.assessmentComment });
   } else {
     if (payload.assessmentComment) qa.push({ q: "Notes", a: payload.assessmentComment });
@@ -1379,10 +1419,29 @@ function AnswerSummary({ answer }) {
         </div>
       )}
 
-      {(leftData || rightData) && (
-        <div className="grid gap-3 md:grid-cols-2">
-          <PanePreview title="Artifact A" pane={leftData} />
-          <PanePreview title="Artifact B" pane={rightData} />
+      {normalizedMode === "custom" && customArtifacts.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground">
+            Custom artifacts ({customArtifacts.length})
+          </p>
+          <div className="grid gap-3 md:grid-cols-2">
+            {customArtifacts.map((pane, idx) => (
+              <PanePreview
+                key={pane.studyArtifactId || pane.artifactId || idx}
+                title={`Artifact ${idx + 1}`}
+                pane={pane}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {normalizedMode !== "custom" && (leftData || rightData) && (
+        <div
+          className={`grid gap-3 ${leftData && rightData ? "md:grid-cols-2" : "grid-cols-1"}`}
+        >
+          {leftData && <PanePreview title="Artifact A" pane={leftData} />}
+          {rightData && <PanePreview title="Artifact B" pane={rightData} />}
         </div>
       )}
 

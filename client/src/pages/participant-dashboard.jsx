@@ -19,6 +19,7 @@ const ARTIFACT_MODE_LABELS = {
   solid: "SOLID review",
   clone: "Patch clone check",
   snapshot: "Snapshot intent",
+  custom: "Custom stage",
 };
 
 const PARTICIPATION_STATUS_META = {

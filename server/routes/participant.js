@@ -20,6 +20,7 @@ const ARTIFACT_MODE_OPTIONS = [
   { value: 'solid', label: 'SOLID review' },
   { value: 'clone', label: 'Patch clone check' },
   { value: 'snapshot', label: 'Snapshot intent' },
+  { value: 'custom', label: 'Custom stage' },
 ];
 
 const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
@@ -50,6 +51,7 @@ const TEXT_FILE_EXTENSIONS = [
   '.css',
 ];
 const FALLBACK_MIME = 'application/octet-stream';
+const CUSTOM_STAGE_MAX_ARTIFACTS = 5;
 
 const resolveArtifactMode = (value) => (value && ARTIFACT_MODE_SET.has(value) ? value : DEFAULT_ARTIFACT_MODE);
 
@@ -69,6 +71,36 @@ const isTextLike = (mime, fileName = '') => {
   }
   const lower = fileName ? fileName.toLowerCase() : '';
   return TEXT_FILE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+};
+
+const normalizeCustomQuestions = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item, idx) => {
+      const type = typeof item?.type === 'string' ? item.type.toLowerCase() : '';
+      if (!['mcq', 'dropdown', 'answer'].includes(type)) return null;
+      const prompt = typeof item?.prompt === 'string' ? item.prompt.trim() : '';
+      if (!prompt) return null;
+      const id = item?.id || `custom-q-${idx + 1}`;
+      let options = [];
+      if (type === 'mcq' || type === 'dropdown') {
+        options = Array.isArray(item?.options)
+          ? item.options
+              .map((opt) => (typeof opt === 'string' ? opt.trim() : ''))
+              .filter((opt) => opt)
+          : [];
+        if (options.length < 2) return null;
+      }
+      return { id, type, prompt, options };
+    })
+    .filter(Boolean);
+};
+
+const normalizeCustomArtifactIds = (value) => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((val) => Number(val))
+    .filter((val) => Number.isFinite(val));
 };
 
 async function buildPanePayload(studyArtifactEntry, role = 'primary') {
@@ -299,6 +331,8 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
     const studyMetadata = normalizeJson(study.metadata);
     const isPublicStudy = study.isPublic || Boolean(studyMetadata.isPublic);
 
+    const customQuestions = normalizeCustomQuestions(studyMetadata.customQuestions);
+    const customArtifactIds = normalizeCustomArtifactIds(studyMetadata.customArtifactIds);
     if (req.user.role === 'guest' && !isPublicStudy) {
       return res.status(403).json({ message: 'This study is not available for guests.' });
     }
@@ -422,6 +456,7 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
     let leftPane = await buildPanePayload(studyArtifact, 'primary');
     let rightPane = null;
     let diffPane = null;
+    let customArtifacts = null;
     if (comparison) {
       const isPrimary = Number(comparison.primaryArtifactId) === Number(studyArtifactId);
       const pairedArtifact = isPrimary ? comparison.secondaryArtifact : comparison.primaryArtifact;
@@ -453,6 +488,59 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
         return res.status(400).json({
           message: 'This patch/snapshot task needs a paired study artifact. Please ask the researcher to link two artifacts for this stage.',
         });
+      }
+    }
+
+    if (resolvedMode === 'custom') {
+      const desiredArtifactIds = [];
+      const seen = new Set();
+      const pushArtifactId = (id) => {
+        if (!id || !Number.isFinite(Number(id))) return;
+        const num = Number(id);
+        if (seen.has(num)) return;
+        seen.add(num);
+        desiredArtifactIds.push(num);
+      };
+      pushArtifactId(studyArtifact.artifactId);
+      customArtifactIds.forEach(pushArtifactId);
+      const limitedArtifactIds = desiredArtifactIds.slice(0, CUSTOM_STAGE_MAX_ARTIFACTS);
+      const artifactRows = await StudyArtifact.findAll({
+        where: {
+          studyId,
+          artifactId: { [Op.in]: limitedArtifactIds },
+        },
+        include: [
+          {
+            model: Artifact,
+            as: 'artifact',
+            attributes: [
+              'id',
+              'name',
+              'type',
+              'filePath',
+              'fileMimeType',
+              'fileOriginalName',
+            ],
+          },
+        ],
+      });
+      const paneByArtifactId = new Map();
+      for (const row of artifactRows) {
+        const pane = await buildPanePayload(row, 'primary');
+        if (pane) {
+          paneByArtifactId.set(Number(row.artifactId), pane);
+        }
+      }
+      customArtifacts = limitedArtifactIds
+        .map((id) => paneByArtifactId.get(Number(id)))
+        .filter(Boolean);
+      if (!customArtifacts.length) {
+        return res.status(400).json({
+          message: 'Custom stage requires at least one configured artifact. Please ask the researcher to attach artifacts.',
+        });
+      }
+      if (!leftPane) {
+        leftPane = customArtifacts[0];
       }
     }
 
@@ -491,6 +579,8 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
         label: studyArtifact.label,
         instructions: studyArtifact.instructions,
         evaluationCriteria: normalizeCriteria(study.criteria),
+        customQuestions,
+        customArtifacts,
         panes: {
           left: leftPane,
           right: rightPane,
@@ -773,6 +863,9 @@ function resolveModeKey(assessment) {
   }
   if (type === 'snapshot') {
     return 'snapshot';
+  }
+  if (type === 'custom') {
+    return 'custom';
   }
   return null;
 }

@@ -82,9 +82,10 @@ const SNAPSHOT_CHANGE_TYPES = [
 const SERVER_MODE_TO_UI = {
   clone: "patch",
   stage2: "stage1",
+  custom: "custom",
 };
 
-const SUPPORTED_UI_MODES = new Set(["stage1", "solid", "patch", "snapshot"]);
+const SUPPORTED_UI_MODES = new Set(["stage1", "solid", "patch", "snapshot", "custom"]);
 const SYNC_SWAP_MODES = new Set(["patch", "snapshot"]);
 
 const MODE_LABELS = {
@@ -92,6 +93,7 @@ const MODE_LABELS = {
   solid: "SOLID Violations: Code & Complexity",
   patch: "Patch Mode: Code Diff / Clone Detection",
   snapshot: "Snapshot Study: UI Change vs Failure",
+  custom: "Custom Stage: Researcher Questions",
 };
 
 const normalizeModeValue = (raw) => {
@@ -747,6 +749,10 @@ export default function ArtifactsComparison() {
   const [selectedMetadataId, setSelectedMetadataId] = useState("");
   const [metadataLoadingId, setMetadataLoadingId] = useState("");
   const [metadataPane, setMetadataPane] = useState("left");
+  const [customQuestions, setCustomQuestions] = useState([]);
+  const [customResponses, setCustomResponses] = useState({});
+  const [customArtifacts, setCustomArtifacts] = useState([]);
+  const [customActivePane, setCustomActivePane] = useState(null);
 
   const paneHasContent = useCallback((pane) => {
     if (!pane) return false;
@@ -825,6 +831,10 @@ export default function ArtifactsComparison() {
     setAssessmentError("");
     setAssessmentSuccess("");
     setSnapshotAssets({ reference: null, failure: null, diff: null });
+    setCustomQuestions([]);
+    setCustomResponses({});
+    setCustomArtifacts([]);
+    setCustomActivePane(null);
   }, [studyContext.studyId, studyContext.studyArtifactId]);
 
   // 🔹 Initial Load
@@ -883,6 +893,11 @@ export default function ArtifactsComparison() {
             if (typeof saved.assessmentComment === "string")
               setAssessmentComment(saved.assessmentComment);
 
+            if (Array.isArray(saved.customArtifacts)) setCustomArtifacts(saved.customArtifacts);
+            if (Array.isArray(saved.customQuestions)) setCustomQuestions(saved.customQuestions);
+            if (saved.customResponses && typeof saved.customResponses === "object")
+              setCustomResponses(saved.customResponses);
+
             if (saved.evaluationRatings && typeof saved.evaluationRatings === "object") {
               pendingCriteriaScoresRef.current = saved.evaluationRatings;
             }
@@ -890,7 +905,11 @@ export default function ArtifactsComparison() {
               setCriteriaRatings(saved.evaluationStarRatings);
             }
 
-            if (paneHasContent(saved.left) || paneHasContent(saved.right)) {
+            if (
+              paneHasContent(saved.left) ||
+              paneHasContent(saved.right) ||
+              (Array.isArray(saved.customArtifacts) && saved.customArtifacts.length)
+            ) {
               setHasLocalDraft(true);
             }
           }
@@ -976,6 +995,31 @@ export default function ArtifactsComparison() {
           setMode((prev) => (prev === serverMode ? prev : serverMode));
         }
 
+        const incomingCustomQuestions = Array.isArray(assignment.customQuestions)
+          ? assignment.customQuestions
+          : [];
+        setCustomQuestions(incomingCustomQuestions);
+        setCustomResponses((prev) => {
+          const next = {};
+          incomingCustomQuestions.forEach((q) => {
+            next[q.id] =
+              typeof prev[q.id] === "string" || typeof prev[q.id] === "number"
+                ? prev[q.id]
+                : "";
+          });
+          return next;
+        });
+
+        const incomingCustomArtifacts = Array.isArray(assignment.customArtifacts)
+          ? assignment.customArtifacts
+              .map((pane, idx) =>
+                normalizeAssignmentPane(pane, `Custom artifact ${idx + 1}`)
+              )
+              .filter(Boolean)
+          : [];
+        setCustomArtifacts(incomingCustomArtifacts);
+        setCustomActivePane(null);
+
         if (panes) {
           const leftPane = normalizeAssignmentPane(panes.left, "Researcher artifact A");
           const rightPane = normalizeAssignmentPane(panes.right, "Researcher artifact B");
@@ -1057,6 +1101,9 @@ export default function ArtifactsComparison() {
       snapshotChangeType,
       snapshotChangeTypeOther,
       snapshotDiffData: snapshotAssets.diff,
+      customQuestions,
+      customResponses,
+      customArtifacts,
       assessmentComment,
       evaluationRatings: computeCriteriaScores(),
       evaluationStarRatings: criteriaRatings,
@@ -1085,6 +1132,9 @@ export default function ArtifactsComparison() {
       snapshotChangeType,
       snapshotChangeTypeOther,
       snapshotAssets.diff,
+      customQuestions,
+      customResponses,
+      customArtifacts,
       assessmentComment,
       criteriaRatings,
       computeCriteriaScores,
@@ -1119,6 +1169,11 @@ export default function ArtifactsComparison() {
         setSnapshotAssets((prev) => ({ ...prev, diff: payload.snapshotDiffData }));
       }
       if (typeof payload.assessmentComment === "string") setAssessmentComment(payload.assessmentComment);
+      if (Array.isArray(payload.customArtifacts)) setCustomArtifacts(payload.customArtifacts);
+      if (Array.isArray(payload.customQuestions)) setCustomQuestions(payload.customQuestions);
+      if (payload.customResponses && typeof payload.customResponses === "object") {
+        setCustomResponses(payload.customResponses);
+      }
       if (payload.evaluationStarRatings && typeof payload.evaluationStarRatings === "object") {
         setCriteriaRatings(payload.evaluationStarRatings);
       } else if (payload.evaluationRatings && typeof payload.evaluationRatings === "object") {
@@ -2020,6 +2075,50 @@ export default function ArtifactsComparison() {
     );
   };
 
+  const renderCustomArtifactPane = (pane) => {
+    if (!pane) {
+      return (
+        <div className="text-xs text-muted-foreground">
+          Artifact missing.
+        </div>
+      );
+    }
+    if (pane.type === "image") {
+      return (
+        <img
+          src={pane.url}
+          alt={pane.name || "Artifact image"}
+          className="border rounded-md max-h-[320px] object-contain mx-auto bg-white"
+        />
+      );
+    }
+    if (pane.type === "pdf") {
+      const url = pane.url?.startsWith("data:") ? base64ToBlobUrl(pane.url) : pane.url;
+      return (
+        <object data={url} type="application/pdf" className="w-full h-[320px]">
+          <div className="text-xs text-muted-foreground text-center p-2">
+            Unable to display PDF. Download to view.
+          </div>
+        </object>
+      );
+    }
+    return (
+      <pre className="text-xs bg-white border rounded-md p-3 overflow-auto max-h-[320px] whitespace-pre-wrap">
+        {pane.text || "Text artifact attached."}
+      </pre>
+    );
+  };
+
+  const openCustomArtifactWithTools = (pane) => {
+    if (!pane) return;
+    setCustomActivePane(pane);
+    setLeftData(pane);
+    setLeftAnn([]);
+    setLeftDraw(false);
+    setLeftEditing(false);
+    setLeftSummary("");
+  };
+
   const AISummary = ({ side }) => {
     const summary = side === "left" ? leftSummary : rightSummary;
     const status = side === "left" ? leftSummaryStatus : rightSummaryStatus;
@@ -2141,6 +2240,23 @@ export default function ArtifactsComparison() {
       if (!leftCategory) {
         return "Please choose a category for the bug report before saving.";
       }
+    } else if (mode === "custom") {
+      if (!customArtifacts.length) {
+        return "Researcher did not attach artifacts for this custom task.";
+      }
+      if (!customQuestions.length) {
+        return "This custom task is missing questions. Please contact your researcher.";
+      }
+      const unanswered = customQuestions.find((q) => {
+        const value = customResponses[q.id];
+        if (q.type === "answer") {
+          return !value || !String(value).trim();
+        }
+        return !value;
+      });
+      if (unanswered) {
+        return `Please answer: "${unanswered.prompt}".`;
+      }
     } else if (mode === "solid") {
       if (!solidViolation || !solidComplexity) {
         return "Select both a SOLID violation and a difficulty level.";
@@ -2183,16 +2299,21 @@ export default function ArtifactsComparison() {
 
     const commentText = mode === "patch" ? patchCloneComment : assessmentComment;
     const words = (commentText || "").trim().split(/\s+/).filter(Boolean);
-    if (!words.length) {
-      setAssessmentError("A comment is required to submit.");
-      return;
-    }
-    if (words.length < 20) {
-      setAssessmentError(
-        mode === "patch"
-          ? "Please provide at least 20 words explaining your clone decision."
-          : "Please provide at least 20 words in the comment."
-      );
+    if (mode !== "custom") {
+      if (!words.length) {
+        setAssessmentError("A comment is required to submit.");
+        return;
+      }
+      if (words.length < 20) {
+        setAssessmentError(
+          mode === "patch"
+            ? "Please provide at least 20 words explaining your clone decision."
+            : "Please provide at least 20 words in the comment."
+        );
+        return;
+      }
+    } else if (words.length > 0 && words.length < 5) {
+      setAssessmentError("Add at least 5 words to your optional notes or leave it blank.");
       return;
     }
 
@@ -2229,6 +2350,8 @@ export default function ArtifactsComparison() {
         ? "clone"
         : mode === "snapshot"
         ? "snapshot"
+        : mode === "custom"
+        ? "custom"
         : "bug_stage";
 
     setAssessmentSaving(true);
@@ -2421,26 +2544,28 @@ export default function ArtifactsComparison() {
                   </Button>
                 </>
               )}
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => setShowBig(true)}
-                title="Full Screen"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
+              {(mode !== "custom" || customActivePane) && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setShowBig(true)}
+                  title="Full Screen"
                 >
-                  <polyline points="15 3 21 3 21 9" />
-                  <polyline points="9 21 3 21 3 15" />
-                  <line x1="21" y1="3" x2="14" y2="10" />
-                  <line x1="3" y1="21" x2="10" y2="14" />
-                </svg>
-              </Button>
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <polyline points="15 3 21 3 21 9" />
+                    <polyline points="9 21 3 21 3 15" />
+                    <line x1="21" y1="3" x2="14" y2="10" />
+                    <line x1="3" y1="21" x2="10" y2="14" />
+                  </svg>
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -2614,63 +2739,119 @@ export default function ArtifactsComparison() {
         )}
 
         {/* MAIN VIEWER */}
-        <div className="flex border rounded-lg h-[650px] shadow-sm overflow-hidden">
-          {/* LEFT always visible */}
-          <div
-            className={`flex-1 flex flex-col min-w-0 border-r relative ${
-              mode === "stage1" || mode === "solid" ? "w-full" : "w-1/2"
-            }`}
-          >
-            <PaneToolbar
-              side="left"
-              title={
-                mode === "patch"
-                  ? "Patch A"
-                  : mode === "stage1"
-                  ? "Bug Report"
-                  : mode === "solid"
-                  ? "Violating Code (input)"
-                  : mode === "snapshot"
-                  ? "Reference / Failure / Diff (A)"
-                  : "Bug Report / Artifact A"
-              }
-            />
-            <div className="flex-1 relative overflow-hidden">
-              {renderContent(
-                "left",
-                false,
-                mode === "patch" ? rightNormSet : null
-              )}
-            </div>
-            {mode !== "patch" && <AnnotationList side="left" />}
-            <AISummary side="left" />
-          </div>
-
-          {/* RIGHT pane: Patch & Snapshot */}
-          {(mode === "patch" || mode === "snapshot") && (
-            <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
+        {mode !== "custom" && (
+          <div className="flex border rounded-lg h-[650px] shadow-sm overflow-hidden">
+            {/* LEFT always visible */}
+            <div
+              className={`flex-1 flex flex-col min-w-0 border-r relative ${
+                mode === "stage1" || mode === "solid" ? "w-full" : "w-1/2"
+              }`}
+            >
               <PaneToolbar
-                side="right"
+                side="left"
                 title={
                   mode === "patch"
-                    ? "Patch B"
+                    ? "Patch A"
+                    : mode === "stage1"
+                    ? "Bug Report"
+                    : mode === "solid"
+                    ? "Violating Code (input)"
                     : mode === "snapshot"
-                    ? "Reference / Failure / Diff (B)"
-                    : "Participant 2 / AI Label Artifact"
+                    ? "Reference / Failure / Diff (A)"
+                    : "Bug Report / Artifact A"
                 }
               />
               <div className="flex-1 relative overflow-hidden">
                 {renderContent(
-                  "right",
+                  "left",
                   false,
-                  mode === "patch" ? leftNormSet : null
+                  mode === "patch" ? rightNormSet : null
                 )}
               </div>
-              {mode !== "patch" && <AnnotationList side="right" />}
-              <AISummary side="right" />
+              {mode !== "patch" && <AnnotationList side="left" />}
+              <AISummary side="left" />
             </div>
-          )}
-        </div>
+
+            {/* RIGHT pane: Patch & Snapshot */}
+            {(mode === "patch" || mode === "snapshot") && (
+              <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
+                <PaneToolbar
+                  side="right"
+                  title={
+                    mode === "patch"
+                      ? "Patch B"
+                      : mode === "snapshot"
+                      ? "Reference / Failure / Diff (B)"
+                      : "Participant 2 / AI Label Artifact"
+                  }
+                />
+                <div className="flex-1 relative overflow-hidden">
+                  {renderContent(
+                    "right",
+                    false,
+                    mode === "patch" ? leftNormSet : null
+                  )}
+                </div>
+                {mode !== "patch" && <AnnotationList side="right" />}
+                <AISummary side="right" />
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode === "custom" && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-800">Attached artifacts</h3>
+              <Badge variant="outline" className="text-[11px]">
+                {customArtifacts.length} file{customArtifacts.length === 1 ? "" : "s"}
+              </Badge>
+            </div>
+            {customArtifacts.length === 0 ? (
+              <div className="text-xs text-muted-foreground border border-dashed rounded-md p-3">
+                Researcher did not attach artifacts for this custom task.
+              </div>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                {customArtifacts.map((pane, idx) => (
+                  <Card key={pane.studyArtifactId || pane.artifactId || idx} className="overflow-hidden">
+                    <CardHeader className="space-y-1 pb-2">
+                      <CardTitle className="text-sm">
+                        {pane.name || pane.artifactName || `Artifact ${idx + 1}`}
+                      </CardTitle>
+                      {pane.fileOriginalName && (
+                        <CardDescription className="text-xs">
+                          {pane.fileOriginalName}
+                        </CardDescription>
+                      )}
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {renderCustomArtifactPane(pane)}
+                      <div className="flex justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openCustomArtifactWithTools(pane)}
+                        >
+                          Open with tools
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+            {customActivePane && (
+              <div className="border rounded-lg shadow-sm bg-white">
+                <PaneToolbar side="left" title={customActivePane.name || customActivePane.artifactName || "Custom Artifact"} />
+                <div className="h-[500px]">
+                  {renderContent("left", false, null)}
+                </div>
+                <AnnotationList side="left" />
+              </div>
+            )}
+          </div>
+        )}
 
         {mode === "snapshot" && (
           <div className="border rounded-lg p-4 bg-gray-50 space-y-3">
@@ -2729,6 +2910,8 @@ export default function ArtifactsComparison() {
             <CardTitle className="text-lg">
               {mode === "stage1"
                 ? "Stage 1: Participant Bug Label"
+                : mode === "custom"
+                ? "Custom Stage: Researcher Questions"
                 : mode === "solid"
                 ? "SOLID Violations: Code & Complexity Labeling"
                 : mode === "snapshot"
@@ -2737,7 +2920,106 @@ export default function ArtifactsComparison() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            {mode === "patch" ? (
+            {mode === "custom" ? (
+              <>
+                <p className="text-xs text-gray-500">
+                  Answer the researcher-defined questions for this custom task. Notes are optional.
+                </p>
+                <div className="space-y-4">
+                  {customQuestions.length === 0 ? (
+                    <div className="text-xs text-muted-foreground border border-dashed rounded-md p-3">
+                      No questions were configured for this task.
+                    </div>
+                  ) : (
+                    customQuestions.map((q, idx) => {
+                      const response = customResponses[q.id] ?? "";
+                      if (q.type === "answer") {
+                        return (
+                          <div className="space-y-2" key={q.id}>
+                            <Label htmlFor={`custom-answer-${q.id}`}>
+                              Q{idx + 1}. {q.prompt}
+                            </Label>
+                            <Textarea
+                              id={`custom-answer-${q.id}`}
+                              value={response}
+                              onChange={(e) =>
+                                setCustomResponses((prev) => ({
+                                  ...prev,
+                                  [q.id]: e.target.value,
+                                }))
+                              }
+                              rows={3}
+                              placeholder="Type your answer..."
+                            />
+                          </div>
+                        );
+                      }
+                      if (q.type === "dropdown") {
+                        return (
+                          <div className="space-y-2" key={q.id}>
+                            <Label>
+                              Q{idx + 1}. {q.prompt}
+                            </Label>
+                            <select
+                              value={response}
+                              onChange={(e) =>
+                                setCustomResponses((prev) => ({
+                                  ...prev,
+                                  [q.id]: e.target.value,
+                                }))
+                              }
+                              className="border rounded px-2 py-1 text-sm w-full bg-white"
+                            >
+                              <option value="">Choose an option...</option>
+                              {(q.options || []).map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      }
+                      // Default to MCQ (single select)
+                      return (
+                        <div className="space-y-2" key={q.id}>
+                          <Label>
+                            Q{idx + 1}. {q.prompt}
+                          </Label>
+                          <RadioGroup
+                            value={response}
+                            onValueChange={(v) =>
+                              setCustomResponses((prev) => ({ ...prev, [q.id]: v }))
+                            }
+                            className="flex flex-wrap gap-3"
+                          >
+                            {(q.options || []).map((opt) => (
+                              <div key={opt} className="flex items-center space-x-2">
+                                <RadioGroupItem value={opt} id={`${q.id}-${opt}`} className={radioClass} />
+                                <Label htmlFor={`${q.id}-${opt}`}>{opt}</Label>
+                              </div>
+                            ))}
+                          </RadioGroup>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="custom-notes">Optional notes</Label>
+                  <Textarea
+                    id="custom-notes"
+                    value={assessmentComment}
+                    onChange={(e) => setAssessmentComment(e.target.value)}
+                    rows={3}
+                    placeholder="Add any context or rationale (optional)."
+                  />
+                  {assessmentError && (
+                    <p className="text-xs text-destructive">{assessmentError}</p>
+                  )}
+                </div>
+              </>
+            ) : mode === "patch" ? (
               <>
                 <p className="text-xs text-gray-500">
                   Review the two code blocks shown above and determine whether they represent the same logical change (a clone) before answering below.
@@ -3166,7 +3448,7 @@ export default function ArtifactsComparison() {
         )}
 
         {/* Fullscreen mode */}
-        {showBig && (
+        {showBig && (mode !== "custom" || customActivePane) && (
           <div className="fixed inset-0 z-50 bg-white flex flex-col animate-in fade-in duration-200">
             <div className="border-b p-4 flex justify-between items-center bg-gray-50">
               <h2 className="font-bold text-lg">Full Screen View</h2>
@@ -3177,7 +3459,7 @@ export default function ArtifactsComparison() {
             <div className="flex-1 flex overflow-hidden">
               <div
                 className={`flex-1 flex flex-col min-w-0 border-r relative ${
-                  mode === "stage1" || mode === "solid" ? "w-full" : "w-1/2"
+                  mode === "stage1" || mode === "solid" || mode === "custom" ? "w-full" : "w-1/2"
                 }`}
               >
                 <PaneToolbar
@@ -3185,13 +3467,15 @@ export default function ArtifactsComparison() {
                   title={
                     mode === "patch"
                       ? "Patch A"
-                      : mode === "stage1"
-                      ? "Bug Report"
-                      : mode === "solid"
-                      ? "Violating Code (input)"
-                      : mode === "snapshot"
-                      ? "Reference / Failure / Diff (A)"
-                      : "Bug Report / Artifact A"
+                    : mode === "stage1"
+                    ? "Bug Report"
+                    : mode === "solid"
+                    ? "Violating Code (input)"
+                    : mode === "snapshot"
+                    ? "Reference / Failure / Diff (A)"
+                    : mode === "custom"
+                    ? "Custom Artifact"
+                    : "Bug Report / Artifact A"
                   }
                 />
                 <div className="flex-1 relative overflow-hidden">

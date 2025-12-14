@@ -22,6 +22,7 @@ const ARTIFACT_MODE_OPTIONS = [
   { value: 'solid', label: 'SOLID review', assessmentType: 'solid' },
   { value: 'clone', label: 'Patch clone check', assessmentType: 'clone' },
   { value: 'snapshot', label: 'Snapshot intent', assessmentType: 'snapshot' },
+  { value: 'custom', label: 'Custom stage', assessmentType: 'custom' },
 ];
 
 const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
@@ -587,6 +588,9 @@ function resolveModeKey(assessment) {
   }
   if (type === 'snapshot') {
     return 'snapshot';
+  }
+  if (type === 'custom') {
+    return 'custom';
   }
   return null;
 }
