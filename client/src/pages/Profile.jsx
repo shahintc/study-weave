@@ -108,6 +108,21 @@ export default function Profile() {
     setAccountStatus({ type: "", message: "" });
     setAvatarStatus({ type: "", message: "" });
     try {
+      const raw = window.localStorage.getItem("user");
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed?.role === "guest") {
+        setError("Profile changes are disabled for guest sessions. Register or sign in to edit your account.");
+        setLoadingProfile(false);
+        return;
+      }
+      if (parsed && parsed.role !== "researcher" && parsed.role !== "participant" && parsed.role !== "admin") {
+        navigate("/login");
+        return;
+      }
+    } catch {
+      // fall through to network fetch
+    }
+    try {
       const res = await axios.get("/api/auth/me");
       setProfile(res.data.user);
       setAccountForm({

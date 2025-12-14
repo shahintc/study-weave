@@ -32,6 +32,7 @@ const STATUS_OPTIONS = [
   { value: "resolved", label: "Resolved" },
 ];
 const HIDDEN_FILTER_VALUE = "__hidden__";
+const HIDDEN_STORAGE_KEY = "reviewerHiddenAdjudicationIds";
 
 const DECISION_OPTIONS = [
   { value: "participant_correct", label: "Participant correct" },
@@ -209,7 +210,18 @@ export default function ReviewerAdjudication() {
     participantType: "all",
     showHidden: false,
   });
-  const [hiddenIds, setHiddenIds] = useState([]);
+  const [hiddenIds, setHiddenIds] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(HIDDEN_STORAGE_KEY);
+      const parsed = JSON.parse(raw || "[]");
+      if (Array.isArray(parsed)) {
+        return parsed.map((id) => String(id));
+      }
+    } catch {
+      // ignore parse errors
+    }
+    return [];
+  });
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [decisionForm, setDecisionForm] = useState({
@@ -266,6 +278,14 @@ export default function ReviewerAdjudication() {
     adjudications,
     hiddenIds,
   ]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(HIDDEN_STORAGE_KEY, JSON.stringify(hiddenIds));
+    } catch {
+      // ignore storage failures
+    }
+  }, [hiddenIds]);
 
   const hasSubmittedNote = useMemo(() => {
     if (!isReviewer || !selected || !user?.id) return false;

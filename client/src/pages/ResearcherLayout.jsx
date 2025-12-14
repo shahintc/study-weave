@@ -238,11 +238,11 @@ export default function ResearcherLayout() {
                   </Link>
                 </Button>
                 <Button variant="secondary" size="sm" className="hidden sm:inline-flex" asChild>
-                  <Link to="/researcher/participants-list">
-                    <Users className="h-4 w-4" />
-                    Invite
-                  </Link>
-                </Button>
+                    <Link to="/researcher/participants-list">
+                      <Users className="h-4 w-4" />
+                    Show participant list
+                    </Link>
+                  </Button>
                 <NotificationBell count={notificationCount} notifications={notifications} />
                 <UserNav displayName={user?.name || "Researcher"} avatarUrl={avatarUrl} onLogout={handleLogout} />
               </div>
@@ -415,9 +415,6 @@ function UserNav({ displayName = "Researcher", avatarUrl = "", onLogout }) {
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link to="/profile">Profile</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link to="/profile">Settings</Link>
         </DropdownMenuItem>
         <DropdownMenuItem onClick={onLogout}>Logout</DropdownMenuItem>
       </DropdownMenuContent>
