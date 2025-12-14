@@ -204,19 +204,21 @@ function StudiesPage({ archived = false }) {
 
   return (
     <div className="space-y-6">
-      <section>
-        <Card>
-          <CardHeader>
-            <CardTitle>{pageTitle}</CardTitle>
-            <CardDescription>{pageDescription}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {actionMessage && <p className="text-sm text-emerald-700">{actionMessage}</p>}
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <p className="text-xs text-muted-foreground">Actions: {actionLabel}</p>
-          </CardContent>
-        </Card>
-      </section>
+      {(!archived && (actionMessage || error)) ? (
+        <section>
+          <Card>
+            <CardHeader>
+              <CardTitle>{pageTitle}</CardTitle>
+              <CardDescription>{pageDescription}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {actionMessage && <p className="text-sm text-emerald-700">{actionMessage}</p>}
+              {error && <p className="text-sm text-destructive">{error}</p>}
+              <p className="text-xs text-muted-foreground">Actions: {actionLabel}</p>
+            </CardContent>
+          </Card>
+        </section>
+      ) : null}
 
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">

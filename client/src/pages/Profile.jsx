@@ -115,7 +115,8 @@ export default function Profile() {
         setLoadingProfile(false);
         return;
       }
-      if (parsed && parsed.role !== "researcher" && parsed.role !== "participant" && parsed.role !== "admin") {
+      const allowedRoles = ["researcher", "participant", "admin", "reviewer"];
+      if (parsed && !allowedRoles.includes(parsed.role)) {
         navigate("/login");
         return;
       }
