@@ -1081,8 +1081,8 @@ export default function ReviewerAdjudication() {
                       <h4 className="font-semibold text-sm mb-2">AI Evaluation</h4>
                         {selected.participantAnswer?.payload?.mode === "stage1" && (
                           <div className="text-sm mt-2 space-y-1">
-                            <p className="flex items-center gap-2">Bug category: {BUG_CATEGORIES[aiEvaluationResult.response.options[0]] || "—"}
-                              {BUG_CATEGORIES[aiEvaluationResult.response.options[0]] !==
+                            <p className="flex items-center gap-2">Bug category: {BUG_CATEGORIES[aiEvaluationResult.response.options[0]-1] || "—"}
+                              {BUG_CATEGORIES[aiEvaluationResult.response.options[0]-1] !==
                                 (selected.participantAnswer?.payload?.leftCategory || selected.participantAnswer?.payload?.finalCategory) && (
                                 <AlertCircleIcon className="h-4 w-4 text-orange-500" />
                               )}</p>
@@ -1091,15 +1091,15 @@ export default function ReviewerAdjudication() {
                         {selected.participantAnswer?.payload?.mode === "solid" && (
                           <div className="text-sm mt-2 space-y-1">
                             <p className="flex items-center gap-2">
-                              Violation: {SOLID_VIOLATIONS[aiEvaluationResult.response?.options[0]].id || "—"}
-                              {(SOLID_VIOLATIONS[aiEvaluationResult.response?.options[0]].id || "") !==
+                              Violation: {SOLID_VIOLATIONS[aiEvaluationResult.response?.options[0]-1]?.id || "—"}
+                              {(SOLID_VIOLATIONS[aiEvaluationResult.response?.options[0]-1]?.id || "") !==
                                 (selected.participantAnswer?.payload?.solidViolation || selected.participantAnswer?.payload?.solid_violation || "") && (
                                 <AlertCircleIcon className="h-4 w-4 text-orange-500" />
                               )}
                             </p>
                             <p className="flex items-center gap-2">
-                              Complexity: {COMPLEXITY_LEVELS[aiEvaluationResult.response?.options[1]] || "—"}
-                              {(COMPLEXITY_LEVELS[aiEvaluationResult.response?.options[1]] || "") !==
+                              Complexity: {COMPLEXITY_LEVELS[aiEvaluationResult.response?.options[1]-1] || "—"}
+                              {(COMPLEXITY_LEVELS[aiEvaluationResult.response?.options[1]-1] || "") !==
                                 (selected.participantAnswer?.payload?.solidComplexity || selected.participantAnswer?.payload?.solid_complexity || "") && (
                                 <AlertCircleIcon className="h-4 w-4 text-orange-500" />
                               )}
@@ -1118,15 +1118,15 @@ export default function ReviewerAdjudication() {
                         {selected.participantAnswer?.payload?.mode === "patch" && (
                           <div className="text-sm mt-2 space-y-1">
                             <p className="flex items-center gap-2">
-                              Are patches clones?: {PATCHES_ARE_CLONES[aiEvaluationResult.response?.options[0]] || "—"}
-                              {(PATCHES_ARE_CLONES[aiEvaluationResult.response?.options[0]] || "") !==
+                              Are patches clones?: {PATCHES_ARE_CLONES[aiEvaluationResult.response?.options[0]-1] || "—"}
+                              {(PATCHES_ARE_CLONES[aiEvaluationResult.response?.options[0]-1] || "") !==
                                 (selected.participantAnswer?.payload?.patchAreClones || "") && (
                                 <AlertCircleIcon className="h-4 w-4 text-orange-500" />
                               )}
                             </p>
                             <p className="flex items-center gap-2">
-                              Clone type: {PATCH_CLONE_TYPES[aiEvaluationResult.response?.options[1]].id || "—"}
-                              {(PATCH_CLONE_TYPES[aiEvaluationResult.response?.options[1]].id || "") !==
+                              Clone type: {PATCH_CLONE_TYPES[aiEvaluationResult.response?.options[1]-1]?.id || "—"}
+                              {(PATCH_CLONE_TYPES[aiEvaluationResult.response?.options[1]-1]?.id || "") !==
                                 (selected.participantAnswer?.payload?.patchCloneType || "") && (
                                 <AlertCircleIcon className="h-4 w-4 text-orange-500" />
                               )}
@@ -1136,15 +1136,15 @@ export default function ReviewerAdjudication() {
                         {selected.participantAnswer?.payload?.mode === "snapshot" && (
                           <div className="text-sm mt-2 space-y-1">
                             <p className="flex items-center gap-2">
-                              Outcome: {SNAPSHOT_OUTCOMES[aiEvaluationResult.response?.options[0]].id || "—"}
-                              {(SNAPSHOT_OUTCOMES[aiEvaluationResult.response?.options[0]].id || "") !==
+                              Outcome: {SNAPSHOT_OUTCOMES[aiEvaluationResult.response?.options[0]-1]?.id || "—"}
+                              {(SNAPSHOT_OUTCOMES[aiEvaluationResult.response?.options[0]-1]?.id || "") !==
                                 (selected.participantAnswer?.payload?.snapshotOutcome || "") && (
                                 <AlertCircleIcon className="h-4 w-4 text-orange-500" />
                               )}
                             </p>
                             <p className="flex items-center gap-2">
-                              Change type: {SNAPSHOT_CHANGE_TYPES[aiEvaluationResult.response?.options[1]].id || "—"}
-                              {(SNAPSHOT_CHANGE_TYPES[aiEvaluationResult.response?.options[1]].id || "") !==
+                              Change type: {SNAPSHOT_CHANGE_TYPES[aiEvaluationResult.response?.options[1]-1]?.id || "—"}
+                              {(SNAPSHOT_CHANGE_TYPES[aiEvaluationResult.response?.options[1]-1]?.id || "") !==
                                 (selected.participantAnswer?.payload?.snapshotChangeType || "") && (
                                 <AlertCircleIcon className="h-4 w-4 text-orange-500" />
                               )}
