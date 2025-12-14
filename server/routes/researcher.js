@@ -19,10 +19,10 @@ const router = express.Router();
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: 'stage1', label: 'Bug labeling – Stage 1', assessmentType: 'bug_stage' },
-  { value: 'stage2', label: 'Bug adjudication – Stage 2', assessmentType: 'bug_stage' },
   { value: 'solid', label: 'SOLID review', assessmentType: 'solid' },
   { value: 'clone', label: 'Patch clone check', assessmentType: 'clone' },
   { value: 'snapshot', label: 'Snapshot intent', assessmentType: 'snapshot' },
+  { value: 'custom', label: 'Custom stage', assessmentType: 'custom' },
 ];
 
 const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
@@ -578,7 +578,7 @@ function resolveModeKey(assessment) {
       ? normalizeJson(assessment.payload)
       : assessment.payload || {};
   if (type === 'bug_stage') {
-    return payload.mode === 'stage1' ? 'stage1' : 'stage2';
+    return 'stage1';
   }
   if (type === 'solid') {
     return 'solid';
@@ -588,6 +588,9 @@ function resolveModeKey(assessment) {
   }
   if (type === 'snapshot') {
     return 'snapshot';
+  }
+  if (type === 'custom') {
+    return 'custom';
   }
   return null;
 }

@@ -13,7 +13,7 @@ const {
 } = require('../models');
 const { handleArtifactSubmission } = require('../services/submissionNotifications');
 
-const VALID_ASSESSMENT_TYPES = ['bug_stage', 'solid', 'clone', 'snapshot'];
+const VALID_ASSESSMENT_TYPES = ['bug_stage', 'solid', 'clone', 'snapshot', 'custom'];
 const VALID_STATUS_VALUES = ['draft', 'submitted', 'archived'];
 const computeDeadlinePassed = (timelineEnd) => {
   if (!timelineEnd) return false;

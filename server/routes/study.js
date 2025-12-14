@@ -14,20 +14,46 @@ const authMiddleware = require('../middleware/auth');
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: 'stage1', label: 'Bug labeling – Stage 1' },
-  { value: 'stage2', label: 'Bug adjudication – Stage 2' },
   { value: 'solid', label: 'SOLID review' },
   { value: 'clone', label: 'Patch clone check' },
   { value: 'snapshot', label: 'Snapshot intent' },
+  { value: 'custom', label: 'Custom stage' },
 ];
 
 const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
 const DEFAULT_ARTIFACT_MODE = 'stage1';
+const CUSTOM_STAGE_MAX_ARTIFACTS = 5;
 
 const resolveDefaultArtifactMode = (value) => {
   if (value && ARTIFACT_MODE_SET.has(value)) {
     return value;
   }
   return DEFAULT_ARTIFACT_MODE;
+};
+
+const normalizeCustomQuestions = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item, idx) => {
+      const type = typeof item?.type === 'string' ? item.type.toLowerCase() : '';
+      if (!['mcq', 'dropdown', 'answer'].includes(type)) {
+        return null;
+      }
+      const id = item?.id || `custom-q-${idx + 1}`;
+      const prompt = typeof item?.prompt === 'string' ? item.prompt.trim() : '';
+      if (!prompt) return null;
+      let options = [];
+      if (type === 'mcq' || type === 'dropdown') {
+        options = Array.isArray(item?.options)
+          ? item.options
+              .map((opt) => (typeof opt === 'string' ? opt.trim() : ''))
+              .filter((opt) => opt)
+          : [];
+        if (options.length < 2) return null;
+      }
+      return { id, type, prompt, options };
+    })
+    .filter(Boolean);
 };
 
 router.get('/public', authMiddleware, async (req, res) => {
@@ -166,19 +192,6 @@ router.post('/', async (req, res) => {
     const defaultArtifactMode = resolveDefaultArtifactMode(requestedDefaultMode);
     preparedMetadata.defaultArtifactMode = defaultArtifactMode;
 
-    const newStudy = await Study.create({
-      title,
-      description,
-      criteria: Array.isArray(criteria) ? criteria : [],
-      status: 'draft',
-      isPublic: Boolean(isPublic),
-      researcherId,
-      timelineStart: normalizeDate(timelineStart),
-      timelineEnd: normalizeDate(timelineEnd),
-      metadata: preparedMetadata,
-      allowReviewers: Boolean(allowReviewers),
-    }, { transaction });
-
     const participantSelection = Array.isArray(selectedParticipants) && selectedParticipants.length
       ? selectedParticipants
       : Array.isArray(preparedMetadata.selectedParticipants)
@@ -206,6 +219,39 @@ router.post('/', async (req, res) => {
     const sanitizedArtifacts = artifactSelection
       .map((value) => Number(value))
       .filter((value) => Number.isFinite(value));
+
+    if (defaultArtifactMode === 'custom') {
+      const customQuestions = normalizeCustomQuestions(
+        Array.isArray(metadata.customQuestions) ? metadata.customQuestions : req.body.customQuestions,
+      );
+      if (!customQuestions.length) {
+        await transaction.rollback();
+        return res.status(400).json({ message: 'Custom stage requires at least one valid question.' });
+      }
+      if (sanitizedArtifacts.length === 0) {
+        await transaction.rollback();
+        return res.status(400).json({ message: 'Custom stage requires at least one artifact.' });
+      }
+      if (sanitizedArtifacts.length > CUSTOM_STAGE_MAX_ARTIFACTS) {
+        await transaction.rollback();
+        return res.status(400).json({ message: `Custom stage supports up to ${CUSTOM_STAGE_MAX_ARTIFACTS} artifacts.` });
+      }
+      preparedMetadata.customQuestions = customQuestions;
+      preparedMetadata.customArtifactIds = sanitizedArtifacts;
+    }
+
+    const newStudy = await Study.create({
+      title,
+      description,
+      criteria: Array.isArray(criteria) ? criteria : [],
+      status: 'draft',
+      isPublic: Boolean(isPublic),
+      researcherId,
+      timelineStart: normalizeDate(timelineStart),
+      timelineEnd: normalizeDate(timelineEnd),
+      metadata: preparedMetadata,
+      allowReviewers: Boolean(allowReviewers),
+    }, { transaction });
 
     let assignments = [];
     if (shouldCreateAssignments) {
