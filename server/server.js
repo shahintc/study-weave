@@ -7,6 +7,7 @@ require('dotenv').config(
 );
 
 const { sequelize } = require('./models'); // Import sequelize instance
+const ensureDefaultAdmin = require('./utils/ensureDefaultAdmin');
 const app = express();
 const port = process.env.PORT || 5200;
 const BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || '25mb';
@@ -34,6 +35,7 @@ app.use('/api/artifact-collections', require('./routes/artifactCollections'));
 
 app.get('/', (req, res) => res.send('Backend ready with PostgreSQL!'));
 
-sequelize.sync({ force: false }).then(() => { // Use { force: true } only in development, it drops existing tables!
+sequelize.sync({ force: false }).then(async () => { // Use { force: true } only in development, it drops existing tables!
+  await ensureDefaultAdmin();
   app.listen(port, () => console.log(`Server running on port ${port}`));
 });
