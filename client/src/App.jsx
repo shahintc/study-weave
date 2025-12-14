@@ -1,5 +1,5 @@
 import { Outlet } from "react-router-dom";
-import "./assets/App.css"; 
+import "./assets/App.css";
 
 // This component acts as the main layout for the app.
 // <Outlet /> will render the active child route (e.g., Login, Register).
