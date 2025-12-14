@@ -145,8 +145,10 @@ useEffect(() => {
 
     const fullySubmitted = enriched.filter((assignment) => {
       const hasResponses = assignment.responses && Object.keys(assignment.responses).length > 0;
-      const status = (assignment.status || '').toLowerCase();
-      return status === 'submitted' && hasResponses;
+      const status = (assignment.status || "").toLowerCase();
+      const hasDecision = Boolean(assignment.decision && assignment.decision !== "undecided");
+      const isSubmittedState = ["submitted", "reviewed", "approved", "rejected"].includes(status);
+      return hasResponses && (isSubmittedState || hasDecision);
     });
 
     const grouped = {};
@@ -476,6 +478,14 @@ const submissionMax = useMemo(
           submissions: [],
         });
       }
+      const entry = map.get(key);
+      const normalizedId = s.id || s.assignmentId || s.assignment_id;
+      const alreadyAdded = (entry.submissions || []).some(
+        (sub) => String(sub.id || sub.assignmentId || sub.assignment_id) === String(normalizedId),
+      );
+      if (!alreadyAdded) {
+        entry.submissions = [...(entry.submissions || []), { ...s, id: normalizedId }];
+      }
     });
     return Array.from(map.values()).sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
   }, [assessments, assignmentStatuses]);
@@ -494,10 +504,16 @@ const submissionMax = useMemo(
   const filteredSubmissions = useMemo(() => {
     if (!selectedSubmissions.length) return [];
     if (submissionFilter === "pending") {
-      return selectedSubmissions.filter((s) => !s.decision || s.decision === "undecided");
+      return selectedSubmissions.filter((s) => {
+        const decision = (s.decision || "").toLowerCase();
+        return !decision || decision === "undecided";
+      });
     }
     if (submissionFilter === "reviewed") {
-      return selectedSubmissions.filter((s) => s.decision && s.decision !== "undecided");
+      return selectedSubmissions.filter((s) => {
+        const decision = (s.decision || "").toLowerCase();
+        return decision && decision !== "undecided";
+      });
     }
     return selectedSubmissions;
   }, [selectedSubmissions, submissionFilter]);
@@ -697,15 +713,31 @@ const submissionMax = useMemo(
                         </div>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleViewEvaluation(submission)}
-                          disabled={loadingStates[submission.id]}
-                        >
-                          <Eye className="h-4 w-4 mr-2" />
-                          Review
-                        </Button>
+                        {(() => {
+                          const decision = (submission.decision || "").toLowerCase();
+                          const isReviewed = decision && decision !== "undecided";
+                          const status = (submission.status || "").toLowerCase();
+                          const isInProgress = status === "in_progress" || status === "in-progress";
+                          const isReviewable = !isReviewed && !isInProgress;
+                          return (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleViewEvaluation(submission)}
+                              disabled={!isReviewable || loadingStates[submission.id]}
+                              title={
+                                isReviewed
+                                  ? "Already reviewed"
+                                  : isInProgress
+                                  ? "Participant still in progress"
+                                  : undefined
+                              }
+                            >
+                              <Eye className="h-4 w-4 mr-2" />
+                              {isReviewed ? "Reviewed" : isInProgress ? "In progress" : "Review"}
+                            </Button>
+                          );
+                        })()}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -938,14 +970,18 @@ const submissionMax = useMemo(
 
           {selectedAssignment && (
             (() => {
-              const performance = calculatePerformance(selectedAssignment);
-              const mcQuestions = selectedAssignment.questions.filter(q => q.type === 'multiple_choice');
-              const saQuestions = selectedAssignment.questions.filter(q => q.type === 'short_answer');
+              const questions = Array.isArray(selectedAssignment.questions)
+                ? selectedAssignment.questions
+                : [];
+              const assignmentSafe = { ...selectedAssignment, questions };
+              const performance = calculatePerformance(assignmentSafe);
+              const mcQuestions = questions.filter((q) => q.type === "multiple_choice");
+              const saQuestions = questions.filter((q) => q.type === "short_answer");
 
               return (
                 <div className="space-y-6">
                   {/* Participant Info */}
-                  <div className="grid grid-cols-2 gap-4 p-4 bg-muted rounded-lg">
+                  <div className="grid grid-cols-2 gap-4 p-4 rounded-lg border border-border bg-card">
                     <div>
                       <p className="text-sm font-semibold text-muted-foreground">Participant</p>
                       <p className="text-base font-medium">{selectedAssignment.participantName}</p>
@@ -984,7 +1020,7 @@ const submissionMax = useMemo(
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
                         <h3 className="font-semibold">Multiple Choice Responses</h3>
-                        <div className="flex items-center gap-2 p-2 bg-muted rounded-md">
+                        <div className="flex items-center gap-2 p-2 rounded-md border border-border bg-muted/50">
                           <p className="text-sm font-semibold text-muted-foreground">Performance</p>
                           <div className="flex items-center gap-2">
                             <p className="text-base font-medium">{performance.percentage}%</p>
@@ -1001,12 +1037,18 @@ const submissionMax = useMemo(
                         const typeLabel = multiCorrectCount > 1 ? "Multiple select" : "Single choice";
                         const isCorrect = response === correctOption?.text;
                         return (
-                          <div key={question.id || index} className="p-4 border rounded-lg space-y-2">
+                          <div key={question.id || index} className="p-4 space-y-2 rounded-lg border border-border bg-card">
                             <div className="flex items-center gap-2">
                               <p className="font-medium text-sm">Q{index + 1}: {question.title}</p>
                               <Badge variant="outline" className="text-[11px]">{typeLabel}</Badge>
                             </div>
-                            <div className={`p-3 rounded text-sm ${isCorrect ? 'bg-green-100' : 'bg-red-100'}`}>
+                            <div
+                              className={`p-3 rounded text-sm border ${
+                                isCorrect
+                                  ? "bg-emerald-500/10 border-emerald-500/30 text-foreground"
+                                  : "bg-destructive/10 border-destructive/30 text-foreground"
+                              }`}
+                            >
                               <p className="font-semibold">{response || "(No response provided)"}</p>
                               {!isCorrect && correctOption && (
                                 <p className="text-xs mt-1">Correct answer: <span className="font-semibold">{correctOption.text}</span></p>
@@ -1025,9 +1067,9 @@ const submissionMax = useMemo(
                       {saQuestions.map((question, index) => {
                         const response = selectedAssignment.responses?.[question.id || index];
                         return (
-                          <div key={question.id || index} className="p-4 border rounded-lg space-y-2">
+                          <div key={question.id || index} className="p-4 space-y-2 rounded-lg border border-border bg-card">
                             <p className="font-medium text-sm">Q{index + 1}: {question.title}</p>
-                            <div className="p-3 bg-muted rounded text-sm">
+                            <div className="p-3 rounded text-sm border border-border bg-muted/60">
                               <p className="text-muted-foreground whitespace-pre-wrap">{response || "(No response provided)"}</p>
                             </div>
                           </div>

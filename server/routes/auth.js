@@ -10,6 +10,13 @@ const { sendEmail, isEmailConfigured } = require('../services/emailService');
 const auth = require('../middleware/auth');
 const router = express.Router();
 
+const requireAdmin = (req, res, next) => {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Admin privileges are required for this action.' });
+  }
+  return next();
+};
+
 const PASSWORD_POLICY = /^(?=.*[A-Z]).{6,}$/;
 const CODE_TTL_MINUTES = 15;
 const AVATAR_MAX_SIZE_BYTES = 2 * 1024 * 1024; // 2MB
@@ -559,15 +566,74 @@ router.delete('/delete', async (req, res) => {
 });
 
 // getting all users 
-router.get('/users', async (req, res) => {
+router.get('/users', auth, requireAdmin, async (req, res) => {
   try {
-    const query =
-      'SELECT id, name, email, role, role_id AS "roleId", created_at FROM users ORDER BY created_at DESC';
-    const result = await pool.query(query); // Now pool is defined
-    
+    const parsedPage = parseInt(req.query.page, 10);
+    const parsedPageSize = parseInt(req.query.pageSize, 10);
+    const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const rawPageSize = Number.isFinite(parsedPageSize) && parsedPageSize > 0 ? parsedPageSize : 10;
+    const pageSize = Math.min(rawPageSize, 50);
+    const searchTerm = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const rawRoleFilter = typeof req.query.role === 'string' ? req.query.role.trim() : '';
+    const normalizedRole = rawRoleFilter && rawRoleFilter.toLowerCase() !== 'all'
+      ? rawRoleFilter.toLowerCase()
+      : '';
+
+    const filters = [];
+    const params = [];
+
+    if (searchTerm) {
+      const idxName = params.push(`%${searchTerm}%`);
+      const idxEmail = params.push(`%${searchTerm}%`);
+      filters.push(`(name ILIKE $${idxName} OR email ILIKE $${idxEmail})`);
+    }
+
+    if (normalizedRole) {
+      const idxRole = params.push(normalizedRole);
+      filters.push(`LOWER(role) = $${idxRole}`);
+    }
+
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const countQuery = `SELECT COUNT(*)::int AS total FROM users ${whereClause}`;
+    const countResult = await pool.query(countQuery, params);
+    const total = Number(countResult.rows?.[0]?.total || 0);
+    const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
+    const offset = Math.max((page - 1) * pageSize, 0);
+
+    const dataParams = [...params];
+    const limitIndex = dataParams.push(pageSize);
+    const offsetIndex = dataParams.push(offset);
+    const dataQuery = `
+      SELECT id, name, email, role, role_id AS "roleId", created_at
+      FROM users
+      ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $${limitIndex}
+      OFFSET $${offsetIndex}
+    `;
+    const result = await pool.query(dataQuery, dataParams);
+
+    const hasRows = result.rows.length > 0;
+    const from = hasRows ? offset + 1 : 0;
+    const to = hasRows ? offset + result.rows.length : 0;
+
     res.json({
       message: 'Users fetched successfully',
-      users: result.rows
+      users: result.rows,
+      pagination: {
+        total,
+        page,
+        pageSize,
+        totalPages,
+        hasPrevious: page > 1,
+        hasNext: page * pageSize < total,
+        from,
+        to,
+      },
+      filters: {
+        search: searchTerm,
+        role: normalizedRole || 'all',
+      },
     });
   } catch (error) {
     console.error('Get users error:', error);
@@ -620,7 +686,7 @@ router.get('/participants', async (req, res) => {
   }
 });
 
-router.put('/update-role/:id', async (req, res) => {
+router.put('/update-role/:id', auth, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params; // Get the ID from the URL
 

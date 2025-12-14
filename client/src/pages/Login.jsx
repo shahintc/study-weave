@@ -26,6 +26,13 @@ export default function Login() {
   const [guestLoading, setGuestLoading] = useState(false);
   const navigate = useNavigate();
 
+  const routeForRole = (role) => {
+    if (role === "admin") return "/admin-roles";
+    if (role === "researcher") return "/researcher";
+    if (role === "reviewer") return "/researcher/reviewer";
+    return "/participant";
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
@@ -40,10 +47,7 @@ export default function Login() {
       localStorage.setItem("token", res.data.token);
       localStorage.setItem("user", JSON.stringify(res.data.user));
 
-      const role = res.data.user?.role;
-      if (role === "researcher") navigate("/researcher");
-      else if (role === "reviewer") navigate("/researcher/reviewer");
-      else navigate("/participant");
+      navigate(routeForRole(res.data.user?.role));
     } catch (err) {
       const msg = err.response?.data?.message || "Login failed";
       setError(msg);
@@ -70,10 +74,7 @@ export default function Login() {
       localStorage.setItem("token", res.data.token);
       localStorage.setItem("user", JSON.stringify(res.data.user));
 
-      const role = res.data.user?.role;
-      if (role === "researcher") navigate("/researcher");
-      else if (role === "reviewer") navigate("/researcher/reviewer");
-      else navigate("/participant");
+      navigate(routeForRole(res.data.user?.role));
     } catch (err) {
       setError(err.response?.data?.message || "Verification failed");
     } finally {

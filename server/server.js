@@ -7,6 +7,7 @@ require('dotenv').config(
 );
 
 const { sequelize } = require('./models'); // Import sequelize instance
+const ensureDefaultAdmin = require('./utils/ensureDefaultAdmin');
 const app = express();
 const port = process.env.PORT || 5200;
 const BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || '25mb';

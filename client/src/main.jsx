@@ -25,6 +25,22 @@ import CompetencyEvaluationReview from "./pages/CompetencyEvaluationReview";
 import ReviewerAdjudication from "./pages/ReviewerAdjudication";
 import StudiesPage from "./pages/StudiesPage";
 
+const resolveDefaultRoute = () => {
+  if (typeof window === "undefined") return "/researcher";
+  try {
+    const raw = window.localStorage.getItem("user");
+    const role = raw ? JSON.parse(raw)?.role : null;
+    if (role === "admin") return "/admin-roles";
+    if (role === "participant") return "/participant";
+    if (role === "reviewer") return "/researcher/reviewer";
+  } catch {
+    // ignore parse errors
+  }
+  return "/researcher";
+};
+
+const RoleAwareHomeRedirect = () => <Navigate to={resolveDefaultRoute()} replace />;
+
 ReactDOM.createRoot(document.getElementById("root")).render(
   <BrowserRouter>
     <Routes>
@@ -38,7 +54,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       {/* The App component acts as the main layout for all protected content */}
       <Route path="/" element={<ProtectedRoute><App /></ProtectedRoute>}>
         {/* Default route for authenticated users landing on "/" */}
-        <Route index element={<Navigate to="/researcher" replace />} />
+        <Route index element={<RoleAwareHomeRedirect />} />
 
         {/* Other protected routes */}
         <Route path="/profile" element={<Profile />} />

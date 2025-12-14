@@ -454,14 +454,58 @@ describe("Full application smoke coverage", () => {
     participantView.unmount();
 
     window.localStorage.clear();
+    axiosMocks.get.mockReset();
 
-    axiosMocks.get.mockResolvedValue({
-      data: {
+    window.localStorage.setItem(
+      "user",
+      JSON.stringify({ id: "admin-9", role: "admin", name: "Admin Ava" }),
+    );
+    window.localStorage.setItem("token", "token-admin");
+
+    const adminDirectoryResponses = [
+      {
         users: [
           { id: "u-1", name: "Riley Researcher", email: "riley@example.com", role: "researcher" },
           { id: "u-2", name: "Piper Participant", email: "piper@example.com", role: "participant" },
         ],
+        pagination: {
+          total: 2,
+          page: 1,
+          pageSize: 10,
+          totalPages: 1,
+          hasNext: false,
+          hasPrevious: false,
+          from: 1,
+          to: 2,
+        },
       },
+      {
+        users: [
+          { id: "u-1", name: "Riley Researcher", email: "riley@example.com", role: "participant" },
+          { id: "u-2", name: "Piper Participant", email: "piper@example.com", role: "participant" },
+        ],
+        pagination: {
+          total: 2,
+          page: 1,
+          pageSize: 10,
+          totalPages: 1,
+          hasNext: false,
+          hasPrevious: false,
+          from: 1,
+          to: 2,
+        },
+      },
+    ];
+
+    axiosMocks.get.mockImplementation((url) => {
+      if (url === "/api/auth/users") {
+        const payload =
+          adminDirectoryResponses.length > 1
+            ? adminDirectoryResponses.shift()
+            : adminDirectoryResponses[0];
+        return Promise.resolve({ data: payload });
+      }
+      return Promise.resolve({ data: {} });
     });
 
     axiosMocks.put.mockImplementation((url) => {
