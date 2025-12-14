@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Check, X, CheckCircle, AlertCircle } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const formatReviewDate = (dateString) => {
   if (!dateString) return "N/A";
@@ -27,15 +28,27 @@ const calculatePerformance = (assignment) => {
   if (!assignment?.questions || !assignment?.responses) {
     return { score: 0, total: 0, percentage: 0 };
   }
-  const mcQuestions = assignment.questions.filter(q => q.type === "multiple_choice" && q.options?.length > 0);
+  const mcQuestions = assignment.questions.filter(
+    (q) => (q.type === "multiple_choice" || q.type === "multi_choice") && q.options?.length > 0,
+  );
   if (mcQuestions.length === 0) {
     return { score: 0, total: 0, percentage: 0 };
   }
   let correctAnswers = 0;
   mcQuestions.forEach((question) => {
-    const correctOption = question.options.find((opt) => opt.isCorrect);
-    const participantResponse = assignment.responses[question.id];
-    if (correctOption && participantResponse === correctOption.text) {
+    const correctOptions = (question.options || []).filter((opt) => opt.isCorrect);
+    const correctValues = correctOptions.map((opt) => String(opt.text));
+    const rawResponse = assignment.responses?.[question.id];
+    const responseValues = Array.isArray(rawResponse)
+      ? rawResponse.map((val) => String(val))
+      : rawResponse
+        ? [String(rawResponse)]
+        : [];
+    const isCorrect =
+      correctValues.length &&
+      responseValues.length === correctValues.length &&
+      correctValues.every((val) => responseValues.includes(val));
+    if (isCorrect) {
       correctAnswers++;
     }
   });
@@ -46,33 +59,71 @@ const calculatePerformance = (assignment) => {
   };
 };
 
+const parseEstimatedSeconds = (estimatedTime) => {
+  if (!estimatedTime) return null;
+  // expected format like "30 minutes"
+  const match = String(estimatedTime).match(/(\d+)\s*/);
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  return Number.isFinite(minutes) ? minutes * 60 : null;
+};
+
 export function AssessmentPreviewModal({ isOpen, onClose, assessmentData, assignment }) {
   const isParticipantReview = !!assignment;
   const data = isParticipantReview ? assignment : assessmentData;
+  const estimatedSeconds = parseEstimatedSeconds(assignment?.estimatedTime);
 
   const { multipleChoiceQuestions, shortAnswerQuestions } = useMemo(() => {
     const allQuestions = (data?.questions || []).map((question, index) => {
-      const questionId = question.id || `q-${index}`;
-      const correctOption = question.type === 'multiple_choice' ? (question.options || []).find(opt => opt.isCorrect) : null;
-      const response = isParticipantReview ? (assignment.responses?.[questionId] || "(No response provided)") : null;
+        const questionId = question.id || `q-${index}`;
+      const correctOptions =
+        question.type === 'multiple_choice' || question.type === 'multi_choice'
+          ? (question.options || []).filter(opt => opt.isCorrect)
+          : [];
+      const responseRaw = isParticipantReview ? assignment.responses?.[questionId] : null;
+      const responseValues = Array.isArray(responseRaw)
+        ? responseRaw.map((val) => String(val))
+        : responseRaw
+          ? [String(responseRaw)]
+          : [];
+      const responseDisplay = responseValues.length
+        ? responseValues
+        : ["No answer submitted"];
       return {
         id: questionId,
         label: question.title,
         type: question.type,
+        typeLabel:
+          question.type === 'multi_choice'
+            ? 'Multiple select'
+            : question.type === 'multiple_choice'
+              ? 'Multiple choice'
+              : question.type === 'short_answer'
+                ? 'Short answer'
+                : question.type,
         options:
-          question.type === "multiple_choice"
+          question.type === "multiple_choice" || question.type === "multi_choice"
             ? (question.options || []).map((opt, optIndex) => ({
                 value: String(opt.text || `opt-${optIndex}`),
                 label: opt.text,
               }))
             : [],
-        response,
-        isCorrect: correctOption ? response === correctOption.text : null,
-        correctAnswer: correctOption ? correctOption.text : null,
+        responseValues,
+        responseDisplay,
+        isCorrect:
+          correctOptions.length > 0
+            ? responseValues.length === correctOptions.length &&
+              correctOptions.every((opt) => responseValues.includes(String(opt.text)))
+            : null,
+        correctAnswers: correctOptions.map((opt) => String(opt.text)),
+        isMulti:
+          question.type === 'multi_choice' ||
+          ((question.type === 'multiple_choice') &&
+            (question.options || []).filter((opt) => opt.isCorrect).length > 1),
       };
     });
     return {
-      multipleChoiceQuestions: allQuestions.filter(q => q.type === 'multiple_choice'),
+      multipleChoiceQuestions: allQuestions.filter(q => q.type === 'multiple_choice' || q.type === 'multi_choice'),
       shortAnswerQuestions: allQuestions.filter(q => q.type === 'short_answer'),
     };
   }, [data, isParticipantReview, assignment]);
@@ -107,7 +158,16 @@ export function AssessmentPreviewModal({ isOpen, onClose, assessmentData, assign
           <Card>
             <CardHeader>
               <CardTitle>{data.title}</CardTitle>
-              <p className="text-sm text-muted-foreground">{data.description || data.notes}</p>
+              <p className="text-sm text-muted-foreground">
+                {data.description || data.notes || "No description provided."}
+              </p>
+              {!isParticipantReview ? (
+                <p className="text-xs text-muted-foreground mt-2">
+                  {Array.isArray(data.instructions) && data.instructions.length
+                    ? data.instructions.join(" • ")
+                    : "No instructions provided."}
+                </p>
+              ) : null}
             </CardHeader>
             {isParticipantReview && performance && (
               <CardContent className="space-y-3">
@@ -135,11 +195,18 @@ export function AssessmentPreviewModal({ isOpen, onClose, assessmentData, assign
                 {performance.total > 0 && (
                   <div className="flex items-center justify-between pt-2">
                     <h3 className="text-sm font-semibold text-muted-foreground">MCQ Performance</h3>
-                    <div className="flex items-center gap-2">
-                      <p className="text-lg font-bold">{performance.percentage}%</p>
-                      <span className="text-xs text-muted-foreground">
-                        ({performance.score}/{performance.total} correct)
-                      </span>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <p className="text-lg font-bold">{performance.percentage}%</p>
+                        <span className="text-xs text-muted-foreground">
+                          ({performance.score}/{performance.total} correct)
+                        </span>
+                      </div>
+                      {Number.isFinite(assignment?.timeTakenSeconds) && (
+                        <Badge variant="outline" className="text-[11px]">
+                          Time: ~{Math.round(assignment.timeTakenSeconds / 60)} min
+                        </Badge>
+                      )}
                     </div>
                   </div>
                 )}
@@ -174,53 +241,110 @@ export function AssessmentPreviewModal({ isOpen, onClose, assessmentData, assign
                             Q{index + 1}. {question.label}
                           </Label>
                           <Badge variant="secondary" className="text-xs uppercase">
-                            {question.type.replace("_", " ")}
+                            {question.typeLabel}
                           </Badge>
                         </div>
                         {isParticipantReview ? (
-                          <div className={`p-3 rounded text-sm ${
-                            assignment.status === 'reviewed' && question.isCorrect === true ? 'bg-green-100' : 
-                            assignment.status === 'reviewed' && question.isCorrect === false ? 'bg-red-100' : 
-                            'bg-muted'
-                          }`}>
+                          <div
+                            className={`p-3 rounded text-sm ${
+                              assignment.status === 'reviewed' && question.isCorrect === true
+                                ? 'bg-green-50 border border-green-200'
+                                : assignment.status === 'reviewed' && question.isCorrect === false
+                                  ? 'bg-red-50 border border-red-200'
+                                  : 'bg-muted'
+                            }`}
+                          >
                             <div className="flex items-center justify-between">
-                              <p className="font-semibold">{question.response}</p>
-                              {assignment.status === 'reviewed' && question.isCorrect === true && <CheckCircle className="h-4 w-4 text-green-600" />}
-                              {assignment.status === 'reviewed' && question.isCorrect === false && <AlertCircle className="h-4 w-4 text-red-600" />}
+                              {question.responseValues.length === 0 ? (
+                                <p className="text-muted-foreground text-sm">No answer submitted</p>
+                              ) : (
+                                <div className="flex flex-wrap gap-2">
+                                  {question.responseDisplay.map((resp, idx) => (
+                                    <Badge key={idx} variant="secondary">
+                                      {resp}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+                              {assignment.status === 'reviewed' && question.isCorrect === true && (
+                                <CheckCircle className="h-4 w-4 text-green-600" />
+                              )}
+                              {assignment.status === 'reviewed' && question.isCorrect === false && (
+                                <AlertCircle className="h-4 w-4 text-red-600" />
+                              )}
                             </div>
-                            {assignment.status === 'reviewed' && question.isCorrect === false && question.correctAnswer && (
-                              <div className="mt-2 pt-2 border-t border-red-200">
-                                <p className="text-xs text-red-800">
-                                  Correct answer: <span className="font-semibold">{question.correctAnswer}</span>
-                                </p>
+                            {assignment.status === 'reviewed' && question.isCorrect === false && question.correctAnswers?.length ? (
+                              <div className="mt-2 pt-2 border-t border-red-200 space-y-1">
+                                <p className="text-xs text-red-800 font-medium">Correct answer{question.correctAnswers.length > 1 ? 's' : ''}:</p>
+                                <div className="flex flex-wrap gap-2">
+                                  {question.correctAnswers.map((answer, idx) => (
+                                    <Badge key={idx} variant="outline">
+                                      {answer}
+                                    </Badge>
+                                  ))}
+                                </div>
                               </div>
-                            )}
+                            ) : null}
                           </div>
                         ) : (
-                          <RadioGroup
-                            value={answers[question.id] || ""}
-                            onValueChange={(value) => handleAnswerChange(question.id, value)}
-                            className="space-y-2"
-                          >
-                            {question.options.map((option) => (
-                              <label
-                                key={option.value}
-                                className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors ${
-                                  answers[question.id] === option.value
-                                    ? "border-primary bg-primary/5"
-                                    : "border-input bg-background hover:bg-muted/50"
-                                }`}
-                              >
-                                <RadioGroupItem
-                                  value={option.value}
-                                  id={`${question.id}-${option.value}`}
-                                />
-                                <span className="text-sm font-medium text-foreground">
-                                  {option.label}
-                                </span>
-                              </label>
-                            ))}
-                          </RadioGroup>
+                          question.isMulti ? (
+                            <div className="space-y-2">
+                              {question.options.map((option) => {
+                                const selected = Array.isArray(answers[question.id])
+                                  ? answers[question.id].includes(option.value)
+                                  : false;
+                                const toggle = () => {
+                                  const current = Array.isArray(answers[question.id]) ? answers[question.id] : [];
+                                  const next = selected
+                                    ? current.filter((val) => val !== option.value)
+                                    : [...current, option.value];
+                                  handleAnswerChange(question.id, next);
+                                };
+                                return (
+                                  <label
+                                    key={option.value}
+                                    className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors ${
+                                      selected ? "border-primary bg-primary/5" : "border-input bg-background hover:bg-muted/50"
+                                    }`}
+                                  >
+                                    <Checkbox
+                                      id={`${question.id}-${option.value}`}
+                                      checked={selected}
+                                      onCheckedChange={toggle}
+                                    />
+                                    <span className="text-sm font-medium text-foreground">
+                                      {option.label}
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <RadioGroup
+                              value={answers[question.id] || ""}
+                              onValueChange={(value) => handleAnswerChange(question.id, value)}
+                              className="space-y-2"
+                            >
+                              {question.options.map((option) => (
+                                <label
+                                  key={option.value}
+                                  className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors ${
+                                    answers[question.id] === option.value
+                                      ? "border-primary bg-primary/5"
+                                      : "border-input bg-background hover:bg-muted/50"
+                                  }`}
+                                >
+                                  <RadioGroupItem
+                                    value={option.value}
+                                    id={`${question.id}-${option.value}`}
+                                  />
+                                  <span className="text-sm font-medium text-foreground">
+                                    {option.label}
+                                  </span>
+                                </label>
+                              ))}
+                            </RadioGroup>
+                          )
                         )}
                       </div>
                     ))}
@@ -244,12 +368,16 @@ export function AssessmentPreviewModal({ isOpen, onClose, assessmentData, assign
                             Q{index + 1}. {question.label}
                           </Label>
                           <Badge variant="secondary" className="text-xs uppercase">
-                            {question.type.replace("_", " ")}
+                            {question.typeLabel}
                           </Badge>
                         </div>
                         {isParticipantReview ? (
                           <div className="p-3 bg-muted rounded text-sm">
-                            <p className="text-muted-foreground whitespace-pre-wrap">{question.response}</p>
+                            <p className="text-muted-foreground whitespace-pre-wrap">
+                              {question.responseDisplay && question.responseDisplay.length
+                                ? question.responseDisplay.join(", ")
+                                : "No answer submitted"}
+                            </p>
                           </div>
                         ) : (
                           <Textarea

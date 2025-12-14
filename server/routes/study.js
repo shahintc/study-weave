@@ -10,17 +10,19 @@ const {
   User,
 } = require('../models');
 const { sendEmail, isEmailConfigured } = require('../services/emailService');
+const authMiddleware = require('../middleware/auth');
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: 'stage1', label: 'Bug labeling – Stage 1' },
-  { value: 'stage2', label: 'Bug adjudication – Stage 2' },
   { value: 'solid', label: 'SOLID review' },
   { value: 'clone', label: 'Patch clone check' },
   { value: 'snapshot', label: 'Snapshot intent' },
+  { value: 'custom', label: 'Custom stage' },
 ];
 
 const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
 const DEFAULT_ARTIFACT_MODE = 'stage1';
+const CUSTOM_STAGE_MAX_ARTIFACTS = 5;
 
 const resolveDefaultArtifactMode = (value) => {
   if (value && ARTIFACT_MODE_SET.has(value)) {
@@ -29,7 +31,103 @@ const resolveDefaultArtifactMode = (value) => {
   return DEFAULT_ARTIFACT_MODE;
 };
 
-// const authMiddleware = require('../middleware/auth'); // We will add security to this later
+const normalizeCustomQuestions = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item, idx) => {
+      const type = typeof item?.type === 'string' ? item.type.toLowerCase() : '';
+      if (!['mcq', 'dropdown', 'answer'].includes(type)) {
+        return null;
+      }
+      const id = item?.id || `custom-q-${idx + 1}`;
+      const prompt = typeof item?.prompt === 'string' ? item.prompt.trim() : '';
+      if (!prompt) return null;
+      let options = [];
+      if (type === 'mcq' || type === 'dropdown') {
+        options = Array.isArray(item?.options)
+          ? item.options
+              .map((opt) => (typeof opt === 'string' ? opt.trim() : ''))
+              .filter((opt) => opt)
+          : [];
+        if (options.length < 2) return null;
+      }
+      return { id, type, prompt, options };
+    })
+    .filter(Boolean);
+};
+
+router.get('/public', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || !['guest', 'participant', 'researcher', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Unauthorized to view public studies.' });
+    }
+
+    const studies = await Study.findAll({
+      where: {
+        status: { [Op.ne]: 'archived' },
+        [Op.or]: [
+          { isPublic: true },
+          sequelize.where(sequelize.literal("(metadata->>'isPublic')::boolean"), true),
+        ],
+      },
+      attributes: [
+        'id',
+        'title',
+        'description',
+        'timelineStart',
+        'timelineEnd',
+        'status',
+        'isPublic',
+        'metadata',
+      ],
+      include: [
+        { model: User, as: 'researcher', attributes: ['id', 'name'] },
+        {
+          model: StudyArtifact,
+          as: 'studyArtifacts',
+          attributes: ['id', 'label', 'orderIndex'],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+    });
+
+    const payload = studies.map((study) => {
+      const plain = study.get({ plain: true });
+      const artifacts = Array.isArray(plain.studyArtifacts) ? [...plain.studyArtifacts] : [];
+      artifacts.sort((a, b) => {
+        const aIndex = typeof a.orderIndex === 'number' ? a.orderIndex : Number(a.orderIndex) || 0;
+        const bIndex = typeof b.orderIndex === 'number' ? b.orderIndex : Number(b.orderIndex) || 0;
+        return aIndex - bIndex;
+      });
+      const safeMetadata = {};
+      const metadata = plain.metadata && typeof plain.metadata === 'object' ? plain.metadata : {};
+      if (typeof metadata.defaultArtifactMode !== 'undefined') {
+        safeMetadata.defaultArtifactMode = metadata.defaultArtifactMode;
+      }
+      if (typeof metadata.isBlinded !== 'undefined') {
+        safeMetadata.isBlinded = metadata.isBlinded;
+      }
+      return {
+        id: plain.id,
+        title: plain.title,
+        description: plain.description,
+        timelineStart: plain.timelineStart,
+        timelineEnd: plain.timelineEnd,
+        status: plain.status,
+        isPublic: Boolean(plain.isPublic),
+        researcher: plain.researcher ? { id: plain.researcher.id, name: plain.researcher.name } : null,
+        artifactCount: artifacts.length,
+        firstStudyArtifactId: artifacts.length ? artifacts[0].id : null,
+        metadata: safeMetadata,
+      };
+    });
+
+    return res.json({ studies: payload });
+  } catch (error) {
+    console.error('Public studies fetch error', error);
+    return res.status(500).json({ message: 'Unable to load public studies right now.' });
+  }
+});
 
 // ---
 // CREATE A NEW STUDY (POST /)
@@ -63,6 +161,7 @@ router.post('/', async (req, res) => {
       metadata = {},
       selectedParticipants = [],
       autoInvite = false,
+      allowReviewers = false,
     } = req.body;
 
     if (!researcherId) {
@@ -93,18 +192,6 @@ router.post('/', async (req, res) => {
     const defaultArtifactMode = resolveDefaultArtifactMode(requestedDefaultMode);
     preparedMetadata.defaultArtifactMode = defaultArtifactMode;
 
-    const newStudy = await Study.create({
-      title,
-      description,
-      criteria: Array.isArray(criteria) ? criteria : [],
-      status: 'draft',
-      isPublic: Boolean(isPublic),
-      researcherId,
-      timelineStart: normalizeDate(timelineStart),
-      timelineEnd: normalizeDate(timelineEnd),
-      metadata: preparedMetadata,
-    }, { transaction });
-
     const participantSelection = Array.isArray(selectedParticipants) && selectedParticipants.length
       ? selectedParticipants
       : Array.isArray(preparedMetadata.selectedParticipants)
@@ -132,6 +219,39 @@ router.post('/', async (req, res) => {
     const sanitizedArtifacts = artifactSelection
       .map((value) => Number(value))
       .filter((value) => Number.isFinite(value));
+
+    if (defaultArtifactMode === 'custom') {
+      const customQuestions = normalizeCustomQuestions(
+        Array.isArray(metadata.customQuestions) ? metadata.customQuestions : req.body.customQuestions,
+      );
+      if (!customQuestions.length) {
+        await transaction.rollback();
+        return res.status(400).json({ message: 'Custom stage requires at least one valid question.' });
+      }
+      if (sanitizedArtifacts.length === 0) {
+        await transaction.rollback();
+        return res.status(400).json({ message: 'Custom stage requires at least one artifact.' });
+      }
+      if (sanitizedArtifacts.length > CUSTOM_STAGE_MAX_ARTIFACTS) {
+        await transaction.rollback();
+        return res.status(400).json({ message: `Custom stage supports up to ${CUSTOM_STAGE_MAX_ARTIFACTS} artifacts.` });
+      }
+      preparedMetadata.customQuestions = customQuestions;
+      preparedMetadata.customArtifactIds = sanitizedArtifacts;
+    }
+
+    const newStudy = await Study.create({
+      title,
+      description,
+      criteria: Array.isArray(criteria) ? criteria : [],
+      status: 'draft',
+      isPublic: Boolean(isPublic),
+      researcherId,
+      timelineStart: normalizeDate(timelineStart),
+      timelineEnd: normalizeDate(timelineEnd),
+      metadata: preparedMetadata,
+      allowReviewers: Boolean(allowReviewers),
+    }, { transaction });
 
     let assignments = [];
     if (shouldCreateAssignments) {

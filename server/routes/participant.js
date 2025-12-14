@@ -17,10 +17,10 @@ const {
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: 'stage1', label: 'Bug labeling – Stage 1' },
-  { value: 'stage2', label: 'Bug adjudication – Stage 2' },
   { value: 'solid', label: 'SOLID review' },
   { value: 'clone', label: 'Patch clone check' },
   { value: 'snapshot', label: 'Snapshot intent' },
+  { value: 'custom', label: 'Custom stage' },
 ];
 
 const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
@@ -51,6 +51,7 @@ const TEXT_FILE_EXTENSIONS = [
   '.css',
 ];
 const FALLBACK_MIME = 'application/octet-stream';
+const CUSTOM_STAGE_MAX_ARTIFACTS = 5;
 
 const resolveArtifactMode = (value) => (value && ARTIFACT_MODE_SET.has(value) ? value : DEFAULT_ARTIFACT_MODE);
 
@@ -70,6 +71,49 @@ const isTextLike = (mime, fileName = '') => {
   }
   const lower = fileName ? fileName.toLowerCase() : '';
   return TEXT_FILE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+};
+
+const normalizeCustomQuestions = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item, idx) => {
+      const type = typeof item?.type === 'string' ? item.type.toLowerCase() : '';
+      if (!['mcq', 'dropdown', 'answer'].includes(type)) return null;
+      const prompt = typeof item?.prompt === 'string' ? item.prompt.trim() : '';
+      if (!prompt) return null;
+      const id = item?.id || `custom-q-${idx + 1}`;
+      let options = [];
+      if (type === 'mcq' || type === 'dropdown') {
+        options = Array.isArray(item?.options)
+          ? item.options
+              .map((opt) => (typeof opt === 'string' ? opt.trim() : ''))
+              .filter((opt) => opt)
+          : [];
+        if (options.length < 2) return null;
+      }
+      return { id, type, prompt, options };
+    })
+    .filter(Boolean);
+};
+
+const normalizeCustomArtifactIds = (value) => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((val) => Number(val))
+    .filter((val) => Number.isFinite(val));
+};
+
+const normalizeTimerState = (timer = {}) => {
+  const elapsedMs = Math.max(0, Number(timer.elapsedMs) || 0);
+  const lastStart = Number(timer.lastStart);
+  return {
+    elapsedMs,
+    running: Boolean(timer.running),
+    submitted: Boolean(timer.submitted),
+    lastStart: Number.isFinite(lastStart) ? lastStart : null,
+    studyArtifactId: timer.studyArtifactId ? Number(timer.studyArtifactId) : null,
+    updatedAt: timer.updatedAt || new Date().toISOString(),
+  };
 };
 
 async function buildPanePayload(studyArtifactEntry, role = 'primary') {
@@ -117,15 +161,104 @@ async function buildPanePayload(studyArtifactEntry, role = 'primary') {
     fileOriginalName: artifact.fileOriginalName,
     encoding,
     content,
-  };
+};
 }
+
+router.post('/join-public', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || !['guest', 'participant'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only participants and guests can join public studies.' });
+    }
+    const isGuest = req.user.role === 'guest';
+    const studyId = Number(req.body.studyId);
+    if (!Number.isFinite(studyId)) {
+      return res.status(400).json({ message: 'A valid studyId is required.' });
+    }
+
+    const study = await Study.findByPk(studyId, {
+      include: [
+        {
+          model: StudyArtifact,
+          as: 'studyArtifacts',
+          attributes: ['id', 'orderIndex'],
+        },
+      ],
+    });
+    const metadata = normalizeJson(study?.metadata);
+    const isPublic = study?.isPublic || Boolean(metadata.isPublic);
+    if (!study || !isPublic) {
+      return res.status(404).json({ message: 'Public study not found.' });
+    }
+    if (study.status === 'archived') {
+      return res.status(400).json({ message: 'This study is archived.' });
+    }
+    if (computeDeadlinePassed(study.timelineEnd)) {
+      return res.status(403).json({ message: 'This study has already ended.' });
+    }
+
+    const existing = await StudyParticipant.findOne({ where: { studyId, participantId: req.user.id } });
+    if (existing) {
+      const needsAcceptance = existing.invitationStatus !== 'accepted';
+      const pendingGuestMeta = isGuest
+        ? {
+            source: existing.source || 'public_guest',
+            guestSessionId: req.user.guestSessionId || existing.guestSessionId || null,
+            expiresAt: req.user.guestExpiresAt
+              ? new Date(req.user.guestExpiresAt)
+              : existing.expiresAt || null,
+          }
+        : {};
+      if (needsAcceptance) {
+        await existing.update({
+          invitationStatus: 'accepted',
+          ...pendingGuestMeta,
+        });
+      }
+      return res.json({ participant: existing.get ? existing.get({ plain: true }) : existing });
+    }
+
+    const artifacts = Array.isArray(study.studyArtifacts) ? [...study.studyArtifacts] : [];
+    artifacts.sort((a, b) => {
+      const aIndex = typeof a.orderIndex === 'number' ? a.orderIndex : Number(a.orderIndex) || 0;
+      const bIndex = typeof b.orderIndex === 'number' ? b.orderIndex : Number(b.orderIndex) || 0;
+      return aIndex - bIndex;
+    });
+    const nextArtifact = artifacts.length ? artifacts[0] : null;
+    if (!nextArtifact) {
+      return res.status(400).json({ message: 'This study does not have any artifacts yet.' });
+    }
+
+    const defaultMode = resolveArtifactMode(metadata.defaultArtifactMode);
+
+    const participant = await StudyParticipant.create({
+      studyId,
+      participantId: req.user.id,
+      competencyAssignmentId: null,
+      invitationStatus: 'accepted',
+      participationStatus: 'not_started',
+      progressPercent: 0,
+      startedAt: isGuest ? new Date() : null,
+      completedAt: null,
+      lastCheckpoint: null,
+      nextArtifactMode: defaultMode,
+      nextStudyArtifactId: nextArtifact.id,
+      source: isGuest ? 'public_guest' : 'invited',
+      guestSessionId: isGuest ? req.user.guestSessionId || null : null,
+      expiresAt: isGuest && req.user.guestExpiresAt ? new Date(req.user.guestExpiresAt) : null,
+    });
+
+    return res.status(201).json({
+      participant: participant.get ? participant.get({ plain: true }) : participant,
+    });
+  } catch (error) {
+    console.error('Join public study error', error);
+    return res.status(500).json({ message: 'Unable to join this study right now.' });
+  }
+});
 
 router.get('/assignments', authMiddleware, async (req, res) => {
   try {
-    if (!req.user) {
-      return res.status(401).json({ message: 'Authentication required.' });
-    }
-    if (req.user.role !== 'participant') {
+    if (!req.user || !['participant', 'guest'].includes(req.user.role)) {
       return res.status(403).json({ message: 'Only participants can view these assignments.' });
     }
 
@@ -198,7 +331,12 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
     if (!req.user) {
       return res.status(401).json({ message: 'Authentication required.' });
     }
-    if (req.user.role !== 'participant' && req.user.role !== 'researcher' && req.user.role !== 'admin') {
+    if (
+      req.user.role !== 'participant' &&
+      req.user.role !== 'researcher' &&
+      req.user.role !== 'admin' &&
+      req.user.role !== 'guest'
+    ) {
       return res.status(403).json({ message: 'Only participants can open assigned artifacts.' });
     }
 
@@ -218,14 +356,24 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
       return res.status(404).json({ message: 'Study not found.' });
     }
 
+    const studyMetadata = normalizeJson(study.metadata);
+    const isPublicStudy = study.isPublic || Boolean(studyMetadata.isPublic);
+
+    const customQuestions = normalizeCustomQuestions(studyMetadata.customQuestions);
+    const customArtifactIds = normalizeCustomArtifactIds(studyMetadata.customArtifactIds);
+    if (req.user.role === 'guest' && !isPublicStudy) {
+      return res.status(403).json({ message: 'This study is not available for guests.' });
+    }
+
     if (computeDeadlinePassed(study.timelineEnd)) {
       return res.status(403).json({ message: 'Study deadline has passed. You cannot start this task.' });
     }
 
-    const studyMetadata = normalizeJson(study.metadata);
-
     const participantWhere = { studyId };
-    if (requestedParticipantId) {
+    if (req.user.role === 'guest') {
+      participantWhere.participantId = req.user.id;
+      participantWhere.guestSessionId = req.user.guestSessionId || null;
+    } else if (requestedParticipantId) {
       participantWhere.id = requestedParticipantId;
     } else if (req.user.role === 'participant') {
       participantWhere.participantId = req.user.id;
@@ -234,6 +382,18 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
     const participant = await StudyParticipant.findOne({ where: participantWhere });
     if (!participant) {
       return res.status(404).json({ message: 'No matching study assignment found for this participant.' });
+    }
+    if (req.user.role === 'guest') {
+      if (participant.participantId !== req.user.id) {
+        return res.status(403).json({ message: 'You cannot open another participant assignment.' });
+      }
+      const enrollmentExpiresAt = participant.expiresAt || req.user.guestExpiresAt;
+      if (enrollmentExpiresAt && new Date(enrollmentExpiresAt).getTime() < Date.now()) {
+        return res.status(403).json({ message: 'Your guest enrollment has expired.' });
+      }
+      if (participant.source && participant.source !== 'public_guest') {
+        return res.status(403).json({ message: 'Guest access is limited to public studies.' });
+      }
     }
 
     const studyArtifact = await StudyArtifact.findOne({
@@ -324,6 +484,7 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
     let leftPane = await buildPanePayload(studyArtifact, 'primary');
     let rightPane = null;
     let diffPane = null;
+    let customArtifacts = null;
     if (comparison) {
       const isPrimary = Number(comparison.primaryArtifactId) === Number(studyArtifactId);
       const pairedArtifact = isPrimary ? comparison.secondaryArtifact : comparison.primaryArtifact;
@@ -355,6 +516,59 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
         return res.status(400).json({
           message: 'This patch/snapshot task needs a paired study artifact. Please ask the researcher to link two artifacts for this stage.',
         });
+      }
+    }
+
+    if (resolvedMode === 'custom') {
+      const desiredArtifactIds = [];
+      const seen = new Set();
+      const pushArtifactId = (id) => {
+        if (!id || !Number.isFinite(Number(id))) return;
+        const num = Number(id);
+        if (seen.has(num)) return;
+        seen.add(num);
+        desiredArtifactIds.push(num);
+      };
+      pushArtifactId(studyArtifact.artifactId);
+      customArtifactIds.forEach(pushArtifactId);
+      const limitedArtifactIds = desiredArtifactIds.slice(0, CUSTOM_STAGE_MAX_ARTIFACTS);
+      const artifactRows = await StudyArtifact.findAll({
+        where: {
+          studyId,
+          artifactId: { [Op.in]: limitedArtifactIds },
+        },
+        include: [
+          {
+            model: Artifact,
+            as: 'artifact',
+            attributes: [
+              'id',
+              'name',
+              'type',
+              'filePath',
+              'fileMimeType',
+              'fileOriginalName',
+            ],
+          },
+        ],
+      });
+      const paneByArtifactId = new Map();
+      for (const row of artifactRows) {
+        const pane = await buildPanePayload(row, 'primary');
+        if (pane) {
+          paneByArtifactId.set(Number(row.artifactId), pane);
+        }
+      }
+      customArtifacts = limitedArtifactIds
+        .map((id) => paneByArtifactId.get(Number(id)))
+        .filter(Boolean);
+      if (!customArtifacts.length) {
+        return res.status(400).json({
+          message: 'Custom stage requires at least one configured artifact. Please ask the researcher to attach artifacts.',
+        });
+      }
+      if (!leftPane) {
+        leftPane = customArtifacts[0];
       }
     }
 
@@ -393,6 +607,8 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
         label: studyArtifact.label,
         instructions: studyArtifact.instructions,
         evaluationCriteria: normalizeCriteria(study.criteria),
+        customQuestions,
+        customArtifacts,
         panes: {
           left: leftPane,
           right: rightPane,
@@ -404,6 +620,104 @@ router.get('/artifact-task', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Participant artifact-task fetch error', error);
     return res.status(500).json({ message: 'Unable to load the assigned artifact right now.' });
+  }
+});
+
+router.get('/timer', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || !['participant', 'guest'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only participants can view their timer.' });
+    }
+
+    const studyId = Number(req.query.studyId);
+    const studyArtifactId = Number(req.query.studyArtifactId);
+    const studyParticipantId = Number(req.query.studyParticipantId);
+
+    if (!Number.isFinite(studyId) || !Number.isFinite(studyArtifactId)) {
+      return res.status(400).json({ message: 'studyId and studyArtifactId are required.' });
+    }
+
+    const participantWhere = { studyId, participantId: req.user.id };
+    if (Number.isFinite(studyParticipantId)) {
+      participantWhere.id = studyParticipantId;
+    }
+
+    const participant = await StudyParticipant.findOne({ where: participantWhere });
+    if (!participant) {
+      return res.status(404).json({ message: 'Participant record not found for this study.' });
+    }
+
+    const checkpoint = normalizeJson(participant.lastCheckpoint);
+    const timer = checkpoint?.timer ? normalizeTimerState(checkpoint.timer) : null;
+    if (!timer) {
+      return res.status(404).json({ message: 'No timer found for this study artifact.' });
+    }
+    if (timer.studyArtifactId && timer.studyArtifactId !== studyArtifactId) {
+      return res.status(404).json({ message: 'No timer found for this study artifact.' });
+    }
+    return res.json({ timer });
+  } catch (error) {
+    console.error('Timer fetch error', error);
+    return res.status(500).json({ message: 'Unable to load timer right now.' });
+  }
+});
+
+router.post('/timer', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || !['participant', 'guest'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only participants can update their timer.' });
+    }
+
+    const {
+      studyId: rawStudyId,
+      studyArtifactId: rawStudyArtifactId,
+      studyParticipantId: rawStudyParticipantId,
+      elapsedMs,
+      running,
+      submitted,
+      lastStart,
+    } = req.body;
+
+    const studyId = Number(rawStudyId);
+    const studyArtifactId = Number(rawStudyArtifactId);
+    const studyParticipantId = Number(rawStudyParticipantId);
+
+    if (!Number.isFinite(studyId) || !Number.isFinite(studyArtifactId)) {
+      return res.status(400).json({ message: 'studyId and studyArtifactId are required.' });
+    }
+
+    const participantWhere = { studyId, participantId: req.user.id };
+    if (Number.isFinite(studyParticipantId)) {
+      participantWhere.id = studyParticipantId;
+    }
+
+    const participant = await StudyParticipant.findOne({ where: participantWhere });
+    if (!participant) {
+      return res.status(404).json({ message: 'Participant record not found for this study.' });
+    }
+
+    const existingCheckpoint = normalizeJson(participant.lastCheckpoint);
+    const nextTimer = normalizeTimerState({
+      ...(existingCheckpoint?.timer || {}),
+      elapsedMs,
+      running,
+      submitted,
+      lastStart,
+      studyArtifactId,
+      updatedAt: new Date().toISOString(),
+    });
+
+    participant.lastCheckpoint = {
+      ...existingCheckpoint,
+      timer: nextTimer,
+    };
+
+    await participant.save();
+
+    return res.json({ timer: nextTimer });
+  } catch (error) {
+    console.error('Timer persist error', error);
+    return res.status(500).json({ message: 'Unable to persist timer right now.' });
   }
 });
 
@@ -463,6 +777,7 @@ function formatEnrollment(entry) {
   const study = plain.study || {};
   const lookup = buildArtifactLookup(study.studyArtifacts || []);
   const metadata = normalizeJson(study.metadata);
+  const isPublic = Boolean(study.isPublic || metadata.isPublic);
   const defaultMode = resolveArtifactMode(metadata.defaultArtifactMode);
   const competency = summarizeCompetencyProgress(plain.sourceAssignment);
   const artifactProgress = summarizeArtifactProgress(plain.artifactAssessments || []);
@@ -486,6 +801,7 @@ function formatEnrollment(entry) {
     title: study.title || 'Study',
     description: study.description || '',
     researcher: study.researcher ? { id: String(study.researcher.id), name: study.researcher.name } : null,
+    isPublic,
     participationStatus: plain.participationStatus,
     progressPercent: plain.progressPercent || 0,
     competency,
@@ -499,6 +815,7 @@ function formatEnrollment(entry) {
     lastUpdatedAt: plain.updatedAt ? new Date(plain.updatedAt).toISOString() : null,
     studyWindow: buildStudyWindow(study.timelineStart, study.timelineEnd),
     defaultArtifactMode: defaultMode,
+    lastCheckpoint: normalizeJson(plain.lastCheckpoint),
   };
 }
 
@@ -663,10 +980,7 @@ function resolveModeKey(assessment) {
   }
   const type = assessment.assessmentType;
   if (type === 'bug_stage') {
-    const payload = assessment.payload && typeof assessment.payload === 'string'
-      ? safeJsonParse(assessment.payload)
-      : assessment.payload || {};
-    return payload.mode === 'stage1' ? 'stage1' : 'stage2';
+    return 'stage1';
   }
   if (type === 'solid') {
     return 'solid';
@@ -676,6 +990,9 @@ function resolveModeKey(assessment) {
   }
   if (type === 'snapshot') {
     return 'snapshot';
+  }
+  if (type === 'custom') {
+    return 'custom';
   }
   return null;
 }
@@ -698,11 +1015,14 @@ function buildNotifications(studies = []) {
     const updatedStamp = normalizeTimestamp(
       study.lastUpdatedAt || study.timelineStart || new Date().toISOString(),
     );
+    const sanitizedCta = sanitizeNotificationCta(study.cta);
     items.push({
       id: `${study.studyParticipantId}-assigned`,
       type: 'assignment',
       message: `You were assigned to ${study.title}.`,
       studyId: study.studyId,
+      studyParticipantId: study.studyParticipantId ? String(study.studyParticipantId) : null,
+      cta: sanitizedCta,
       createdAt: updatedStamp,
     });
 
@@ -712,6 +1032,8 @@ function buildNotifications(studies = []) {
         type: 'info',
         message: `${study.title} starts today. You can begin your tasks.`,
         studyId: study.studyId,
+        studyParticipantId: study.studyParticipantId ? String(study.studyParticipantId) : null,
+        cta: sanitizedCta,
         createdAt: normalizeTimestamp(study.timelineStart),
       });
     }
@@ -722,6 +1044,8 @@ function buildNotifications(studies = []) {
         type: 'warning',
         message: `${study.title} ends today. Last chance to submit your work.`,
         studyId: study.studyId,
+        studyParticipantId: study.studyParticipantId ? String(study.studyParticipantId) : null,
+        cta: sanitizedCta,
         createdAt: normalizeTimestamp(study.timelineEnd),
       });
     }
@@ -729,6 +1053,21 @@ function buildNotifications(studies = []) {
     // Suppress other notification types; only keep assignment/start/end per request.
   });
   return items;
+}
+
+function sanitizeNotificationCta(cta) {
+  if (!cta || typeof cta !== 'object') {
+    return null;
+  }
+  return {
+    type: cta.type || null,
+    buttonLabel: cta.buttonLabel || null,
+    studyId: cta.studyId ? String(cta.studyId) : null,
+    studyParticipantId: cta.studyParticipantId ? String(cta.studyParticipantId) : null,
+    studyArtifactId: cta.studyArtifactId ? String(cta.studyArtifactId) : null,
+    mode: cta.mode || null,
+    assignmentId: cta.assignmentId ? String(cta.assignmentId) : null,
+  };
 }
 
 function buildCompetencyNotifications(assignments = []) {
@@ -740,7 +1079,7 @@ function buildCompetencyNotifications(assignments = []) {
     }
 
     const status = typeof entry.status === 'string' ? entry.status.toLowerCase() : 'pending';
-    if (status !== 'pending' && status !== 'in_progress') {
+    if (status === 'reviewed') {
       return;
     }
 
@@ -758,7 +1097,7 @@ function buildCompetencyNotifications(assignments = []) {
     const assignmentId = entry.id ? String(entry.id) : null;
 
     items.push({
-      id: `competency-${assignmentId || Math.random().toString(36).slice(2)}`,
+      id: `competency-${assignmentId || Math.random().toString(36).slice(2)}-${status}`,
       type: 'competency',
       message: `New competency assigned: ${assessment.title || 'Assessment'}${studyLabel}.`,
       assignmentId,

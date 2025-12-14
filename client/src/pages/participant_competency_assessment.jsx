@@ -7,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import axios from "../api/axios";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -41,8 +42,9 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { Timer, CheckCircle, Save, Expand, ChevronsRight, Eye } from "lucide-react";
+import { Timer, Expand, ChevronsRight, Eye } from "lucide-react";
 import { AssessmentPreviewModal } from "./AssessmentPreviewModal";
+import { useToast } from "@/hooks/use-toast";
 
 const formatTime = (seconds) => {
   const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -123,10 +125,26 @@ const FALLBACK_SECTIONS = [
 ];
 
 const buildQuestionSchema = (question) => {
-  const minLength = question.validation?.minLength ?? 1;
+  const minLength = question.validation?.minLength ?? 0;
   const message =
     question.validation?.message || "Please complete this question before submitting.";
-  return z.string().min(minLength, { message });
+
+  if (question.type === "multi_choice") {
+    return z
+      .array(z.string())
+      .optional()
+      .transform((val) => (Array.isArray(val) ? val : []))
+      .refine(
+        (arr) => arr.length === 0 || arr.every((item) => typeof item === "string"),
+        { message },
+      );
+  }
+
+  return z
+    .string()
+    .optional()
+    .transform((val) => (typeof val === "string" ? val : ""))
+    .refine((val) => val.length === 0 || val.length >= minLength, { message });
 };
 
 const buildSectionsFromAssignment = (assignment) => {
@@ -136,12 +154,17 @@ const buildSectionsFromAssignment = (assignment) => {
   }
 
   const allQuestions = questions.map((question, index) => {
+    const hasMultipleCorrect =
+      Array.isArray(question.options) && question.options.filter((opt) => opt.isCorrect).length > 1;
+    const isMultiChoice = question.type === "multi_choice" || (question.type === "multiple_choice" && hasMultipleCorrect);
     const type =
       question.type === "short_answer"
         ? "text"
         : question.type === "scale"
           ? "scale"
-          : "choice";
+          : isMultiChoice
+            ? "multi_choice"
+            : "choice";
     const computedId = question.id != null ? String(question.id) : `question-${index + 1}`;
     return {
       id: computedId,
@@ -151,11 +174,13 @@ const buildSectionsFromAssignment = (assignment) => {
       typeLabel:
         type === "text"
           ? "Short answer"
-          : type === "scale"
-            ? "Rating"
+        : type === "scale"
+          ? "Rating"
+          : type === "multi_choice"
+            ? "Multiple select"
             : "Multiple choice",
       options:
-        type === "choice"
+        type === "choice" || type === "multi_choice"
           ? (question.options || []).map((option, optionIndex) => ({
               value: String(option.value || option.text || `option-${optionIndex + 1}`),
               label: option.label || option.text || `Option ${optionIndex + 1}`,
@@ -167,7 +192,7 @@ const buildSectionsFromAssignment = (assignment) => {
     };
   });
 
-  const mcQuestions = allQuestions.filter(q => q.type === 'choice' || q.type === 'scale');
+  const mcQuestions = allQuestions.filter(q => q.type === 'choice' || q.type === 'multi_choice' || q.type === 'scale');
   const saQuestions = allQuestions.filter(q => q.type === 'text');
 
   const sections = [];
@@ -207,15 +232,33 @@ const buildDefaultValuesFromSections = (sections) => {
   const defaults = {};
   sections.forEach((section) => {
     section.questions.forEach((question) => {
-      defaults[question.id] = "";
+      defaults[question.id] = question.type === "multi_choice" ? [] : "";
     });
   });
   return defaults;
 };
 
+const buildTimerStorageKey = (assignmentId) => `competencyTimer:${assignmentId}`;
+const ACTIVE_COMPETENCY_KEY = "competencyActive";
+const ANSWER_STORAGE_KEY = (assignmentId) => `competencyAnswers:${assignmentId}`;
+const persistActiveCompetency = (payload) => {
+  try {
+    if (payload) {
+      localStorage.setItem(ACTIVE_COMPETENCY_KEY, JSON.stringify(payload));
+    } else {
+      localStorage.removeItem(ACTIVE_COMPETENCY_KEY);
+    }
+    window.dispatchEvent(new Event("storage"));
+    window.dispatchEvent(new Event("competency-active-changed"));
+  } catch {
+    // ignore
+  }
+};
+
 
 export default function ParticipantCompetencyAssessment() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [user, setUser] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -225,6 +268,7 @@ export default function ParticipantCompetencyAssessment() {
   const [assignmentsError, setAssignmentsError] = useState("");
   const [assessmentState, setAssessmentState] = useState("instructions"); // instructions, in_progress
   const [startConfirmOpen, setStartConfirmOpen] = useState(false);
+  const durationRef = useRef(null);
 
   // Timer state
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -233,12 +277,12 @@ export default function ParticipantCompetencyAssessment() {
   const [pendingStartAssignmentId, setPendingStartAssignmentId] = useState(null);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(false);
-  const [isSavingDraft, setIsSavingDraft] = useState(false);
-  const [lastSaved, setLastSaved] = useState(null);
   const [timeUpOpen, setTimeUpOpen] = useState(false);
   const questionRefs = useRef({});
   const [previewAssignment, setPreviewAssignment] = useState(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [unansweredCount, setUnansweredCount] = useState(0);
+  const [resumeChip, setResumeChip] = useState(null);
 
   // --- Warn on Leave Logic ---
   useBeforeUnload(
@@ -265,6 +309,10 @@ export default function ParticipantCompetencyAssessment() {
     return Number.isFinite(minutes) ? minutes * 60 : null;
   }, [selectedAssignment]);
 
+  useEffect(() => {
+    durationRef.current = durationInSeconds;
+  }, [durationInSeconds]);
+
   const questionSections = useMemo(
     () => buildSectionsFromAssignment(selectedAssignment),
     [selectedAssignment],
@@ -289,15 +337,93 @@ export default function ParticipantCompetencyAssessment() {
     form.reset(defaultAnswers);
   }, [defaultAnswers, form]);
 
+  useEffect(() => {
+    if (!selectedAssignment?.id) return;
+    try {
+      const timerRaw = localStorage.getItem(buildTimerStorageKey(selectedAssignment.id));
+      if (!timerRaw) {
+        // No timer start, treat as fresh attempt
+        form.reset(defaultAnswers);
+        return;
+      }
+      const raw = localStorage.getItem(ANSWER_STORAGE_KEY(selectedAssignment.id));
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && parsed.values) {
+        form.reset({ ...defaultAnswers, ...parsed.values });
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }, [selectedAssignment?.id, defaultAnswers, form]);
+
   // --- Timer Logic ---
-  const startTimer = () => {
-    startTimeRef.current = Date.now();
-    setElapsedSeconds(0);
+  const persistTimerStart = (assignmentId, startedAtMs) => {
+    if (!assignmentId) return;
+    try {
+      const key = buildTimerStorageKey(assignmentId);
+      localStorage.setItem(
+        key,
+        JSON.stringify({ startedAt: startedAtMs, persistedAt: Date.now() }),
+      );
+      persistActiveCompetency({
+        assignmentId,
+        title: selectedAssignment?.title || "Competency",
+        startedAt: startedAtMs,
+        estimatedTime: selectedAssignment?.estimatedTime,
+      });
+    } catch {
+      // ignore storage failures
+    }
+  };
+
+  const clearTimerStart = (assignmentId) => {
+    if (!assignmentId) return;
+    try {
+      localStorage.removeItem(buildTimerStorageKey(assignmentId));
+      const active = localStorage.getItem(ACTIVE_COMPETENCY_KEY);
+      if (active) {
+        const parsed = JSON.parse(active);
+        if (String(parsed?.assignmentId) === String(assignmentId)) {
+          persistActiveCompetency(null);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const startTimer = (assignmentId, existingStartMs = null) => {
+    const resolvedStart = existingStartMs || Date.now();
+    startTimeRef.current = resolvedStart;
+    setElapsedSeconds(Math.floor((Date.now() - resolvedStart) / 1000));
+    persistTimerStart(assignmentId, resolvedStart);
+    try {
+      if (assignmentId && selectedAssignment) {
+        persistActiveCompetency({
+          assignmentId,
+          title: selectedAssignment.title,
+          startedAt: resolvedStart,
+          estimatedTime: selectedAssignment.estimatedTime,
+          durationSeconds: durationRef.current,
+        });
+        setResumeChip({
+          assignmentId,
+          title: selectedAssignment.title,
+          estimatedTime: selectedAssignment.estimatedTime,
+          startedAt: resolvedStart,
+          durationSeconds: durationRef.current,
+        });
+      }
+    } catch {
+      // ignore
+    }
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     timerIntervalRef.current = setInterval(() => {
       if (startTimeRef.current) {
         const currentElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
-        if (durationInSeconds && currentElapsed >= durationInSeconds) {
+        const limit = durationRef.current;
+        if (limit && currentElapsed >= limit) {
           stopTimer();
           setTimeUpOpen(true); // Trigger time's up dialog
         }
@@ -313,8 +439,8 @@ export default function ParticipantCompetencyAssessment() {
     }
     const endTime = Date.now();
     const timeTaken = startTimeRef.current ? Math.floor((endTime - startTimeRef.current) / 1000) : 0;
-    if (durationInSeconds && timeTaken > durationInSeconds) {
-      return durationInSeconds; // Cap time taken at the duration limit
+    if (durationRef.current && timeTaken > durationRef.current) {
+      return durationRef.current; // Cap time taken at the duration limit
     }
     return timeTaken;
   };
@@ -325,22 +451,6 @@ export default function ParticipantCompetencyAssessment() {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
   }, []);
-
-  // Function to save a draft
-  const handleSaveDraft = async () => {
-    setIsSavingDraft(true);
-    setLastSaved(null);
-    try {
-      // This is a mock save. In a real app, you'd send `form.getValues()` to the backend.
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      setLastSaved(new Date());
-    } catch (error) {
-      console.error("Draft saving failed", error);
-      // You could show an error toast here
-    } finally {
-      setIsSavingDraft(false);
-    }
-  };
 
   // Scroll to question
   const scrollToQuestion = (questionId) => {
@@ -371,6 +481,46 @@ export default function ParticipantCompetencyAssessment() {
     }
   }, [navigate]);
 
+  useEffect(() => {
+    let autosaveInterval = null;
+    const persistAnswers = () => {
+      if (!selectedAssignment?.id) return;
+      try {
+        const values = form.getValues();
+        localStorage.setItem(
+          ANSWER_STORAGE_KEY(selectedAssignment.id),
+          JSON.stringify({ values, savedAt: Date.now() }),
+        );
+        window.dispatchEvent(new Event("storage"));
+      } catch {
+        // ignore storage write failures
+      }
+    };
+    if (assessmentState === "in_progress" && selectedAssignment?.id) {
+      autosaveInterval = setInterval(persistAnswers, 5000);
+    }
+    return () => {
+      if (autosaveInterval) clearInterval(autosaveInterval);
+    };
+  }, [assessmentState, form, selectedAssignment?.id]);
+
+  useEffect(() => {
+    if (assessmentState !== "in_progress" || !selectedAssignment?.id) return;
+    const timer = setTimeout(() => {
+      try {
+        const values = form.getValues();
+        localStorage.setItem(
+          ANSWER_STORAGE_KEY(selectedAssignment.id),
+          JSON.stringify({ values, savedAt: Date.now() }),
+        );
+        window.dispatchEvent(new Event("storage"));
+      } catch {
+        // ignore
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [form, assessmentState, selectedAssignment?.id, form.watch()]);
+
   const fetchAssignments = useCallback(async () => {
     if (!user?.id) {
       return;
@@ -397,7 +547,84 @@ export default function ParticipantCompetencyAssessment() {
     fetchAssignments();
   }, [fetchAssignments]);
 
+  useEffect(() => {
+    try {
+      const rawActive = localStorage.getItem(ACTIVE_COMPETENCY_KEY);
+      if (rawActive) {
+        const parsed = JSON.parse(rawActive);
+        if (parsed?.assignmentId) {
+          setResumeChip({
+            assignmentId: parsed.assignmentId,
+            title: parsed.title,
+            estimatedTime: parsed.estimatedTime,
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!assignments.length) {
+      return;
+    }
+    assignments.forEach((assignment) => {
+      const status = (assignment.status || '').toLowerCase();
+      const isLocked = assignment.isLocked || status === 'submitted' || status === 'reviewed';
+      if (isLocked) {
+        clearTimerStart(assignment.id);
+        try {
+          localStorage.removeItem(ANSWER_STORAGE_KEY(assignment.id));
+        } catch {
+          // ignore
+        }
+      }
+    });
+    const resumeCandidate = assignments.find((assignment) => {
+      const status = (assignment.status || '').toLowerCase();
+      const isLocked = assignment.isLocked || status === 'submitted' || status === 'reviewed';
+      if (isLocked) return false;
+      try {
+        const raw = localStorage.getItem(buildTimerStorageKey(assignment.id));
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        return parsed && parsed.startedAt;
+      } catch {
+        return false;
+      }
+    });
+
+    if (resumeCandidate) {
+      const raw = localStorage.getItem(buildTimerStorageKey(resumeCandidate.id));
+      const parsed = raw ? JSON.parse(raw) : null;
+      setActiveAssignmentId(resumeCandidate.id);
+      setAssessmentState("in_progress");
+      const startMs = parsed?.startedAt ? Number(parsed.startedAt) : null;
+      if (startMs) {
+        setResumeChip((prev) => ({
+          assignmentId: resumeCandidate.id,
+          title: resumeCandidate.title,
+          estimatedTime: resumeCandidate.estimatedTime,
+          startedAt: startMs,
+          durationSeconds: durationRef.current,
+          ...prev,
+        }));
+      }
+      if (startMs) {
+        startTimer(resumeCandidate.id, startMs);
+      }
+    } else if (!activeAssignmentId) {
+      setActiveAssignmentId(assignments[0].id);
+    }
+  }, [assignments, activeAssignmentId]);
+
   const watchedValues = form.watch();
+  const isQuestionAnswered = useCallback((value) => {
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === "string") return value.trim().length > 0;
+    return Boolean(value);
+  }, []);
   const totalQuestions = questionSections.reduce(
     (sum, section) => sum + section.questions.length,
     0,
@@ -405,20 +632,32 @@ export default function ParticipantCompetencyAssessment() {
 
   const answeredCount = useMemo(() => {
     if (!watchedValues) return 0;
-    return Object.values(watchedValues).reduce((count, value) => {
-      if (typeof value === "string" && value.trim().length > 0) {
-        return count + 1;
-      }
-      return count;
-    }, 0);
-  }, [watchedValues]);
+    return Object.values(watchedValues).reduce(
+      (count, value) => count + (isQuestionAnswered(value) ? 1 : 0),
+      0
+    );
+  }, [isQuestionAnswered, watchedValues]);
 
   const completionPercent = totalQuestions
     ? Math.round((answeredCount / totalQuestions) * 100)
     : 0;
+  const remainingSeconds = durationInSeconds
+    ? Math.max(durationInSeconds - elapsedSeconds, 0)
+    : null;
+
+  const clearAnswer = (question) => {
+    if (!question) return;
+    if (question.type === "multi_choice") {
+      form.setValue(question.id, []);
+    } else {
+      form.setValue(question.id, "");
+    }
+  };
 
   const handleValidateAndConfirm = () => {
-    form.handleSubmit(() => setConfirmOpen(true))();
+    const unanswered = Math.max(0, totalQuestions - answeredCount);
+    setUnansweredCount(unanswered);
+    setConfirmOpen(true);
   };
 
   const forceSubmit = async () => {
@@ -435,7 +674,11 @@ export default function ParticipantCompetencyAssessment() {
     setIsSubmitting(true);
     try {
       if (!selectedAssignment) {
-        alert("No assignment selected.");
+        toast({
+          title: "No assignment selected",
+          description: "Please choose a competency before submitting.",
+          variant: "destructive",
+        });
         setIsSubmitting(false);
         return;
       }
@@ -448,47 +691,120 @@ export default function ParticipantCompetencyAssessment() {
 
       await axios.post(`/api/competency/assignments/${selectedAssignment.id}/submit`, payload);
 
-      alert("Assessment submitted successfully!");
+      toast({
+        title: "Competency submitted",
+        description: "Your answers were submitted. You’ll be notified after review.",
+      });
+      clearTimerStart(selectedAssignment.id);
+      try {
+        localStorage.removeItem(ANSWER_STORAGE_KEY(selectedAssignment.id));
+      } catch {
+        // ignore
+      }
       setConfirmOpen(false);
       setAssessmentState("submitted");
       fetchAssignments(); // Refetch assignments to update the UI
     } catch (error) {
       console.error("Submission failed:", error);
       if (error.response?.data?.message === "This assessment has already been submitted.") {
-        alert("You have already submitted this assessment.");
+        toast({
+          title: "Already submitted",
+          description: "This competency was already submitted.",
+        });
       } else {
-        alert("Submission failed. Please try again.");
+        toast({
+          title: "Submission failed",
+          description: "Please try again or contact support if this continues.",
+          variant: "destructive",
+        });
       }
-      startTimer(); // Resume timer if submission fails
+      startTimer(selectedAssignment?.id, startTimeRef.current); // Resume timer if submission fails
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const renderQuestionInput = (question, field) => {
+    if (question.type === "multi_choice") {
+      const selectedValues = Array.isArray(field.value) ? field.value : [];
+      const toggleValue = (value) => {
+        const exists = selectedValues.includes(value);
+        const next = exists ? selectedValues.filter((v) => v !== value) : [...selectedValues, value];
+        field.onChange(next);
+      };
+
+      return (
+        <div className="space-y-2">
+          {question.options.map((option) => {
+            const checked = selectedValues.includes(option.value);
+            return (
+              <label
+                key={option.value}
+                htmlFor={`${question.id}-${option.value}`}
+                className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors ${
+                  checked ? "border-primary bg-primary/5" : "border-input bg-background hover:bg-muted/50"
+                }`}
+              >
+                <Checkbox
+                  id={`${question.id}-${option.value}`}
+                  checked={checked}
+                  onCheckedChange={() => toggleValue(option.value)}
+                />
+                <span className="text-sm font-medium text-foreground">{option.label}</span>
+              </label>
+            );
+          })}
+          <div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => clearAnswer(question)}
+              className="text-xs"
+              aria-label={`Clear answer for ${question.label}`}
+            >
+              Clear answer
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
     if (question.type === "choice") {
       const radioValue = typeof field.value === "string" ? field.value : "";
       return (
-        <RadioGroup
-          className="space-y-2"
-          value={radioValue}
-          onValueChange={field.onChange}
-        >
-          {question.options.map((option) => (
-            <label
-              key={option.value}
-              htmlFor={`${question.id}-${option.value}`}
-              className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors ${
-                radioValue === option.value
-                  ? "border-primary bg-primary/5"
-                  : "border-input bg-background hover:bg-muted/50"
-              }`}
-            >
-              <RadioGroupItem value={option.value} id={`${question.id}-${option.value}`} />
-              <span className="text-sm font-medium text-foreground">{option.label}</span>
-            </label>
-          ))}
-        </RadioGroup>
+        <div className="space-y-2">
+          <RadioGroup
+            className="space-y-2"
+            value={radioValue}
+            onValueChange={field.onChange}
+          >
+            {question.options.map((option) => (
+              <label
+                key={option.value}
+                htmlFor={`${question.id}-${option.value}`}
+                className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors ${
+                  radioValue === option.value
+                    ? "border-primary bg-primary/5"
+                    : "border-input bg-background hover:bg-muted/50"
+                }`}
+              >
+                <RadioGroupItem value={option.value} id={`${question.id}-${option.value}`} />
+                <span className="text-sm font-medium text-foreground">{option.label}</span>
+              </label>
+            ))}
+          </RadioGroup>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => clearAnswer(question)}
+            className="text-xs"
+            aria-label={`Clear answer for ${question.label}`}
+          >
+            Clear answer
+          </Button>
+        </div>
       );
     }
 
@@ -515,12 +831,111 @@ export default function ParticipantCompetencyAssessment() {
     }
 
     return (
-      <Textarea
-        rows={question.textareaRows ?? 4}
-        placeholder={question.placeholder || "Type your response"}
-        value={field.value}
-        onChange={field.onChange}
-      />
+      <div className="space-y-2">
+        <Textarea
+          rows={question.textareaRows ?? 4}
+          placeholder={question.placeholder || "Type your response"}
+          value={field.value}
+          onChange={field.onChange}
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => clearAnswer(question)}
+          className="text-xs"
+          aria-label={`Clear answer for ${question.label}`}
+        >
+          Clear answer
+        </Button>
+      </div>
+    );
+  };
+
+  const overview = selectedAssignment || assignments[0];
+  const isAssessmentLocked = Boolean(
+    overview && (overview.isLocked || ['submitted', 'reviewed'].includes((overview.status || '').toLowerCase()))
+  );
+
+  const handleOpenDetails = (assignmentId) => {
+    if (assessmentState === 'in_progress' && assignmentId !== activeAssignmentId) {
+      setLeaveConfirmOpen(true);
+      // We don't proceed with opening the new one until confirmed.
+      // A more robust solution might store the target and proceed on confirm.
+      return;
+    }
+    setActiveAssignmentId(assignmentId);
+    form.reset(defaultAnswers); // Reset form when switching
+    setAssessmentState('instructions');
+  };
+
+  const handleOpenStartConfirmation = (assignmentId) => {
+    setPendingStartAssignmentId(assignmentId);
+    setStartConfirmOpen(true);
+  };
+
+  const handleStartAssessment = () => {
+    if (!pendingStartAssignmentId) return;
+    try {
+      localStorage.removeItem(ANSWER_STORAGE_KEY(pendingStartAssignmentId));
+      localStorage.removeItem(buildTimerStorageKey(pendingStartAssignmentId));
+    } catch {
+      // ignore storage cleanup failures
+    }
+    form.reset(defaultAnswers);
+    setActiveAssignmentId(pendingStartAssignmentId);
+    setStartConfirmOpen(false);
+    setAssessmentState("in_progress");
+    startTimer(pendingStartAssignmentId);
+    setPendingStartAssignmentId(null);
+  };
+
+  const handleOpenPreview = (assignment) => {
+    setPreviewAssignment(assignment);
+    setIsPreviewOpen(true);
+  };
+
+  const activeResume = useMemo(() => {
+    if (assessmentState === 'in_progress' && selectedAssignment) {
+      return {
+        assignmentId: selectedAssignment.id,
+        title: selectedAssignment.title,
+        estimatedTime: selectedAssignment.estimatedTime,
+      };
+    }
+    return resumeChip;
+  }, [assessmentState, selectedAssignment, resumeChip]);
+
+  const renderResumeChip = () => {
+    // Hide the in-page chip entirely; global chip in ParticipantLayout covers this use case.
+    return null;
+    const remaining =
+      durationRef.current && startTimeRef.current
+        ? Math.max(durationRef.current - Math.floor((Date.now() - startTimeRef.current) / 1000), 0)
+        : null;
+    return (
+      <div className="fixed bottom-5 right-5 z-40 flex items-center gap-2 rounded-full border border-amber-300 bg-amber-50 px-3 py-2 shadow-lg backdrop-blur">
+        <div className="flex flex-col">
+          <span className="text-xs text-muted-foreground">Competency in progress</span>
+          <span className="text-sm font-medium truncate max-w-[220px]">{activeResume.title || "Competency"}</span>
+        </div>
+        {Number.isFinite(remaining) ? (
+          <Badge variant="outline" className="text-[11px]">
+            {Math.max(Math.floor(remaining / 60), 0)}m left
+          </Badge>
+        ) : null}
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-8"
+          onClick={() => {
+            navigate("/participant/competency");
+          }}
+          aria-label="Return to active competency"
+        >
+          Resume
+        </Button>
+      </div>
     );
   };
 
@@ -555,43 +970,9 @@ export default function ParticipantCompetencyAssessment() {
     );
   }
 
-  const overview = selectedAssignment || assignments[0];
-  const isAssessmentLocked = Boolean(
-    overview && (overview.isLocked || ['submitted', 'reviewed'].includes((overview.status || '').toLowerCase()))
-  );
-
-  const handleOpenDetails = (assignmentId) => {
-    if (assessmentState === 'in_progress' && assignmentId !== activeAssignmentId) {
-      setLeaveConfirmOpen(true);
-      // We don't proceed with opening the new one until confirmed.
-      // A more robust solution might store the target and proceed on confirm.
-      return;
-    }
-    setActiveAssignmentId(assignmentId);
-    form.reset(defaultAnswers); // Reset form when switching
-    setAssessmentState('instructions');
-  };
-
-  const handleOpenStartConfirmation = (assignmentId) => {
-    setPendingStartAssignmentId(assignmentId);
-    setStartConfirmOpen(true);
-  };
-
-  const handleStartAssessment = () => {
-    setActiveAssignmentId(pendingStartAssignmentId);
-    setStartConfirmOpen(false);
-    setAssessmentState("in_progress");
-    startTimer();
-    setPendingStartAssignmentId(null);
-  };
-
-  const handleOpenPreview = (assignment) => {
-    setPreviewAssignment(assignment);
-    setIsPreviewOpen(true);
-  };
-
   return (
     <div className={`p-6 md:p-10 mx-auto space-y-8 ${isFocusMode || assessmentState === 'in_progress' ? 'max-w-full px-4' : 'max-w-5xl'}`}>
+      {renderResumeChip()}
       {!isFocusMode && assessmentState !== 'in_progress' && (
         <Card>
           <CardHeader>
@@ -624,7 +1005,7 @@ export default function ParticipantCompetencyAssessment() {
                       </div>
                       <div className="text-xs text-muted-foreground md:text-center">
                         <p>Researcher: {assignment.reviewer}</p>
-                        <p>Due {assignment.dueAt}</p>
+                        <p>Time limit: {assignment.estimatedTime || "No time limit"}</p>
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge variant={assignment.statusChip === "Awaiting submission" ? "secondary" : "outline"}>
@@ -690,35 +1071,55 @@ export default function ParticipantCompetencyAssessment() {
               <TabsTrigger value="progress">Progress</TabsTrigger>
             </TabsList>
             <TabsContent value="overview" className="pt-4">
-              <p className="text-sm text-muted-foreground mb-4">{overview.notes}</p>
               <div className="grid gap-4 md:grid-cols-3 text-sm">
-                <div>
-                  <p className="text-xs text-muted-foreground uppercase">Due</p>
-                  <p className="font-medium">{overview.dueAt}</p>
+                <div className="rounded-lg border bg-background p-3 shadow-sm">
+                  <p className="text-xs text-muted-foreground uppercase">Study</p>
+                  <p className="font-medium">{overview.studyTitle || "—"}</p>
                 </div>
-                <div>
-                  <p className="text-xs text-muted-foreground uppercase">Estimated time</p>
-                  <p className="font-medium">{overview.estimatedTime}</p>
+                <div className="rounded-lg border bg-background p-3 shadow-sm">
+                  <p className="text-xs text-muted-foreground uppercase">Time limit</p>
+                  <p className="font-medium">{overview.estimatedTime || "No time limit"}</p>
                 </div>
-                <div>
+                <div className="rounded-lg border bg-background p-3 shadow-sm">
                   <p className="text-xs text-muted-foreground uppercase">Reviewer</p>
-                  <p className="font-medium">{overview.reviewer}</p>
+                  <p className="font-medium">{overview.reviewer || "Research team"}</p>
                 </div>
+              </div>
+              <div className="mt-4 rounded-lg border bg-background p-4 shadow-sm">
+                <p className="text-xs text-muted-foreground uppercase mb-2">Overview note</p>
+                <p className="text-sm text-muted-foreground">
+                  {overview.notes || "No overview note has been provided yet."}
+                </p>
               </div>
             </TabsContent>
             <TabsContent value="instructions" className="pt-4">
-              <ul className="list-disc space-y-2 pl-5 text-sm text-muted-foreground">
-                {(overview.instructions || []).map((instruction, index) => (
-                  <li key={index}>{instruction}</li>
-                ))}
-              </ul>
-              {(overview.resources || []).length > 0 && <Separator className="my-4" />}
-              <div className="flex flex-wrap gap-3">
-                {(overview.resources || []).map((resource) => (
-                  <Button key={resource.id} type="button" variant="outline" size="sm">
-                    {resource.label}
-                  </Button>
-                ))}
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-lg border bg-background p-4 shadow-sm h-full">
+                  <p className="text-xs text-muted-foreground uppercase mb-2">Instructions</p>
+                  {(overview.instructions || []).length ? (
+                    <ul className="list-disc space-y-2 pl-5 text-sm text-muted-foreground">
+                      {(overview.instructions || []).map((instruction, index) => (
+                        <li key={index}>{instruction}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No instructions entered.</p>
+                  )}
+                </div>
+                <div className="rounded-lg border bg-background p-4 shadow-sm h-full">
+                  <p className="text-xs text-muted-foreground uppercase mb-2">Resources</p>
+                  {(overview.resources || []).length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {(overview.resources || []).map((resource) => (
+                        <Button key={resource.id} type="button" variant="outline" size="sm">
+                          {resource.label}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No resources shared yet.</p>
+                  )}
+                </div>
               </div>
             </TabsContent>
             <TabsContent value="progress" className="pt-4">
@@ -761,6 +1162,21 @@ export default function ParticipantCompetencyAssessment() {
           {(!isFocusMode) && (
             <div className="hidden lg:block w-64 space-y-4 sticky top-24 self-start">
               <h3 className="font-semibold text-sm">Questions</h3>
+              <div
+                className={`flex items-center justify-between rounded-lg border bg-background px-3 py-2 text-sm ${
+                  remainingSeconds !== null && remainingSeconds <= (durationInSeconds || 0) * 0.1
+                    ? "border-destructive/50 text-destructive"
+                    : "text-foreground"
+                }`}
+              >
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Timer className="h-4 w-4" />
+                  <span>{durationInSeconds ? "Time remaining" : "Time elapsed"}</span>
+                </div>
+                <span className="font-semibold">
+                  {durationInSeconds ? formatTime(remainingSeconds) : formatTime(elapsedSeconds)}
+                </span>
+              </div>
               {questionSections.map(section => (
                 <div key={section.id} className="space-y-1">
                   <h4 className="text-xs font-bold text-muted-foreground uppercase">{section.title}</h4>
@@ -773,7 +1189,7 @@ export default function ParticipantCompetencyAssessment() {
                         className="w-full justify-start text-muted-foreground h-auto py-1"
                         onClick={() => scrollToQuestion(q.id)}
                       >
-                        <span className={`mr-2 h-2 w-2 rounded-full ${watchedValues[q.id] ? 'bg-green-500' : 'bg-gray-300'}`}></span>
+                        <span className={`mr-2 h-2 w-2 rounded-full ${isQuestionAnswered(watchedValues?.[q.id]) ? 'bg-green-500' : 'bg-gray-300'}`}></span>
                         <span className="truncate">Q{index + 1}. {q.label}</span>
                       </Button>
                     ))}
@@ -802,7 +1218,7 @@ export default function ParticipantCompetencyAssessment() {
                           'bg-muted text-muted-foreground'
                         }`}>
                           <Timer className="h-4 w-4" />
-                          <span>{durationInSeconds ? formatTime(durationInSeconds - elapsedSeconds) : formatTime(elapsedSeconds)}</span>
+                          <span>{durationInSeconds ? formatTime(remainingSeconds) : formatTime(elapsedSeconds)}</span>
                           {durationInSeconds && <span>/ {formatTime(durationInSeconds)}</span>}
                         </div>
                       </div>
@@ -813,7 +1229,7 @@ export default function ParticipantCompetencyAssessment() {
                         <div
                           key={q.id}
                           title={`Q${i+1}: ${q.label}`}
-                          className={`h-2 w-4 rounded-full cursor-pointer ${watchedValues[q.id] ? 'bg-green-500' : 'bg-gray-300'}`}
+                          className={`h-2 w-4 rounded-full cursor-pointer ${isQuestionAnswered(watchedValues?.[q.id]) ? 'bg-green-500' : 'bg-gray-300'}`}
                           onClick={() => scrollToQuestion(q.id)}
                         />
                       ))}
@@ -864,23 +1280,15 @@ export default function ParticipantCompetencyAssessment() {
 
                   <CardFooter className="flex flex-col gap-4 border-t bg-muted/50 p-6 md:flex-row md:items-center md:justify-between">
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      {isSavingDraft ? <><Timer className="h-4 w-4 animate-spin" /> Saving draft...</> :
-                       lastSaved ? <><CheckCircle className="h-4 w-4 text-green-600" /> Last saved at {lastSaved.toLocaleTimeString()}</> :
-                       "You can save a draft of your progress."}
+                      Leaving or refreshing keeps your timer running. Unanswered questions will submit as blank when you finish or exit.
                     </div>
-                    <div className="flex flex-wrap gap-3">
-                      <Button type="button" variant="outline" onClick={handleSaveDraft} disabled={isSavingDraft}>
-                        <Save className="h-4 w-4 mr-2" />
-                        Save draft
-                      </Button>
-                      <Button
-                        type="button"
-                        onClick={handleValidateAndConfirm}
-                        disabled={isSubmitting || isAssessmentLocked}
-                      >
-                        {isAssessmentLocked ? 'Already Submitted' : 'Submit assessment'}
-                      </Button>
-                    </div>
+                    <Button
+                      type="button"
+                      onClick={handleValidateAndConfirm}
+                      disabled={isSubmitting || isAssessmentLocked}
+                    >
+                      {isAssessmentLocked ? 'Already Submitted' : 'Submit assessment'}
+                    </Button>
                   </CardFooter>
                 </Card>
               </form>
@@ -894,8 +1302,9 @@ export default function ParticipantCompetencyAssessment() {
           <AlertDialogHeader>
             <AlertDialogTitle>Ready to submit?</AlertDialogTitle>
             <AlertDialogDescription>
-              You will not be able to change your answers after submission. Please confirm everything
-              looks correct.
+              {unansweredCount > 0
+                ? `You have ${unansweredCount} unanswered question${unansweredCount === 1 ? "" : "s"}. They will be submitted as blank.`
+                : "You will not be able to change your answers after submission."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

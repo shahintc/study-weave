@@ -65,7 +65,7 @@ const ArtifactAssessment = sequelize.define(
       onDelete: 'SET NULL',
     },
     assessmentType: {
-      type: DataTypes.ENUM('bug_stage', 'solid', 'clone', 'snapshot'),
+      type: DataTypes.ENUM('bug_stage', 'solid', 'clone', 'snapshot', 'custom'),
       allowNull: false,
       field: 'assessment_type',
     },

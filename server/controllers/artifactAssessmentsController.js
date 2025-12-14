@@ -13,8 +13,14 @@ const {
 } = require('../models');
 const { handleArtifactSubmission } = require('../services/submissionNotifications');
 
-const VALID_ASSESSMENT_TYPES = ['bug_stage', 'solid', 'clone', 'snapshot'];
+const VALID_ASSESSMENT_TYPES = ['bug_stage', 'solid', 'clone', 'snapshot', 'custom'];
 const VALID_STATUS_VALUES = ['draft', 'submitted', 'archived'];
+const computeDeadlinePassed = (timelineEnd) => {
+  if (!timelineEnd) return false;
+  const endDate = new Date(timelineEnd);
+  if (Number.isNaN(endDate.getTime())) return false;
+  return endDate.getTime() < Date.now();
+};
 
 const parseBoolean = (value, fallback = true) => {
   if (typeof value === 'boolean') {
@@ -129,7 +135,7 @@ const buildWhereClause = (query, currentUser) => {
     where.status = where.status || { [Op.ne]: 'archived' };
   }
 
-  if (currentUser?.role === 'participant') {
+  if (currentUser?.role === 'participant' || currentUser?.role === 'guest') {
     where.evaluatorUserId = currentUser.id;
   }
 
@@ -191,12 +197,64 @@ const createArtifactAssessment = async (req, res) => {
       return res.status(404).json({ message: 'Study artifact not found for the provided study.' });
     }
 
+    const study = await Study.findByPk(studyId, { attributes: ['id', 'isPublic', 'timelineEnd'] });
+    if (!study) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'Study not found.' });
+    }
+
     await ensureStudyParticipantConsistency(studyId, studyParticipantId);
     const resolvedParticipantId = await resolveParticipantRecord({
       studyId,
       providedParticipantId: studyParticipantId,
       evaluatorUserId: req.user.id,
     });
+    let participantRecord = null;
+    if (resolvedParticipantId) {
+      participantRecord = await StudyParticipant.findByPk(resolvedParticipantId);
+    }
+
+    if (req.user.role === 'guest') {
+      if (!study.isPublic) {
+        await transaction.rollback();
+        return res.status(403).json({ message: 'Guest submissions are limited to public studies.' });
+      }
+      if (computeDeadlinePassed(study.timelineEnd)) {
+        await transaction.rollback();
+        return res.status(403).json({ message: 'Study deadline has passed.' });
+      }
+      if (!participantRecord) {
+        participantRecord = await StudyParticipant.findOne({
+          where: { studyId, participantId: req.user.id },
+        });
+      }
+      if (!participantRecord) {
+        await transaction.rollback();
+        return res.status(404).json({ message: 'Guest enrollment not found for this study.' });
+      }
+      if (participantRecord.participantId !== req.user.id) {
+        await transaction.rollback();
+        return res.status(403).json({ message: 'Guests cannot submit for other participants.' });
+      }
+      if (participantRecord.source && participantRecord.source !== 'public_guest') {
+        await transaction.rollback();
+        return res.status(403).json({ message: 'Guest access is limited to public guest enrollments.' });
+      }
+      if (
+        participantRecord.guestSessionId &&
+        req.user.guestSessionId &&
+        participantRecord.guestSessionId !== req.user.guestSessionId
+      ) {
+        await transaction.rollback();
+        return res.status(401).json({ message: 'Guest session mismatch. Please log in again.' });
+      }
+      if (participantRecord.expiresAt && new Date(participantRecord.expiresAt).getTime() < Date.now()) {
+        await transaction.rollback();
+        return res.status(403).json({ message: 'Guest enrollment has expired.' });
+      }
+    }
+
+    const effectiveParticipantId = resolvedParticipantId || (participantRecord ? participantRecord.id : null);
 
     const duplicateWhere = {
       studyId,
@@ -205,8 +263,8 @@ const createArtifactAssessment = async (req, res) => {
       evaluatorUserId: req.user.id,
       status: 'submitted',
     };
-    if (resolvedParticipantId) {
-      duplicateWhere.studyParticipantId = resolvedParticipantId;
+    if (effectiveParticipantId) {
+      duplicateWhere.studyParticipantId = effectiveParticipantId;
     }
     const existingSubmission = await ArtifactAssessment.findOne({ where: duplicateWhere });
     if (existingSubmission) {
@@ -248,7 +306,7 @@ const createArtifactAssessment = async (req, res) => {
             studyId,
             comparisonId,
             participantUserId: req.user.id,
-            studyParticipantId: resolvedParticipantId,
+            studyParticipantId: effectiveParticipantId,
             payload: normalizedPayload,
             transaction,
           });
@@ -277,7 +335,7 @@ const createArtifactAssessment = async (req, res) => {
       {
         studyId,
         studyArtifactId,
-        studyParticipantId: resolvedParticipantId,
+        studyParticipantId: effectiveParticipantId,
         evaluatorUserId: req.user.id,
         sourceEvaluationId: effectiveSourceEvaluationId,
         assessmentType,
@@ -310,6 +368,8 @@ const createArtifactAssessment = async (req, res) => {
     if (normalizedItems.length) {
       await ArtifactAssessmentItem.bulkCreate(normalizedItems, { transaction });
     }
+
+    await handleArtifactSubmission({ assessmentId: assessment.id, transaction });
 
     await transaction.commit();
 
@@ -371,7 +431,7 @@ const getArtifactAssessmentById = async (req, res) => {
       return res.status(404).json({ message: 'Artifact assessment not found.' });
     }
 
-    if (req.user.role === 'participant' && record.evaluatorUserId !== req.user.id) {
+    if ((req.user.role === 'participant' || req.user.role === 'guest') && record.evaluatorUserId !== req.user.id) {
       return res.status(403).json({ message: 'You are not allowed to access this record.' });
     }
 

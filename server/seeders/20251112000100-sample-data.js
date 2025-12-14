@@ -16,12 +16,18 @@ module.exports = {
           { key: 'admin', name: 'Admin', description: 'Administrator', createdAt: now, updatedAt: now },
           { key: 'researcher', name: 'Researcher', description: 'Creates studies', createdAt: now, updatedAt: now },
           { key: 'participant', name: 'Participant', description: 'Participates in studies', createdAt: now, updatedAt: now },
+          { key: 'guest', name: 'Guest', description: 'Temporary guest participant sessions', createdAt: now, updatedAt: now },
+          { key: 'reviewer', name: 'Reviewer', description: 'Reviews participant work', createdAt: now, updatedAt: now },
         ],
         { transaction: t }
       );
 
       const [[researcherRole]] = await queryInterface.sequelize.query(
         `SELECT id FROM roles WHERE key = 'researcher' LIMIT 1`,
+        { transaction: t }
+      );
+      const [[reviewerRole]] = await queryInterface.sequelize.query(
+        `SELECT id FROM roles WHERE key = 'reviewer' LIMIT 1`,
         { transaction: t }
       );
       const [[participantRole]] = await queryInterface.sequelize.query(
@@ -35,6 +41,7 @@ module.exports = {
         'users',
         [
           { name: 'Dr. Ada Researcher', email: 'researcher@example.com', password: pw, role: 'researcher', role_id: researcherRole.id, created_at: now },
+          { name: 'Riley Reviewer', email: 'reviewer@example.com', password: pw, role: 'reviewer', role_id: reviewerRole.id, created_at: now },
           { name: 'Pat One', email: 'p1@example.com', password: pw, role: 'participant', role_id: participantRole.id, created_at: now },
           { name: 'Pat Two', email: 'p2@example.com', password: pw, role: 'participant', role_id: participantRole.id, created_at: now },
           { name: 'Pat Three', email: 'p3@example.com', password: pw, role: 'participant', role_id: participantRole.id, created_at: now },
@@ -160,6 +167,7 @@ module.exports = {
             timeline_end: new Date(now.getTime() + 7 * 24 * 3600 * 1000),
             status: 'active',
             is_archived: false,
+            allow_reviewers: true,
             metadata: JSON.stringify({
               phase: 1,
               participantTarget: 10,

@@ -56,10 +56,16 @@ const PARTICIPANT_SEGMENTS = [
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: "stage1", label: "Stage 1 – Participant bug labeling" },
-  { value: "stage2", label: "Stage 2 – Reviewer bug comparison" },
   { value: "solid", label: "SOLID violations" },
   { value: "clone", label: "Patch clone detection" },
   { value: "snapshot", label: "Snapshot change vs failure" },
+  { value: "custom", label: "Custom stage" },
+];
+
+const CUSTOM_QUESTION_TYPES = [
+  { value: "mcq", label: "Multiple choice (single select)" },
+  { value: "dropdown", label: "Dropdown (single select)" },
+  { value: "answer", label: "Open answer" },
 ];
 
 function StudyCreationWizard() {
@@ -72,6 +78,7 @@ function StudyCreationWizard() {
   );
   const [isPublic, setIsPublic] = useState(false);
   const [isBlinded, setIsBlinded] = useState(false);
+  const [allowReviewers, setAllowReviewers] = useState(false);
   const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [newCriterionText, setNewCriterionText] = useState("");
@@ -82,6 +89,10 @@ function StudyCreationWizard() {
   const [windowStart, setWindowStart] = useState("");
   const [windowEnd, setWindowEnd] = useState("");
   const [selectedArtifacts, setSelectedArtifacts] = useState([]);
+  const [customQuestions, setCustomQuestions] = useState([]);
+  const [questionPrompt, setQuestionPrompt] = useState("");
+  const [questionType, setQuestionType] = useState("mcq");
+  const [questionOptions, setQuestionOptions] = useState(["", ""]);
   const [snapshotArtifacts, setSnapshotArtifacts] = useState({
     reference: "",
     failure: "",
@@ -186,6 +197,14 @@ function StudyCreationWizard() {
   }, [user]);
 
   useEffect(() => {
+    if (!isPublic) {
+      return;
+    }
+    setSelectedParticipants([]);
+    setAutoInvite(false);
+  }, [isPublic]);
+
+  useEffect(() => {
     if (studyMode === "snapshot") {
       if (!wasSnapshotModeRef.current) {
         wasSnapshotModeRef.current = true;
@@ -265,15 +284,69 @@ function StudyCreationWizard() {
     if (studyMode === "snapshot") {
       return;
     }
-    setSelectedArtifacts((prev) =>
-      prev.includes(artifactId) ? prev.filter((id) => id !== artifactId) : [...prev, artifactId],
-    );
+    setError(null);
+    setSelectedArtifacts((prev) => {
+      const exists = prev.includes(artifactId);
+      if (exists) {
+        return prev.filter((id) => id !== artifactId);
+      }
+      const next = [...prev, artifactId];
+      if (studyMode === "custom" && next.length > 5) {
+        setError("Custom stage supports a maximum of 5 artifacts.");
+        return prev;
+      }
+      return next;
+    });
   };
 
   const resetCriterionDialog = () => {
     setNewCriterionText("");
     setNewCriterionWeight("10");
     setEditingCriterionIndex(null);
+  };
+
+  const resetQuestionDraft = () => {
+    setQuestionPrompt("");
+    setQuestionType("mcq");
+    setQuestionOptions(["", ""]);
+  };
+
+  const handleAddCustomQuestion = () => {
+    const prompt = questionPrompt.trim();
+    if (!prompt) {
+      setError("Enter a prompt for your custom question.");
+      return;
+    }
+    let options = [];
+    if (questionType === "mcq" || questionType === "dropdown") {
+      options = questionOptions.map((opt) => opt.trim()).filter(Boolean);
+      if (options.length < 2) {
+        setError("Add at least two options for multiple choice or dropdown questions.");
+        return;
+      }
+    }
+    const id = `custom-q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setCustomQuestions((prev) => [...prev, { id, prompt, type: questionType, options }]);
+    setError(null);
+    resetQuestionDraft();
+  };
+
+  const handleRemoveCustomQuestion = (id) => {
+    setCustomQuestions((prev) => prev.filter((q) => q.id !== id));
+  };
+
+  const updateQuestionOption = (index, value) => {
+    setQuestionOptions((prev) =>
+      prev.map((opt, idx) => (idx === index ? value : opt)),
+    );
+  };
+
+  const addQuestionOption = () => {
+    setQuestionOptions((prev) => [...prev, ""]);
+  };
+
+  const removeQuestionOption = (index) => {
+    setQuestionOptions((prev) => prev.filter((_, idx) => idx !== index));
   };
 
   const handleSaveCriterion = () => {
@@ -320,6 +393,21 @@ function StudyCreationWizard() {
       setError("Please sign in as a researcher to create a study.");
       return;
     }
+    const sanitizedCustomQuestions = sanitizeCustomQuestionsForPayload();
+    if (studyMode === "custom") {
+      if (!sanitizedCustomQuestions.length) {
+        setError("Add at least one custom question (MCQ, dropdown, or open answer).");
+        return;
+      }
+      if (selectedArtifacts.length === 0) {
+        setError("Select at least one artifact for the custom stage.");
+        return;
+      }
+      if (selectedArtifacts.length > 5) {
+        setError("Custom stage supports up to 5 artifacts.");
+        return;
+      }
+    }
     if (studyMode === "snapshot" && !validateSnapshotArtifacts()) {
       return;
     }
@@ -331,6 +419,13 @@ function StudyCreationWizard() {
             diff: snapshotArtifacts.diff ? Number(snapshotArtifacts.diff) : null,
           }
         : null;
+    const customArtifactIds =
+      studyMode === "custom"
+        ? Array.from(new Set(selectedArtifacts)).slice(0, 5)
+        : [];
+    const selectedArtifactIds = Array.from(new Set(selectedArtifacts));
+    const participantIdsForPayload = isPublic ? [] : selectedParticipants;
+    const autoInviteFlag = isPublic ? false : autoInvite;
 
     const payload = {
       title,
@@ -339,9 +434,12 @@ function StudyCreationWizard() {
       researcherId: user.id,
       isPublic,
       isBlinded,
+      allowReviewers,
       timelineStart: windowStart || null,
       timelineEnd: windowEnd || null,
       defaultArtifactMode: studyMode,
+      autoInvite: autoInviteFlag,
+      selectedParticipants: participantIdsForPayload,
       metadata: {
         participantTarget: Number(participantTarget) || 0,
         windowStart,
@@ -350,14 +448,21 @@ function StudyCreationWizard() {
         requireAssessment,
         selectedAssessment: requireAssessment ? selectedAssessment : null,
         selectedSegment: requireAssessment ? selectedSegment : null,
-        autoInvite,
-        selectedArtifacts: Array.from(new Set(selectedArtifacts)),
-        selectedParticipants,
+        autoInvite: autoInviteFlag,
+        selectedArtifacts: selectedArtifactIds,
+        selectedParticipants: participantIdsForPayload,
         isPublic,
         isBlinded,
         defaultArtifactMode: studyMode,
         ...(snapshotMeta ? { snapshotArtifacts: snapshotMeta } : {}),
+        ...(studyMode === "custom"
+          ? {
+              customQuestions: sanitizedCustomQuestions,
+              customArtifactIds,
+            }
+          : {}),
       },
+      ...(studyMode === "custom" ? { customQuestions: sanitizedCustomQuestions } : {}),
     };
 
     try {
@@ -370,6 +475,8 @@ function StudyCreationWizard() {
       setError(err.response?.data?.message || "Failed to create study. Please try again.");
     }
   };
+
+  const participantSelectionDisabled = isPublic;
 
   const filteredParticipants = useMemo(() => {
     const list = Array.isArray(participants) ? participants : [];
@@ -389,6 +496,9 @@ function StudyCreationWizard() {
   }, [participantSearch, participants]);
 
   const toggleParticipant = (participantId) => {
+    if (isPublic) {
+      return;
+    }
     setSelectedParticipants((prev) =>
       prev.includes(participantId)
         ? prev.filter((id) => id !== participantId)
@@ -397,6 +507,9 @@ function StudyCreationWizard() {
   };
 
   const selectAllParticipants = () => {
+    if (isPublic) {
+      return;
+    }
     const everyId = participants.map((participant) => participant.id);
     setSelectedParticipants(everyId);
   };
@@ -415,6 +528,29 @@ function StudyCreationWizard() {
       .split("_")
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join(" ");
+  };
+
+  const sanitizeCustomQuestionsForPayload = () => {
+    return customQuestions
+      .map((q, idx) => {
+        const prompt = (q.prompt || "").trim();
+        const type = q.type;
+        if (!prompt || !["mcq", "dropdown", "answer"].includes(type)) {
+          return null;
+        }
+        const id = q.id || `custom-q-${idx + 1}`;
+        let options = [];
+        if (type === "mcq" || type === "dropdown") {
+          options = Array.isArray(q.options)
+            ? q.options.map((opt) => (opt || "").trim()).filter(Boolean)
+            : [];
+          if (options.length < 2) {
+            return null;
+          }
+        }
+        return { id, prompt, type, options };
+      })
+      .filter(Boolean);
   };
 
   const decisionLabel = (decision) => {
@@ -609,6 +745,12 @@ function StudyCreationWizard() {
               <p className="text-xs uppercase">Competency gate</p>
               <p className="text-base font-medium text-foreground">{launchSummary.competencyGate}</p>
             </div>
+            <div className="rounded-md border p-3">
+              <p className="text-xs uppercase">Reviewer access</p>
+              <p className="text-base font-medium text-foreground">
+                {allowReviewers ? "Enabled" : "Disabled"}
+              </p>
+            </div>
             <Separator />
             <p>Need help configuring? Email researchers@studyweave.ai</p>
           </CardContent>
@@ -690,6 +832,114 @@ function StudyCreationWizard() {
                   Participants will see this assignment on their dashboard as soon as they are invited.
                 </p>
               </div>
+              {studyMode === "custom" && (
+                <div className="space-y-4 rounded-md border p-4 bg-slate-50">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold">Custom stage questions</p>
+                      <p className="text-xs text-muted-foreground">
+                        Add single-select multiple choice, dropdown, or open-answer prompts. At least one question is required.
+                      </p>
+                    </div>
+                    <Badge variant="outline">Custom</Badge>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="custom-question">Question prompt</Label>
+                      <Input
+                        id="custom-question"
+                        placeholder="e.g., Which API is more readable?"
+                        value={questionPrompt}
+                        onChange={(e) => setQuestionPrompt(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>Question type</Label>
+                        <Select value={questionType} onValueChange={setQuestionType}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Choose type" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CUSTOM_QUESTION_TYPES.map((type) => (
+                              <SelectItem key={type.value} value={type.value}>
+                                {type.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {(questionType === "mcq" || questionType === "dropdown") && (
+                        <div className="space-y-2">
+                          <Label>Options (min 2)</Label>
+                          <div className="space-y-2">
+                            {questionOptions.map((opt, idx) => (
+                              <div className="flex items-center gap-2" key={`opt-${idx}`}>
+                                <Input
+                                  value={opt}
+                                  placeholder={`Option ${idx + 1}`}
+                                  onChange={(e) => updateQuestionOption(idx, e.target.value)}
+                                />
+                                {questionOptions.length > 2 && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => removeQuestionOption(idx)}
+                                    title="Remove option"
+                                  >
+                                    x
+                                  </Button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          <Button variant="outline" size="sm" onClick={addQuestionOption}>
+                            Add option
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-end gap-3">
+                      <Button variant="ghost" onClick={resetQuestionDraft}>
+                        Reset
+                      </Button>
+                      <Button onClick={handleAddCustomQuestion}>Add question</Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold">Questions ({customQuestions.length})</p>
+                    {customQuestions.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No questions added yet.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {customQuestions.map((q, idx) => (
+                          <div
+                            key={q.id}
+                            className="flex items-center justify-between rounded-md border bg-white p-3"
+                          >
+                            <div>
+                              <p className="text-sm font-semibold">
+                                Q{idx + 1}. {q.prompt}
+                              </p>
+                              <p className="text-xs text-muted-foreground capitalize">
+                                {q.type}
+                                {q.options?.length ? ` • ${q.options.length} options` : ""}
+                              </p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleRemoveCustomQuestion(q.id)}
+                            >
+                              Remove
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="space-y-2 rounded-md border p-4">
                 <div className="flex items-center space-x-2">
                   <Checkbox id="blinded" checked={isBlinded} onCheckedChange={setIsBlinded} />
@@ -709,6 +959,21 @@ function StudyCreationWizard() {
                   Guests can access this study via a public link without creating an account.
                 </p>
               </div>
+              <div className="space-y-2 rounded-md border p-4">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="allow-reviewers"
+                    checked={allowReviewers}
+                    onCheckedChange={setAllowReviewers}
+                  />
+                  <Label htmlFor="allow-reviewers" className="font-normal">
+                    Allow reviewer feedback on participant evaluations
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground pl-6">
+                  When enabled, reviewers can view submissions for this study and leave a 1–5 rating and comment for the researcher.
+                </p>
+              </div>
               {error && (
                 <p className="text-sm text-destructive">{error}</p>
               )}
@@ -724,6 +989,11 @@ function StudyCreationWizard() {
                     ? "Pick which artifacts serve as the reference, failure, and diff for this snapshot task."
                     : "Choose the artifacts for this study. You can upload more from the artifacts page."}
                 </p>
+                {studyMode === "custom" && (
+                  <p className="text-xs text-amber-700 border border-amber-200 bg-amber-50 rounded-md px-3 py-2">
+                    Custom stage requires 1–5 artifacts. Currently selected: {selectedArtifacts.length}.
+                  </p>
+                )}
                 {artifactsError ? (
                   <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
                     {artifactsError}
@@ -872,8 +1142,10 @@ function StudyCreationWizard() {
                     <Label>Select participants</Label>
                     <p className="text-xs text-muted-foreground">
                       {isParticipantsLoading
-                        ? "Loading participants…"
-                        : `${selectedParticipants.length} selected • showing everyone tied to your competency quizzes.`}
+                        ? "Loading participants..."
+                        : participantSelectionDisabled
+                        ? "Public studies are open enrollment. Invitations are disabled."
+                        : `${selectedParticipants.length} selected - showing everyone tied to your competency quizzes.`}
                     </p>
                   </div>
                   <Button
@@ -881,17 +1153,23 @@ function StudyCreationWizard() {
                     variant="ghost"
                     size="sm"
                     onClick={selectAllParticipants}
-                    disabled={!participants.length}
+                    disabled={participantSelectionDisabled || !participants.length}
                   >
                     Select all
                   </Button>
                 </div>
 
+                {participantSelectionDisabled ? (
+                  <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900">
+                    Public studies disable manual invites. Participants can self-enroll from their dashboards.
+                  </div>
+                ) : null}
+
                 <Input
                   placeholder="Search by name or assessment"
                   value={participantSearch}
                   onChange={(event) => setParticipantSearch(event.target.value)}
-                  disabled={!participants.length}
+                  disabled={participantSelectionDisabled || !participants.length}
                 />
 
                 {participantsError ? <p className="text-xs text-destructive">{participantsError}</p> : null}
@@ -992,7 +1270,12 @@ function StudyCreationWizard() {
                 </div>
               </div>
               <div className="flex items-center space-x-2">
-                <Checkbox id="auto-invite" checked={autoInvite} onCheckedChange={setAutoInvite} />
+                <Checkbox
+                  id="auto-invite"
+                  checked={autoInvite}
+                  onCheckedChange={setAutoInvite}
+                  disabled={participantSelectionDisabled}
+                />
                 <Label htmlFor="auto-invite" className="font-normal">
                   Auto-invite participants who pass the quiz
                 </Label>

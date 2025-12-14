@@ -14,6 +14,31 @@ const normalizeNumber = (value) => {
   return Number.isNaN(asNumber) ? null : asNumber;
 };
 
+const formatSeconds = (seconds) => {
+  if (!Number.isFinite(seconds)) {
+    return 'N/A';
+  }
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.max(0, seconds % 60);
+  return `${mins}m ${secs.toString().padStart(2, '0')}s`;
+};
+
+const normalizeResponseValues = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry));
+  }
+  if (value === null || value === undefined || value === '') {
+    return [];
+  }
+  return [String(value)];
+};
+
+const isFastSubmission = ({ timeTakenSeconds, durationSeconds }) => {
+  if (!Number.isFinite(timeTakenSeconds) || timeTakenSeconds <= 0) return false;
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return false;
+  return timeTakenSeconds < durationSeconds * 0.3;
+};
+
 router.post('/assessments', async (req, res) => {
   const transaction = await CompetencyAssessment.sequelize.transaction();
   try {
@@ -580,8 +605,12 @@ router.get('/assessments/:id/report', async (req, res) => {
     const totalApproved = assignments.filter((a) => a.decision === 'approved').length;
     const acceptanceRate = totalReviewed > 0 ? ((totalApproved / totalReviewed) * 100).toFixed(1) : 0;
 
-    const mcQuestions = (assessment.questions || []).filter(q => q.type === 'multiple_choice');
+    const mcQuestions = (assessment.questions || []).filter(q => q.type === 'multiple_choice' || q.type === 'multi_choice');
     const saQuestions = (assessment.questions || []).filter(q => q.type === 'short_answer');
+    const durationSeconds =
+      assessment.criteria && Number.isFinite(Number(assessment.criteria.durationMinutes))
+        ? Number(assessment.criteria.durationMinutes) * 60
+        : null;
 
     // --- Calculate new metrics ---
     let totalCorrectMcqAnswers = 0;
@@ -593,17 +622,37 @@ router.get('/assessments/:id/report', async (req, res) => {
     }));
     const questionPerfMap = new Map(questionPerformance.map(q => [q.id, q]));
 
+    const timeValues = assignments
+      .map((a) => Number(a.timeTakenSeconds))
+      .filter((val) => Number.isFinite(val) && val >= 0);
+    const averageTimeSeconds = timeValues.length
+      ? Math.round(timeValues.reduce((sum, val) => sum + val, 0) / timeValues.length)
+      : null;
+    const fastestTimeSeconds = timeValues.length ? Math.min(...timeValues) : null;
+    const slowestTimeSeconds = timeValues.length ? Math.max(...timeValues) : null;
+
     if (totalReviewed > 0) {
       assignments.forEach(assignment => {
         mcQuestions.forEach(q => {
-          const correctOption = q.options.find(opt => opt.isCorrect);
-          const participantResponse = assignment.responses?.[q.id];
+          const correctValues = Array.isArray(q.options)
+            ? q.options
+                .filter((opt) => opt.isCorrect)
+                .map((opt) => String(opt.value || opt.text))
+            : [];
+          const participantResponses = normalizeResponseValues(assignment.responses?.[q.id]);
           const perf = questionPerfMap.get(q.id);
           if (perf) {
             perf.total++;
-            if (correctOption && participantResponse === correctOption.text) {
-              perf.correct++;
-              totalCorrectMcqAnswers++;
+            if (correctValues.length) {
+              const correctSet = new Set(correctValues);
+              const responseSet = new Set(participantResponses);
+              const isCorrect =
+                responseSet.size === correctSet.size &&
+                correctValues.every((val) => responseSet.has(val));
+              if (isCorrect) {
+                perf.correct++;
+                totalCorrectMcqAnswers++;
+              }
             }
           }
         });
@@ -620,6 +669,12 @@ router.get('/assessments/:id/report', async (req, res) => {
         status: a.decision,
         comments: a.reviewerNotes || 'No comments provided.',
         submittedAt: a.submittedAt,
+        timeTakenSeconds: a.timeTakenSeconds,
+        flaggedFast: isFastSubmission({ timeTakenSeconds: a.timeTakenSeconds, durationSeconds }),
+        flagReason:
+          isFastSubmission({ timeTakenSeconds: a.timeTakenSeconds, durationSeconds }) && durationSeconds
+            ? `Completed in ${formatSeconds(a.timeTakenSeconds)} vs expected ${formatSeconds(durationSeconds)}`
+            : '',
       })),
     };
     
@@ -629,7 +684,13 @@ router.get('/assessments/:id/report', async (req, res) => {
       totalReviewed,
       totalApproved,
       overallMcqPerformance,
-      questionPerformance: Array.from(questionPerfMap.values()),
+      averageTimeSeconds,
+      fastestTimeSeconds,
+      slowestTimeSeconds,
+      questionPerformance: Array.from(questionPerfMap.values()).map((entry) => ({
+        ...entry,
+        solveRate: entry.total ? ((entry.correct / entry.total) * 100).toFixed(1) : '0.0',
+      })),
     };
 
     const safeTitle = assessment.title.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);
@@ -653,6 +714,9 @@ router.get('/assessments/:id/report', async (req, res) => {
         `${summaryData.acceptanceRate}% (${summaryData.totalApproved}/${summaryData.totalReviewed} approved)`,
       ]);
       csvStream.write(['Multiple Choice Performance', `${summaryData.overallMcqPerformance}% correct`]);
+      csvStream.write(['Average Solve Time', formatSeconds(summaryData.averageTimeSeconds)]);
+      csvStream.write(['Fastest Solve Time', formatSeconds(summaryData.fastestTimeSeconds)]);
+      csvStream.write(['Slowest Solve Time', formatSeconds(summaryData.slowestTimeSeconds)]);
       csvStream.write(['Total MC Questions', mcQuestions.length]);
       csvStream.write(['Total Short Answer Questions', saQuestions.length]);
       csvStream.write([]); // Blank line
@@ -661,19 +725,21 @@ router.get('/assessments/:id/report', async (req, res) => {
       csvStream.write(['Question-by-Question Performance (Multiple Choice)']);
       csvStream.write(['Question Title', 'Solve Rate', 'Correct / Total']);
       summaryData.questionPerformance.forEach(q => {
-        const solveRate = q.total > 0 ? `${((q.correct / q.total) * 100).toFixed(1)}%` : 'N/A';
+        const solveRate = q.total > 0 ? `${q.solveRate}%` : 'N/A';
         csvStream.write([q.title, solveRate, `${q.correct} / ${q.total}`]);
       });
       csvStream.write([]); // Blank line
 
       // Write headers for individual submission data
-      csvStream.write(['Submission ID', 'Acceptance Status', 'Reviewer Notes', 'Submitted At']);
+      csvStream.write(['Submission ID', 'Acceptance Status', 'Flagged Fast?', 'Flag Reason', 'Reviewer Notes', 'Submitted At']);
 
       // Write submission data
       reportData.submissions.forEach((submission) => {
         csvStream.write([
           submission.submissionId,
           submission.status,
+          submission.flaggedFast ? 'Yes' : 'No',
+          submission.flagReason || '',
           submission.comments,
           submission.submittedAt ? new Date(submission.submittedAt).toLocaleString() : 'N/A',
         ]);
@@ -741,6 +807,10 @@ router.get('/assessments/:id/report', async (req, res) => {
           .font('Helvetica-Bold').text(`${summaryData.overallMcqPerformance}% `, { continued: true })
           .font('Helvetica').text(`(${totalCorrectMcqAnswers} of ${totalPossibleMcqAnswers} correct answers)`);
 
+        doc.text(`Solve Time: `, { continued: true })
+          .font('Helvetica-Bold').text(`${formatSeconds(summaryData.averageTimeSeconds)} avg `, { continued: true })
+          .font('Helvetica').text(`(fastest ${formatSeconds(summaryData.fastestTimeSeconds)}, slowest ${formatSeconds(summaryData.slowestTimeSeconds)})`);
+
         doc.text(`Question Count: `, { continued: true })
           .font('Helvetica-Bold').text(`${mcQuestions.length} `, { continued: true })
           .font('Helvetica').text(`Multiple Choice, `, { continued: true })
@@ -762,15 +832,17 @@ router.get('/assessments/:id/report', async (req, res) => {
         doc.moveDown(0.5);
 
         const table = {
-          headers: ['Submission ID', 'Status', 'Reviewer Notes', 'Submitted At'],
+          headers: ['Submission ID', 'Status', 'Flagged', 'Flag Reason', 'Reviewer Notes', 'Submitted At'],
           rows: reportData.submissions.map((sub) => [
             sub.submissionId,
             sub.status,
+            sub.flaggedFast ? 'Yes' : 'No',
+            sub.flagReason || '',
             sub.comments,
             sub.submittedAt ? new Date(sub.submittedAt).toLocaleString() : 'N/A',
           ]),
-          columnWidths: [80, 80, 220, 120],
-          columnAligns: ['left', 'left', 'left', 'right'],
+          columnWidths: [60, 60, 60, 130, 150, 110],
+          columnAligns: ['left', 'left', 'center', 'left', 'left', 'right'],
         };
 
         const tableTop = doc.y;
@@ -808,7 +880,7 @@ router.get('/assessments/:id/report', async (req, res) => {
         const table = {
           headers: ['#', 'Question', 'Solve Rate', 'Correct / Total'],
           rows: summaryData.questionPerformance.map((q, index) => {
-            const solveRate = q.total > 0 ? `${((q.correct / q.total) * 100).toFixed(1)}%` : 'N/A';
+            const solveRate = q.total > 0 ? `${q.solveRate}%` : 'N/A';
             return [index + 1, q.title, solveRate, `${q.correct} / ${q.total}`];
           }),
           columnWidths: [30, 290, 80, 100],

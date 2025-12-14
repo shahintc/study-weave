@@ -15,6 +15,7 @@ const BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || '25mb';
 app.use(cors());
 app.use(express.json({ limit: BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));  // means any request whose path starts with /api/auth should be handled by routes/auth.js

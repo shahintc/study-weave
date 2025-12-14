@@ -383,15 +383,18 @@ async function buildStudySnapshot(studyId) {
 
   evaluationRows.forEach((row) => {
     const evaluation = row.get({ plain: true });
-    if (evaluation.status !== 'submitted' || evaluation.rating === null) {
-      return;
-    }
     const participant = participantsById.get(evaluation.participantId);
     if (!participant) {
       return;
     }
     const timestamp = resolveEventDate(evaluation);
-    if (!timestamp) {
+
+    if (evaluation.status === 'submitted' && !participant.completedAt && timestamp) {
+      participant.completedAt = timestamp.toISOString();
+      participant.progress = Math.max(participant.progress || 0, 100);
+    }
+
+    if (evaluation.status !== 'submitted' || evaluation.rating === null || !timestamp) {
       return;
     }
     const artifact = pickArtifactFromEvaluation(evaluation);

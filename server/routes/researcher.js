@@ -19,10 +19,10 @@ const router = express.Router();
 
 const ARTIFACT_MODE_OPTIONS = [
   { value: 'stage1', label: 'Bug labeling – Stage 1', assessmentType: 'bug_stage' },
-  { value: 'stage2', label: 'Bug adjudication – Stage 2', assessmentType: 'bug_stage' },
   { value: 'solid', label: 'SOLID review', assessmentType: 'solid' },
   { value: 'clone', label: 'Patch clone check', assessmentType: 'clone' },
   { value: 'snapshot', label: 'Snapshot intent', assessmentType: 'snapshot' },
+  { value: 'custom', label: 'Custom stage', assessmentType: 'custom' },
 ];
 
 const ARTIFACT_MODE_SET = new Set(ARTIFACT_MODE_OPTIONS.map((mode) => mode.value));
@@ -51,7 +51,14 @@ router.get('/studies', async (req, res) => {
         {
           model: StudyParticipant,
           as: 'participants',
-          include: [{ model: User, as: 'participant', attributes: ['id', 'name'] }],
+          include: [
+            { model: User, as: 'participant', attributes: ['id', 'name'] },
+            {
+              model: ArtifactAssessment,
+              as: 'artifactAssessments',
+              attributes: ['id', 'status', 'createdAt', 'updatedAt'],
+            },
+          ],
         },
         {
           model: StudyArtifact,
@@ -63,9 +70,9 @@ router.get('/studies', async (req, res) => {
     });
 
     const studyIds = studies.map((study) => study.id);
-    const ratingMap = await loadStudyRatings(studyIds);
+    const qualityMap = await loadStudyQualitySignals(studyIds);
 
-    const payload = studies.map((study) => formatStudyCard(study, ratingMap));
+    const payload = studies.map((study) => formatStudyCard(study, qualityMap));
     res.json({ studies: payload });
   } catch (error) {
     console.error('Researcher studies error', error);
@@ -75,7 +82,7 @@ router.get('/studies', async (req, res) => {
 
 router.get('/notifications', authMiddleware, async (req, res) => {
   try {
-    if (!req.user || req.user.role !== 'researcher') {
+    if (!req.user || (req.user.role !== 'researcher' && req.user.role !== 'admin')) {
       return res.status(403).json({ message: 'Only researchers can view these notifications.' });
     }
 
@@ -101,13 +108,12 @@ router.get('/notifications', authMiddleware, async (req, res) => {
     const competencyAssignments = await CompetencyAssignment.findAll({
       where: {
         researcherId: req.user.id,
-        status: { [Op.in]: ['submitted', 'reviewed'] },
       },
       include: [
         { model: User, as: 'participant', attributes: ['id', 'name'] },
         { model: CompetencyAssessment, as: 'assessment', attributes: ['id', 'title'] },
       ],
-      order: [['submittedAt', 'DESC']],
+      order: [['updatedAt', 'DESC'], ['submittedAt', 'DESC']],
     });
 
     const studySubmissions = await ArtifactAssessment.findAll({
@@ -238,6 +244,7 @@ router.get('/studies/:studyId/participants', authMiddleware, async (req, res) =>
     const artifactMeta = buildArtifactLookup(study.studyArtifacts || []);
     const metadata = normalizeJson(study.metadata);
     const defaultArtifactMode = resolveArtifactMode(metadata.defaultArtifactMode);
+    const evaluationCriteria = normalizeCriteria(study.criteria);
 
     const participantRows = await StudyParticipant.findAll({
       where: { studyId: study.id },
@@ -258,7 +265,7 @@ router.get('/studies/:studyId/participants', authMiddleware, async (req, res) =>
     });
 
     return res.json({
-      study: { id: String(study.id), title: study.title },
+      study: { id: String(study.id), title: study.title, evaluationCriteria },
       participants: participantRows.map((row) => formatParticipantDetail(row, artifactMeta.lookup, defaultArtifactMode)),
       studyArtifacts: artifactMeta.list,
       artifactModes: ARTIFACT_MODE_OPTIONS,
@@ -356,42 +363,84 @@ router.patch(
   },
 );
 
-async function loadStudyRatings(studyIds = []) {
-  const ratingMap = new Map();
+async function loadStudyQualitySignals(studyIds = []) {
+  const qualityMap = new Map();
   if (!studyIds.length) {
-    return ratingMap;
+    return qualityMap;
   }
 
-  const rows = await Evaluation.findAll({
-    attributes: ['studyId', 'rating'],
+  const rows = await ArtifactAssessment.findAll({
+    attributes: ['studyId', 'payload'],
     where: {
       studyId: { [Op.in]: studyIds },
-      rating: { [Op.not]: null },
+      status: 'submitted',
     },
   });
 
   rows.forEach((row) => {
-    const info = ratingMap.get(row.studyId) || { total: 0, count: 0 };
-    info.total += Number(row.rating);
+    const record = typeof row.get === 'function' ? row.get({ plain: true }) : row;
+    const score = extractAssessmentQualityScore(record.payload);
+    if (score === null) {
+      return;
+    }
+    const info = qualityMap.get(record.studyId) || { total: 0, count: 0 };
+    info.total += score;
     info.count += 1;
-    ratingMap.set(row.studyId, info);
+    qualityMap.set(record.studyId, info);
   });
 
-  return ratingMap;
+  return qualityMap;
 }
 
-function formatStudyCard(studyInstance, ratingMap) {
+function extractAssessmentQualityScore(rawPayload) {
+  const payload = normalizeJson(rawPayload);
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const stars = payload.evaluationStarRatings;
+  if (!stars || typeof stars !== 'object') {
+    return null;
+  }
+  const values = Object.values(stars)
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (!values.length) {
+    return null;
+  }
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return Number(average.toFixed(2));
+}
+
+function computeCompletionStats(participants = []) {
+  if (!Array.isArray(participants) || participants.length === 0) {
+    return { completedParticipants: 0, completionPercent: 0 };
+  }
+  const completedParticipants = participants.reduce((count, participant) => {
+    const status = participant.participationStatus;
+    const progress = Number(participant.progressPercent || 0);
+    const hasSubmittedArtifact =
+      Array.isArray(participant.artifactAssessments) &&
+      participant.artifactAssessments.some((assessment) => assessment.status === 'submitted');
+    const finished =
+      status === 'completed' || progress >= 100 || Boolean(participant.completedAt) || hasSubmittedArtifact;
+    return finished ? count + 1 : count;
+  }, 0);
+  const completionPercent = Math.min(
+    100,
+    Math.round((completedParticipants / participants.length) * 100),
+  );
+  return { completedParticipants, completionPercent };
+}
+
+function formatStudyCard(studyInstance, qualityMap) {
   const study = studyInstance.get({ plain: true });
   const metadata = normalizeJson(study.metadata);
   const participantCount = study.participants?.length || 0;
-  const avgProgress = participantCount
-    ? Math.round(
-        study.participants.reduce((sum, entry) => sum + (entry.progressPercent || 0), 0) / participantCount,
-      )
-    : 0;
+  const completionStats = computeCompletionStats(study.participants || []);
 
-  const ratingInfo = ratingMap.get(study.id);
-  const avgRating = ratingInfo ? Number((ratingInfo.total / ratingInfo.count).toFixed(1)) : 0;
+  const ratingInfo = qualityMap.get(Number(study.id));
+  const avgRating =
+    ratingInfo && ratingInfo.count ? Number((ratingInfo.total / ratingInfo.count).toFixed(1)) : 0;
 
   const participantTarget = metadata.participantTarget || participantCount || 0;
   const participantsList = (study.participants || []).map((participant) => ({
@@ -405,8 +454,10 @@ function formatStudyCard(studyInstance, ratingMap) {
     description: study.description,
     status: metadata.statusLabel || mapStatusToLabel(study.status),
     isPublic: study.isPublic,
+    allowReviewers: Boolean(study.allowReviewers),
     health: metadata.health || inferHealth(study.status),
-    progress: avgProgress,
+    progress: completionStats.completionPercent,
+    completedParticipants: completionStats.completedParticipants,
     progressDelta: metadata.progressDelta ?? 0,
     participants: participantCount,
     participantTarget,
@@ -484,9 +535,67 @@ function buildArtifactLookup(studyArtifacts = []) {
   return { list, lookup };
 }
 
+function normalizeCriteria(criteria) {
+  if (!criteria) return [];
+  const list = Array.isArray(criteria) ? criteria : [];
+  return list
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const label = item.label || item.name || item.title;
+      const weight = Number(item.weight);
+      if (!label || Number.isNaN(weight)) return null;
+      return { label, weight };
+    })
+    .filter(Boolean);
+}
+
+function mapArtifactAssessments(assessments = []) {
+  if (!Array.isArray(assessments)) {
+    return [];
+  }
+  return assessments.map((entry) => {
+    const plain = typeof entry.get === 'function' ? entry.get({ plain: true }) : entry;
+    return {
+      id: String(plain.id),
+      status: plain.status,
+      payload: normalizeJson(plain.payload),
+      createdAt: plain.createdAt ? new Date(plain.createdAt).toISOString() : null,
+      updatedAt: plain.updatedAt ? new Date(plain.updatedAt).toISOString() : null,
+    };
+  });
+}
+
 function formatParticipantDetail(row, artifactLookup, defaultMode) {
   const plain = typeof row.get === 'function' ? row.get({ plain: true }) : row;
   const profile = normalizeJson(plain.lastCheckpoint);
+  const completedAt =
+    plain.completedAt && !Number.isNaN(new Date(plain.completedAt).getTime())
+      ? new Date(plain.completedAt).toISOString()
+      : null;
+  const submittedArtifacts = Array.isArray(plain.artifactAssessments)
+    ? plain.artifactAssessments.filter((assessment) => assessment.status === 'submitted')
+    : [];
+
+  const latestSubmissionAt = submittedArtifacts.reduce((latest, assessment) => {
+    const timestamp = assessment.updatedAt || assessment.createdAt;
+    if (!timestamp) {
+      return latest;
+    }
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+      return latest;
+    }
+    const iso = date.toISOString();
+    return !latest || iso > latest ? iso : latest;
+  }, null);
+
+  const normalizedCompletedAt = completedAt || latestSubmissionAt;
+  const baseProgress = Number(plain.progressPercent || 0) || 0;
+  const normalizedStatus =
+    plain.participationStatus === 'completed' || normalizedCompletedAt
+      ? 'completed'
+      : plain.participationStatus;
+  const normalizedProgress = normalizedStatus === 'completed' ? Math.max(baseProgress, 100) : baseProgress;
 
   return {
     id: String(plain.id),
@@ -496,10 +605,12 @@ function formatParticipantDetail(row, artifactLookup, defaultMode) {
     email: plain.participant?.email || null,
     persona: profile.persona || 'Participant',
     region: profile.region || 'Unknown',
-    participationStatus: plain.participationStatus,
-    progressPercent: plain.progressPercent || 0,
+    participationStatus: normalizedStatus,
+    progressPercent: normalizedProgress,
+    completedAt: normalizedCompletedAt,
     competency: summarizeCompetencyProgress(plain.sourceAssignment),
     artifactProgress: summarizeArtifactProgress(plain.artifactAssessments || []),
+    artifactAssessments: mapArtifactAssessments(plain.artifactAssessments),
     nextAssignment: buildNextAssignmentPayload(plain, artifactLookup, defaultMode),
     lastUpdatedAt: plain.updatedAt ? new Date(plain.updatedAt).toISOString() : null,
   };
@@ -578,7 +689,7 @@ function resolveModeKey(assessment) {
       ? normalizeJson(assessment.payload)
       : assessment.payload || {};
   if (type === 'bug_stage') {
-    return payload.mode === 'stage1' ? 'stage1' : 'stage2';
+    return 'stage1';
   }
   if (type === 'solid') {
     return 'solid';
@@ -588,6 +699,9 @@ function resolveModeKey(assessment) {
   }
   if (type === 'snapshot') {
     return 'snapshot';
+  }
+  if (type === 'custom') {
+    return 'custom';
   }
   return null;
 }
@@ -641,19 +755,22 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
     }
 
     const assignment = plain.sourceAssignment;
-    if (assignment && (assignment.status === 'submitted' || assignment.status === 'reviewed')) {
+    const assignmentStatus = assignment && typeof assignment.status === 'string'
+      ? assignment.status.toLowerCase()
+      : null;
+    if (assignment && (assignmentStatus === 'submitted' || assignmentStatus === 'reviewed')) {
       const occurredAt =
         toIso(assignment.reviewedAt) || toIso(assignment.submittedAt) || toIso(plain.updatedAt) || toIso(new Date());
-      const id = `study-${studyId || 'unknown'}-participant-${participantId || 'unknown'}-competency-${assignment.status}`;
-      const verb = assignment.status === 'reviewed' ? 'finished' : 'submitted';
+      const id = `study-${studyId || 'unknown'}-participant-${participantId || 'unknown'}-competency-${assignmentStatus}`;
       dedup.set(id, {
         id,
         type: 'competency_complete',
-        message: `${participantName} ${verb} the competency for "${studyTitle}".`,
+        message: `${participantName} submitted the competency for "${studyTitle}".`,
         studyId,
         participantId: participantId ? String(participantId) : null,
         participantName,
         studyTitle,
+        assignmentId: assignment.id ? String(assignment.id) : null,
         occurredAt,
       });
     }
@@ -665,7 +782,10 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
     const assessment = assignment.assessment || {};
     const participantId = participant.id || assignment.participantId || null;
     const participantName = participant.name || (participantId ? `Participant ${participantId}` : 'Participant');
-    const status = assignment.status;
+    const status = typeof assignment.status === 'string' ? assignment.status.toLowerCase() : '';
+    if (status !== 'submitted' && status !== 'reviewed') {
+      return;
+    }
     const occurredAt =
       toIso(assignment.reviewedAt) ||
       toIso(assignment.submittedAt) ||
@@ -674,15 +794,15 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
 
     const id = `competency-${assignment.id}-${status}`;
     if (!dedup.has(id)) {
-      const verb = status === 'reviewed' ? 'finished' : 'submitted';
       dedup.set(id, {
         id,
         type: 'competency_complete',
-        message: `${participantName} ${verb} the competency "${assessment.title || 'Assessment'}".`,
+        message: `${participantName} submitted the competency "${assessment.title || 'Assessment'}".`,
         studyId: null,
         participantId: participantId ? String(participantId) : null,
         participantName,
         studyTitle: assessment.title || 'Competency',
+        assignmentId: assignment.id ? String(assignment.id) : null,
         occurredAt,
       });
     }
@@ -714,6 +834,8 @@ function buildResearcherNotifications(enrollments = [], competencyAssignments = 
         participantId: participantId ? String(participantId) : null,
         participantName,
         studyTitle,
+        evaluationId: submission.sourceEvaluationId ? String(submission.sourceEvaluationId) : null,
+        artifactAssessmentId: submission.id ? String(submission.id) : null,
         occurredAt,
       });
     }
@@ -747,8 +869,8 @@ async function loadStudyCard(studyId) {
     return null;
   }
 
-  const ratingMap = await loadStudyRatings([study.id]);
-  return formatStudyCard(study, ratingMap);
+  const qualityMap = await loadStudyQualitySignals([study.id]);
+  return formatStudyCard(study, qualityMap);
 }
 
 async function logStudyAction(action, user, study, details = {}, transaction = null) {

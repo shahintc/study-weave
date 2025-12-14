@@ -34,8 +34,8 @@ import {
 } from "lucide-react";
 import { toPng } from "html-to-image";
 import jsPDF from "jspdf";
-import BarChart from "@/components/charts/BarChart";
 import LineChart from "@/components/charts/LineChart";
+import DonutChart from "@/components/charts/DonutChart";
 import DashboardControls from "@/components/dashboard/DashboardControls";
 import { useDashboardPreferences } from "@/hooks/useDashboardPreferences";
 
@@ -417,6 +417,11 @@ export default function ResearcherDashboard() {
     },
     [authToken],
   );
+  const handleMonitorRefresh = useCallback(() => {
+    if (!monitoringStudyId) return;
+    fetchAnalytics(monitoringStudyId, monitorFilters);
+    fetchParticipantMatrix(monitoringStudyId);
+  }, [fetchAnalytics, fetchParticipantMatrix, monitorFilters, monitoringStudyId]);
 
   const handleAssignmentDraftChange = useCallback((participantId, field, value) => {
     setAssignmentDrafts((prev) => ({
@@ -780,7 +785,7 @@ export default function ResearcherDashboard() {
               onFilterChange={handleMonitorFilterChange}
               isLoading={isAnalyticsLoading}
               error={analyticsError}
-              onRefresh={() => fetchAnalytics(monitoringStudyId, monitorFilters)}
+              onRefresh={handleMonitorRefresh}
               onExportImage={exportAsImage}
               onExportPdf={exportAsPdf}
               analyticsRef={analyticsRef}
@@ -825,15 +830,123 @@ function StudyMonitorPanel({
 }) {
   const summary = analytics?.summary;
   const hasPayload = Boolean(summary);
-  const ratingsTrend = analytics?.charts?.ratingsTrend ?? [];
-  const completionTrend = analytics?.charts?.completionTrend ?? [];
-  const artifactAverages = analytics?.charts?.artifactAverages ?? [];
   const participants = analytics?.participants ?? [];
   const participantDetails = participantMatrix?.participants ?? [];
+  const studyCriteria = participantMatrix?.study?.evaluationCriteria ?? [];
   const availableModes = participantMatrix?.artifactModes ?? [];
   const studyDefaultMode = participantMatrix?.defaultArtifactMode || null;
   const defaultModeMeta = availableModes.find((entry) => entry.value === studyDefaultMode);
   const studyArtifacts = participantMatrix?.studyArtifacts ?? [];
+  const completionBreakdown = useMemo(() => {
+    const total = participantDetails.length;
+    const completed = participantDetails.filter((participant) => {
+      const statusValue =
+        typeof participant.participationStatus === "string"
+          ? participant.participationStatus.trim().toLowerCase()
+          : "";
+      const statusDone = statusValue === "completed";
+      const progressDone = Number(participant.progressPercent || 0) >= 100;
+      const hasCompletedAt = Boolean(participant.completedAt);
+      return statusDone || progressDone || hasCompletedAt;
+    }).length;
+    const open = Math.max(total - completed, 0);
+    const percent = total ? Math.round((completed / total) * 100) : 0;
+    return { total, completed, open, percent };
+  }, [participantDetails]);
+
+  const completionSegments = useMemo(
+    () => [
+      { label: "Completed", value: completionBreakdown.completed, color: "#10b981" },
+      { label: "Outstanding", value: completionBreakdown.open, color: "#d1d5db" },
+    ],
+    [completionBreakdown],
+  );
+  const criteriaSegments = useMemo(() => {
+    const totalWeight = studyCriteria.reduce((sum, entry) => sum + Number(entry.weight || 0), 0);
+    return studyCriteria.map((entry, index) => {
+      const palette = ["#2563eb", "#10b981", "#f97316", "#8b5cf6", "#14b8a6", "#f59e0b"];
+      return {
+        label: entry.label || `Criteria ${index + 1}`,
+        value: Number(entry.weight || 0),
+        color: palette[index % palette.length],
+        percent: totalWeight ? Math.round((Number(entry.weight || 0) / totalWeight) * 100) : 0,
+      };
+    });
+  }, [studyCriteria]);
+
+  const criteriaAxis = useMemo(() => {
+    const labels = [];
+    const seen = new Set();
+    studyCriteria.forEach((criterion) => {
+      const label = (criterion.label || criterion.name || criterion.title || '').trim();
+      if (!label) return;
+      const key = label.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      labels.push({ key, label });
+    });
+
+    participantDetails.forEach((participant) => {
+      (participant.artifactAssessments || []).forEach((assessment) => {
+        const stars = assessment?.payload?.evaluationStarRatings;
+        if (!stars || typeof stars !== 'object') {
+          return;
+        }
+        Object.keys(stars).forEach((rawKey) => {
+          const label = String(rawKey || '').trim();
+          if (!label) return;
+          const key = label.toLowerCase();
+          if (seen.has(key)) return;
+          seen.add(key);
+          labels.push({ key, label });
+        });
+      });
+    });
+
+    return labels;
+  }, [participantDetails, studyCriteria]);
+
+  const criteriaSeries = useMemo(() => {
+    if (!criteriaAxis.length) {
+      return [];
+    }
+    return participantDetails
+      .map((participant) => {
+        const ratings = new Map();
+        (participant.artifactAssessments || []).forEach((assessment) => {
+          if (assessment.status !== 'submitted') return;
+          const stars = assessment?.payload?.evaluationStarRatings;
+          if (!stars || typeof stars !== 'object') {
+            return;
+          }
+          Object.entries(stars).forEach(([rawKey, rawValue]) => {
+            const key = String(rawKey || '').trim().toLowerCase();
+            if (!key) return;
+            const numeric = Number(rawValue);
+            if (!Number.isFinite(numeric)) return;
+            const bucket = ratings.get(key) || [];
+            bucket.push(numeric);
+            ratings.set(key, bucket);
+          });
+        });
+
+        const points = criteriaAxis.map((axis) => {
+          const values = ratings.get(axis.key);
+          if (!values || !values.length) {
+            return { label: axis.label, key: axis.key, value: null };
+          }
+          const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
+          return { label: axis.label, key: axis.key, value: Number(avg.toFixed(2)) };
+        });
+
+        return {
+          id: participant.id,
+          name: participant.name,
+          points,
+        };
+      })
+      .filter((entry) => entry.points.some((point) => point.value !== null));
+  }, [criteriaAxis, participantDetails]);
 
   const formatParticipationStatus = (status) => {
     switch (status) {
@@ -953,126 +1066,46 @@ function StudyMonitorPanel({
 
       <Card>
         <CardHeader>
-          <CardTitle>Participant progress</CardTitle>
-          <CardDescription>Compare competency vs. artifact modes and queue the next assignment.</CardDescription>
+          <CardTitle>Live participation status</CardTitle>
+          <CardDescription>Monitor completions and evaluation criteria at a glance.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-3">
-          {participantError && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {participantError}
-            </div>
-          )}
-          {isParticipantsLoading ? (
-            <p className="text-sm text-muted-foreground">Loading participant data...</p>
-          ) : participantDetails.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No participants have joined this study yet.</p>
-          ) : (
-            participantDetails.map((participant) => {
-              const draft = assignmentDrafts?.[participant.id] || { mode: '', studyArtifactId: '' };
-              const inFlight = Boolean(assignmentSaving?.[participant.id]);
-              const statusMeta = formatParticipationStatus(participant.participationStatus);
-              const artifactSuffix = participant.nextAssignment?.artifactLabel
-                ? ` • ${participant.nextAssignment.artifactLabel}`
-                : '';
-              const currentAssignmentLabel = participant.nextAssignment?.modeLabel
-                ? `${participant.nextAssignment.modeLabel}${artifactSuffix}`
-                : 'Not assigned';
-
-              return (
-                <div key={participant.id} className="space-y-3 rounded-md border px-3 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-medium">{participant.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {participant.persona} • {participant.region}
-                      </p>
-                    </div>
-                    <Badge variant="outline" className={statusMeta.tone}>
-                      {statusMeta.label}
-                    </Badge>
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-3">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>Competency</span>
-                        <span>{participant.competency?.completionPercent ?? 0}%</span>
-                      </div>
-                      <Progress value={participant.competency?.completionPercent ?? 0} />
-                      <p className="text-xs text-muted-foreground">
-                        {participant.competency?.statusLabel || 'Not assigned'}
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <p className="text-xs text-muted-foreground">Artifact modes</p>
-                      {renderArtifactProgress(participant.artifactProgress)}
-                      <p className="text-xs text-muted-foreground">
-                        {participant.artifactProgress?.totals?.submitted || 0} submissions total
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="space-y-1">
-                        <label className="text-xs text-muted-foreground">Stage</label>
-                        <Select
-                          value={draft.mode || undefined}
-                          onValueChange={(value) =>
-                            onAssignmentDraftChange?.(participant.id, 'mode', value)
-                          }
-                          disabled={!availableModes.length}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select stage" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableModes.map((mode) => (
-                              <SelectItem key={mode.value} value={mode.value}>
-                                {mode.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs text-muted-foreground">Artifact (optional)</label>
-                        <Select
-                          value={draft.studyArtifactId || '__any'}
-                          onValueChange={(value) =>
-                            onAssignmentDraftChange?.(
-                              participant.id,
-                              'studyArtifactId',
-                              value === '__any' ? '' : value,
-                            )
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Any artifact" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__any">Any artifact</SelectItem>
-                            {studyArtifacts.map((artifact) => (
-                              <SelectItem key={artifact.id} value={artifact.id}>
-                                {artifact.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <Button
-                        size="sm"
-                        className="w-full"
-                        onClick={() => onAssignmentSave?.(participant.id)}
-                        disabled={!draft.mode || inFlight}
-                      >
-                        {inFlight ? 'Saving...' : 'Assign task'}
-                      </Button>
-                      <p className="text-xs text-muted-foreground">Current next task: {currentAssignmentLabel}</p>
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
+        <CardContent className="grid gap-6 md:grid-cols-2">
+          <div className="space-y-3">
+            <DonutChart
+              segments={completionSegments}
+              centerLabel={`${completionBreakdown.percent}%`}
+              centerSubtext={`${completionBreakdown.completed}/${completionBreakdown.total || 0} finished`}
+              emptyLabel="No participants assigned"
+            />
+            <p className="text-xs text-muted-foreground text-center md:text-left">
+              {completionBreakdown.total
+                ? `Assignments sent to ${completionBreakdown.total} participant${
+                    completionBreakdown.total === 1 ? "" : "s"
+                  }.`
+                : "Invite participants to start this study."}
+            </p>
+          </div>
+          <div className="space-y-3">
+            <DonutChart
+              segments={criteriaSegments}
+              centerLabel={
+                criteriaSegments.length
+                  ? `${criteriaSegments.reduce((sum, seg) => sum + (seg.percent || 0), 0)}%`
+                  : "0%"
+              }
+              centerSubtext={criteriaSegments.length ? "Criteria weight" : "No criteria defined"}
+              emptyLabel="No criteria defined"
+            />
+            <p className="text-xs text-muted-foreground text-center md:text-left">
+              {criteriaSegments.length
+                ? "Researcher-defined evaluation criteria (weight by percentage)."
+                : "Add evaluation criteria to the study to see weights here."}
+            </p>
+          </div>
         </CardContent>
       </Card>
+
+      
 
       {!hasPayload && !isLoading && (
         <div className="flex min-h-[180px] items-center justify-center rounded-md border text-sm text-muted-foreground">
@@ -1082,66 +1115,13 @@ function StudyMonitorPanel({
 
       {hasPayload ? (
         <div ref={analyticsRef} className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-3">
-            <Card>
-              <CardContent className="space-y-1 p-4">
-                <p className="text-xs uppercase text-muted-foreground">Average rating</p>
-                <p className="text-3xl font-semibold">{summary?.averageRating ?? 0}</p>
-                <p className="text-xs text-muted-foreground">{summary?.submissionsCount ?? 0} submissions</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="space-y-1 p-4">
-                <p className="text-xs uppercase text-muted-foreground">Completion</p>
-                <p className="text-3xl font-semibold">{summary?.completionPercentage ?? 0}%</p>
-                <p className="text-xs text-muted-foreground">
-                  {summary?.completedParticipants ?? 0}/{summary?.activeParticipants ?? 0} participants
-                </p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="space-y-1 p-4">
-                <p className="text-xs uppercase text-muted-foreground">Auto refresh</p>
-                <p className="text-3xl font-semibold">30s</p>
-                <p className="text-xs text-muted-foreground">Last sync {formatTimeAgo(lastRefreshAt)}</p>
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-3">
-            <Card className="lg:col-span-2">
-              <CardHeader>
-                <CardTitle>Ratings trend</CardTitle>
-                <CardDescription>Daily average rating across submissions.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LineChart data={ratingsTrend} xKey="date" yKey="value" height={220} />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>Completion trend</CardTitle>
-                <CardDescription>Participants finishing the study.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <LineChart data={completionTrend} xKey="date" yKey="value" height={220} colorClass="text-emerald-500" />
-              </CardContent>
-            </Card>
-          </div>
-
           <Card>
             <CardHeader>
-              <CardTitle>Artifact ratings</CardTitle>
-              <CardDescription>Average rating per artifact.</CardDescription>
+              <CardTitle>Criteria ratings by participant</CardTitle>
+              <CardDescription>Per-criterion star ratings (averaged when multiple submissions exist).</CardDescription>
             </CardHeader>
             <CardContent>
-              <BarChart
-                data={artifactAverages}
-                xKey="name"
-                yKey="value"
-                height={220}
-                formatValue={(value) => value.toFixed(1)}
-              />
+              <CriteriaRatingsChart criteriaAxis={criteriaAxis} series={criteriaSeries} />
             </CardContent>
           </Card>
 
@@ -1189,6 +1169,134 @@ function StudyMonitorPanel({
           </Card>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function CriteriaRatingsChart({ criteriaAxis = [], series = [] }) {
+  const visibleSeries = Array.isArray(series)
+    ? series.filter((entry) => entry?.points?.some((point) => point.value !== null))
+    : [];
+
+  if (!criteriaAxis.length || visibleSeries.length === 0) {
+    return <p className="text-sm text-muted-foreground">No criteria ratings available yet.</p>;
+  }
+
+  const width = 720;
+  const height = 320;
+  const padding = 56;
+  const innerWidth = width - padding * 2;
+  const innerHeight = height - padding * 2;
+  const maxValue = Math.max(
+    5,
+    ...visibleSeries.flatMap((entry) =>
+      entry.points.map((point) => (Number.isFinite(point.value) ? point.value : 0)),
+    ),
+  );
+  const yTicks = Array.from({ length: Math.max(5, Math.ceil(maxValue)) + 1 }, (_, idx) => idx);
+  const colorPalette = ['#2563eb', '#16a34a', '#f59e0b', '#db2777', '#0ea5e9', '#7c3aed', '#ea580c', '#14b8a6'];
+
+  const resolveX = (index) => {
+    if (criteriaAxis.length === 1) {
+      return innerWidth / 2 + padding;
+    }
+    return (index / (criteriaAxis.length - 1)) * innerWidth + padding;
+  };
+
+  const resolveY = (value) => {
+    const numeric = Number(value) || 0;
+    return innerHeight - (numeric / maxValue) * innerHeight + padding;
+  };
+
+  return (
+    <div className="space-y-3">
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img" aria-label="Criteria ratings">
+        {/* Y grid lines and labels */}
+        {yTicks.map((tick) => {
+          const y = resolveY(tick);
+          return (
+            <g key={`y-${tick}`}>
+              <line x1={padding - 6} x2={width - padding + 6} y1={y} y2={y} stroke="hsl(var(--muted-foreground))" strokeOpacity="0.25" strokeWidth="1" />
+              <text x={padding - 10} y={y + 4} fontSize="10" fill="hsl(var(--muted-foreground))" textAnchor="end">
+                {tick}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* X axis labels */}
+        {criteriaAxis.map((axis, index) => {
+          const x = resolveX(index);
+          return (
+            <g key={axis.key}>
+              <line x1={x} x2={x} y1={padding} y2={height - padding} stroke="hsl(var(--muted-foreground))" strokeOpacity="0.15" strokeWidth="1" />
+              <text x={x} y={height - padding + 18} fontSize="10" fill="hsl(var(--muted-foreground))" textAnchor="middle">
+                {axis.label}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Series */}
+        {visibleSeries.map((entry, idx) => {
+          const color = colorPalette[idx % colorPalette.length];
+          const pointCoords = entry.points
+            .map((point, pointIndex) => {
+              if (!Number.isFinite(point.value)) {
+                return null;
+              }
+              return `${resolveX(pointIndex)},${resolveY(point.value)}`;
+            })
+            .filter(Boolean);
+
+          return (
+            <g key={entry.id || entry.name || idx}>
+              {pointCoords.length ? (
+                <polyline
+                  fill="none"
+                  stroke={color}
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  points={pointCoords.join(' ')}
+                />
+              ) : null}
+              {entry.points.map((point, pointIndex) => {
+                if (!Number.isFinite(point.value)) {
+                  return null;
+                }
+                const cx = resolveX(pointIndex);
+                const cy = resolveY(point.value);
+                return (
+                  <g key={`${entry.id || idx}-${point.key}`}>
+                    <circle cx={cx} cy={cy} r={5} fill="#fff" stroke={color} strokeWidth="2" />
+                    <title>
+                      {entry.name}: {point.label} – {point.value.toFixed(2)}
+                    </title>
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
+
+        {/* Axis labels */}
+        <text x={padding} y={padding - 20} fontSize="11" fill="hsl(var(--muted-foreground))">
+          Rating (stars)
+        </text>
+      </svg>
+
+      <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+        {visibleSeries.map((entry, idx) => {
+          const color = colorPalette[idx % colorPalette.length];
+          return (
+            <span key={entry.id || entry.name || idx} className="inline-flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+              <span>{entry.name}</span>
+            </span>
+          );
+        })}
+      </div>
     </div>
   );
 }

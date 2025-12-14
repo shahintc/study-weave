@@ -1,13 +1,18 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs/promises');
+const multer = require('multer');
 const pool = require('../config/database');
 const User = require('../models/User');
 const { sendEmail, isEmailConfigured } = require('../services/emailService');
+const auth = require('../middleware/auth');
 const router = express.Router();
 
 const PASSWORD_POLICY = /^(?=.*[A-Z]).{6,}$/;
 const CODE_TTL_MINUTES = 15;
+const AVATAR_MAX_SIZE_BYTES = 2 * 1024 * 1024; // 2MB
 
 const sanitizeUser = (user) => ({
   id: user.id,
@@ -15,7 +20,12 @@ const sanitizeUser = (user) => ({
   email: user.email,
   role: user.role,
   roleId: user.roleId,
+  avatarUrl: user.avatarUrl || null,
+  isGuest: Boolean(user.isGuest ?? user.is_guest),
+  guestSessionId: user.guestSessionId || user.guest_session_id || null,
+  guestExpiresAt: user.guestExpiresAt || user.guest_expires_at || null,
   emailVerified: Boolean(user.emailVerified ?? user.email_verified),
+  createdAt: user.created_at || user.createdAt,
 });
 
 const generateCode = () => String(Math.floor(100000 + Math.random() * 900000));
@@ -24,6 +34,45 @@ const expiresAt = (minutes) => new Date(Date.now() + minutes * 60 * 1000);
 const isExpired = (date) => !date || new Date(date).getTime() < Date.now();
 
 const requirePasswordPolicy = (password) => PASSWORD_POLICY.test(password);
+
+const avatarUploadDir = path.join(__dirname, '../uploads/avatars');
+const avatarStorage = multer.diskStorage({
+  destination: async (req, file, cb) => {
+    try {
+      await fs.mkdir(avatarUploadDir, { recursive: true });
+      cb(null, avatarUploadDir);
+    } catch (error) {
+      cb(error);
+    }
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '') || '.png';
+    const safeExt = ext.slice(0, 10).toLowerCase() || '.png';
+    const unique = `${req.user?.id || 'avatar'}-${Date.now()}${safeExt}`;
+    cb(null, unique);
+  },
+});
+
+const avatarUpload = multer({
+  storage: avatarStorage,
+  limits: { fileSize: AVATAR_MAX_SIZE_BYTES },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype && file.mimetype.startsWith('image/')) {
+      return cb(null, true);
+    }
+    cb(new Error('Only image uploads are allowed.'));
+  },
+});
+
+const handleAvatarUpload = (req, res, next) => {
+  avatarUpload.single('avatar')(req, res, (error) => {
+    if (error) {
+      const status = error.message && error.message.toLowerCase().includes('file too large') ? 413 : 400;
+      return res.status(status).json({ message: error.message || 'Failed to upload avatar.' });
+    }
+    next();
+  });
+};
 
 // Register (sends verification code)
 router.post('/register', async (req, res) => {
@@ -285,6 +334,174 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ message: 'Server error during login' });
+  }
+});
+
+// Guest Login
+router.post('/guest-login', async (req, res) => {
+  try {
+    const guestSessionId = crypto.randomBytes(16).toString('hex');
+    const guestExpiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000); // 4 hours from now
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    
+    const user = await User.create({
+      name: `Guest ${randomSuffix}`,
+      role: 'guest',
+      isGuest: true,
+      guestSessionId,
+      guestExpiresAt,
+      emailVerified: true, // Guests don't verify email
+      email: null,
+      password: null,
+    });
+
+    const token = jwt.sign(
+      { userId: user.id, role: 'guest', guestSessionId },
+      process.env.JWT_SECRET || 'fallback_secret',
+      { expiresIn: '4h' }
+    );
+
+    res.json({
+      message: 'Guest login successful',
+      token,
+      user: sanitizeUser(user),
+    });
+  } catch (error) {
+    console.error('Guest login error:', error);
+    res.status(500).json({ message: 'Server error during guest login' });
+  }
+});
+
+// Get current user (requires auth)
+router.get('/me', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    return res.json({ user: sanitizeUser(user) });
+  } catch (error) {
+    console.error('Get /me error:', error);
+    return res.status(500).json({ message: 'Server error while fetching profile' });
+  }
+});
+
+// Change password (requires auth)
+router.post('/change-password', auth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Current and new password are required.' });
+    }
+    if (!requirePasswordPolicy(newPassword)) {
+      return res.status(400).json({
+        message: 'Password must be at least 6 characters and include one uppercase letter.',
+      });
+    }
+
+    const user = await User.findByIdWithPassword(req.user.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const isMatch = await User.comparePassword(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Current password is incorrect.' });
+    }
+
+    await User.update(user.id, { password: newPassword });
+    return res.json({ message: 'Password updated successfully.' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    return res.status(500).json({ message: 'Server error while changing password' });
+  }
+});
+
+// Upload or replace avatar (requires auth)
+router.post('/avatar', auth, handleAvatarUpload, async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No avatar file uploaded.' });
+    }
+
+    const existing = await User.findById(req.user.id);
+    if (!existing) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const relativePath = `/uploads/avatars/${req.file.filename}`;
+
+    if (existing.avatarUrl && existing.avatarUrl !== relativePath) {
+      const previousPath = path.join(__dirname, '..', existing.avatarUrl.replace(/^\//, ''));
+      await fs.unlink(previousPath).catch(() => {});
+    }
+
+    const updatedUser = await User.update(existing.id, { avatarUrl: relativePath });
+    return res.json({
+      message: 'Avatar updated successfully.',
+      user: sanitizeUser(updatedUser),
+    });
+  } catch (error) {
+    console.error('Avatar upload error:', error);
+    return res.status(500).json({ message: 'Failed to update avatar.' });
+  }
+});
+
+// Remove avatar (requires auth)
+router.delete('/avatar', auth, async (req, res) => {
+  try {
+    const existing = await User.findById(req.user.id);
+    if (!existing) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (existing.avatarUrl) {
+      const previousPath = path.join(__dirname, '..', existing.avatarUrl.replace(/^\//, ''));
+      await fs.unlink(previousPath).catch(() => {});
+    }
+
+    const updatedUser = await User.update(existing.id, { avatarUrl: null });
+    return res.json({
+      message: 'Avatar removed successfully.',
+      user: sanitizeUser(updatedUser),
+    });
+  } catch (error) {
+    console.error('Avatar remove error:', error);
+    return res.status(500).json({ message: 'Failed to remove avatar.' });
+  }
+});
+
+// Delete own account (requires auth)
+router.delete('/account', auth, async (req, res) => {
+  try {
+    const existing = await User.findById(req.user.id);
+    if (!existing) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (existing.avatarUrl) {
+      const previousPath = path.join(__dirname, '..', existing.avatarUrl.replace(/^\//, ''));
+      await fs.unlink(previousPath).catch(() => {});
+    }
+
+    // Anonymize user instead of hard delete to preserve study/assessment data
+    const placeholderEmail = `deleted+${existing.id}@example.com`;
+    const randomPassword = crypto.randomBytes(32).toString('hex');
+
+    const updated = await User.update(existing.id, {
+      name: 'Deleted User',
+      email: placeholderEmail,
+      avatarUrl: null,
+      password: randomPassword, // hashed inside model
+    });
+
+    return res.json({
+      message: 'Account deleted successfully. User data retained as anonymized record.',
+      user: sanitizeUser(updated),
+    });
+  } catch (error) {
+    console.error('Account delete error:', error);
+    return res.status(500).json({ message: 'Failed to delete account.' });
   }
 });
 

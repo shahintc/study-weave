@@ -81,17 +81,19 @@ const SNAPSHOT_CHANGE_TYPES = [
 
 const SERVER_MODE_TO_UI = {
   clone: "patch",
+  stage2: "stage1",
+  custom: "custom",
 };
 
-const SUPPORTED_UI_MODES = new Set(["stage1", "stage2", "solid", "patch", "snapshot"]);
-const SYNC_SWAP_MODES = new Set(["stage2", "patch", "snapshot"]);
+const SUPPORTED_UI_MODES = new Set(["stage1", "solid", "patch", "snapshot", "custom"]);
+const SYNC_SWAP_MODES = new Set(["patch", "snapshot"]);
 
 const MODE_LABELS = {
   stage1: "Stage 1: Participant Bug Labeling",
-  stage2: "Stage 2: Reviewer Bug Label Comparison",
   solid: "SOLID Violations: Code & Complexity",
   patch: "Patch Mode: Code Diff / Clone Detection",
   snapshot: "Snapshot Study: UI Change vs Failure",
+  custom: "Custom Stage: Researcher Questions",
 };
 
 const normalizeModeValue = (raw) => {
@@ -241,6 +243,17 @@ const numberLines = (text) => {
     .split(/\r?\n/)
     .map((line, idx) => `${idx + 1}. ${line}`)
     .join("\n");
+};
+
+const normalizeTimerState = (timer = {}) => {
+  const elapsedMs = Math.max(0, Number(timer.elapsedMs) || 0);
+  const lastStart = Number(timer.lastStart);
+  return {
+    elapsedMs,
+    running: Boolean(timer.running),
+    submitted: Boolean(timer.submitted),
+    lastStart: Number.isFinite(lastStart) ? lastStart : null,
+  };
 };
 
 const formatBugReportText = (report) => {
@@ -453,11 +466,13 @@ export default function ArtifactsComparison() {
   const [hasLocalDraft, setHasLocalDraft] = useState(false);
   const [submissionLocked, setSubmissionLocked] = useState(false);
   const [timerDisplayMs, setTimerDisplayMs] = useState(0);
-  const [timerStatus, setTimerStatus] = useState("paused"); // running | paused | submitted
+  const [timerStatus, setTimerStatus] = useState("not_started"); // not_started | running | paused | submitted
   const timerStartRef = useRef(null);
   const timerIntervalRef = useRef(null);
   const timerBaseRef = useRef(0);
-  const timerStatusRef = useRef("paused");
+  const timerStatusRef = useRef("not_started");
+  const timerSyncTimeoutRef = useRef(null);
+  const timerPendingStateRef = useRef(null);
 
   const activeParticipantId =
     resolvedStudyParticipantId ||
@@ -473,6 +488,10 @@ export default function ArtifactsComparison() {
         studyParticipantId: activeParticipantId,
       }),
     [activeParticipantId, studyContext.studyArtifactId, studyContext.studyId]
+  );
+  const timerApiBase = useMemo(
+    () => (api?.defaults?.baseURL ? api.defaults.baseURL.replace(/\/$/, "") : ""),
+    []
   );
 
   useEffect(() => {
@@ -510,14 +529,6 @@ export default function ArtifactsComparison() {
     [evaluationCriteria],
   );
 
-  const persistTimerState = useCallback(
-    (nextState) => {
-      if (!timerStorageKey) return;
-      writeStoredTimer(timerStorageKey, nextState);
-    },
-    [timerStorageKey],
-  );
-
   const stopTimerInterval = useCallback(() => {
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
@@ -525,17 +536,106 @@ export default function ArtifactsComparison() {
     }
   }, []);
 
+  const syncTimerToServer = useCallback(
+    async (timerPayload, keepalive = false) => {
+      if (missingStudyContext) return;
+      const token =
+        authToken ||
+        (typeof window !== "undefined"
+          ? window.localStorage.getItem("token")
+          : null);
+      if (!token) return;
+      const body = {
+        studyId: studyContext.studyId,
+        studyArtifactId: studyContext.studyArtifactId,
+        studyParticipantId: activeParticipantId,
+        ...timerPayload,
+      };
+      try {
+        await fetch(`${timerApiBase}/api/participant/timer`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+          keepalive,
+        });
+      } catch (error) {
+        console.warn("Failed to sync timer", error);
+      }
+    },
+    [
+      activeParticipantId,
+      authToken,
+      missingStudyContext,
+      studyContext.studyArtifactId,
+      studyContext.studyId,
+      timerApiBase,
+    ],
+  );
+
+  const queueTimerSync = useCallback(
+    (timerPayload, { immediate = false, keepalive = false } = {}) => {
+      if (!timerPayload) return;
+      timerPendingStateRef.current = {
+        ...(timerPendingStateRef.current || {}),
+        ...timerPayload,
+      };
+
+      if (immediate) {
+        const payload = timerPendingStateRef.current;
+        timerPendingStateRef.current = null;
+        if (payload) {
+          syncTimerToServer(payload, keepalive);
+        }
+        return;
+      }
+
+      if (timerSyncTimeoutRef.current) return;
+      timerSyncTimeoutRef.current = setTimeout(() => {
+        const payload = timerPendingStateRef.current;
+        timerPendingStateRef.current = null;
+        timerSyncTimeoutRef.current = null;
+        if (payload) {
+          syncTimerToServer(payload, false);
+        }
+      }, 3000);
+    },
+    [syncTimerToServer],
+  );
+
+  const persistTimerState = useCallback(
+    (nextState, { immediate = false, keepalive = false } = {}) => {
+      if (!timerStorageKey) return;
+      const normalized = {
+        elapsedMs: Math.max(0, Number(nextState.elapsedMs) || 0),
+        running: Boolean(nextState.running),
+        lastStart:
+          typeof nextState.lastStart === "number" ? nextState.lastStart : null,
+        submitted: Boolean(nextState.submitted),
+      };
+      writeStoredTimer(timerStorageKey, normalized);
+      queueTimerSync(normalized, { immediate, keepalive });
+    },
+    [queueTimerSync, timerStorageKey],
+  );
+
   const updateTimerDisplay = useCallback(() => {
     const now = Date.now();
-    const delta = timerStartRef.current ? Math.max(0, now - timerStartRef.current) : 0;
+    const delta = timerStartRef.current
+      ? Math.max(0, now - timerStartRef.current)
+      : 0;
     setTimerDisplayMs(timerBaseRef.current + delta);
   }, []);
 
   const pauseTimer = useCallback(
-    (markSubmitted = false) => {
+    (markSubmitted = false, keepalive = false) => {
       if (!timerStorageKey) return;
       const now = Date.now();
-      const delta = timerStartRef.current ? Math.max(0, now - timerStartRef.current) : 0;
+      const delta = timerStartRef.current
+        ? Math.max(0, now - timerStartRef.current)
+        : 0;
       const total = timerBaseRef.current + delta;
       timerBaseRef.current = total;
       timerStartRef.current = null;
@@ -543,13 +643,21 @@ export default function ArtifactsComparison() {
       setTimerDisplayMs(total);
       const finalSubmitted =
         markSubmitted || timerStatusRef.current === "submitted";
-      setTimerStatus(finalSubmitted ? "submitted" : "paused");
-      persistTimerState({
-        elapsedMs: total,
-        running: false,
-        lastStart: null,
-        submitted: finalSubmitted,
-      });
+      const nextStatus = finalSubmitted
+        ? "submitted"
+        : total > 0
+        ? "paused"
+        : "not_started";
+      setTimerStatus(nextStatus);
+      persistTimerState(
+        {
+          elapsedMs: total,
+          running: false,
+          lastStart: null,
+          submitted: finalSubmitted,
+        },
+        { immediate: true, keepalive },
+      );
     },
     [persistTimerState, stopTimerInterval, timerStorageKey],
   );
@@ -561,54 +669,133 @@ export default function ArtifactsComparison() {
     setTimerStatus("running");
     stopTimerInterval();
     updateTimerDisplay();
-    persistTimerState({
-      elapsedMs: timerBaseRef.current,
-      running: true,
-      lastStart: now,
-      submitted: false,
-    });
-    timerIntervalRef.current = setInterval(updateTimerDisplay, 1000);
+    persistTimerState(
+      {
+        elapsedMs: timerBaseRef.current,
+        running: true,
+        lastStart: now,
+        submitted: false,
+      },
+      { immediate: true },
+    );
+    timerIntervalRef.current = setInterval(() => {
+      updateTimerDisplay();
+      const deltaNow = timerStartRef.current
+        ? Math.max(0, Date.now() - timerStartRef.current)
+        : 0;
+      queueTimerSync(
+        {
+          elapsedMs: timerBaseRef.current + deltaNow,
+          running: true,
+          lastStart: timerStartRef.current,
+          submitted: false,
+        },
+        { immediate: false },
+      );
+    }, 1000);
   }, [
     persistTimerState,
+    queueTimerSync,
     stopTimerInterval,
     submissionLocked,
     timerStorageKey,
     updateTimerDisplay,
   ]);
 
-  const hydrateTimerFromStorage = useCallback(() => {
-    if (!timerStorageKey || missingStudyContext) return;
-    const saved = readStoredTimer(timerStorageKey);
-    const now = Date.now();
-    let baseElapsed = Number(saved?.elapsedMs) || 0;
-    const submittedFlag = Boolean(saved?.submitted || submissionLocked);
-    if (!submittedFlag && saved?.running && saved?.lastStart) {
-      baseElapsed += Math.max(0, now - Number(saved.lastStart));
-    }
-
-    timerBaseRef.current = baseElapsed;
-    setTimerDisplayMs(baseElapsed);
-
-    if (submittedFlag) {
-      setTimerStatus("submitted");
-      persistTimerState({
-        elapsedMs: baseElapsed,
-        running: false,
-        lastStart: null,
-        submitted: true,
+  const fetchTimerFromServer = useCallback(async () => {
+    if (missingStudyContext) return null;
+    const token =
+      authToken ||
+      (typeof window !== "undefined"
+        ? window.localStorage.getItem("token")
+        : null);
+    if (!token) return null;
+    try {
+      const { data } = await api.get("/api/participant/timer", {
+        params: {
+          studyId: studyContext.studyId,
+          studyArtifactId: studyContext.studyArtifactId,
+          studyParticipantId: activeParticipantId || undefined,
+        },
+        headers: { Authorization: `Bearer ${token}` },
       });
-      stopTimerInterval();
+      if (data?.timer) {
+        return normalizeTimerState(data.timer);
+      }
+    } catch (error) {
+      if (error?.response?.status !== 404) {
+        console.warn("Failed to fetch timer from server", error);
+      }
+    }
+    return null;
+  }, [
+    activeParticipantId,
+    authToken,
+    missingStudyContext,
+    studyContext.studyArtifactId,
+    studyContext.studyId,
+  ]);
+
+  const hydrateTimerState = useCallback(async () => {
+    if (!timerStorageKey) return;
+    const [serverTimer] = await Promise.all([fetchTimerFromServer()]);
+    const localTimerRaw = readStoredTimer(timerStorageKey);
+    const localTimer = localTimerRaw ? normalizeTimerState(localTimerRaw) : null;
+    const source = serverTimer || localTimer;
+    if (!source) {
+      setTimerStatus("not_started");
+      setTimerDisplayMs(0);
       return;
     }
-
-    startTimer();
+    timerBaseRef.current = Math.max(0, Number(source.elapsedMs) || 0);
+    const submittedFlag = Boolean(source.submitted || submissionLocked);
+    if (submittedFlag) {
+      setTimerStatus("submitted");
+      setTimerDisplayMs(timerBaseRef.current);
+      persistTimerState(
+        {
+          elapsedMs: timerBaseRef.current,
+          running: false,
+          lastStart: null,
+          submitted: true,
+        },
+        { immediate: true },
+      );
+      return;
+    }
+    if (source.running && source.lastStart) {
+      timerStartRef.current = Number(source.lastStart);
+      setTimerStatus("running");
+      stopTimerInterval();
+      updateTimerDisplay();
+      timerIntervalRef.current = setInterval(() => {
+        updateTimerDisplay();
+        const deltaNow = timerStartRef.current
+          ? Math.max(0, Date.now() - timerStartRef.current)
+          : 0;
+        queueTimerSync(
+          {
+            elapsedMs: timerBaseRef.current + deltaNow,
+            running: true,
+            lastStart: timerStartRef.current,
+            submitted: false,
+          },
+          { immediate: false },
+        );
+      }, 1000);
+    } else {
+      timerStartRef.current = null;
+      setTimerDisplayMs(timerBaseRef.current);
+      setTimerStatus(timerBaseRef.current > 0 ? "paused" : "not_started");
+    }
   }, [
-    missingStudyContext,
+    fetchTimerFromServer,
     persistTimerState,
-    startTimer,
-    submissionLocked,
     stopTimerInterval,
+    queueTimerSync,
+    submissionLocked,
     timerStorageKey,
+    updateTimerDisplay,
   ]);
 
   useEffect(() => {
@@ -650,16 +837,21 @@ export default function ArtifactsComparison() {
 
   useEffect(() => {
     if (!timerStorageKey) return;
-    hydrateTimerFromStorage();
+    hydrateTimerState();
 
-    const onBeforeUnload = () => pauseTimer(false);
+    const onBeforeUnload = () => pauseTimer(false, true);
     window.addEventListener("beforeunload", onBeforeUnload);
 
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
-      pauseTimer(false);
+      pauseTimer(false, true);
+      stopTimerInterval();
+      if (timerSyncTimeoutRef.current) {
+        clearTimeout(timerSyncTimeoutRef.current);
+        timerSyncTimeoutRef.current = null;
+      }
     };
-  }, [hydrateTimerFromStorage, pauseTimer, timerStorageKey]);
+  }, [hydrateTimerState, pauseTimer, stopTimerInterval, timerStorageKey]);
 
   useEffect(() => {
     if (submissionLocked) {
@@ -669,11 +861,10 @@ export default function ArtifactsComparison() {
 
   // ===== GLOBAL MODES =====
   // stage1: participant labels a single bug report
-  // stage2: reviewer compares two labels (participant vs participant/AI)
   // solid: participant labels SOLID violation + complexity for a code snippet
   // patch: compare two patches and classify clone type
   // snapshot: participant decides if screenshot case is failure vs intended UI change
-  const [mode, setMode] = useState(assignedMode || "stage2");
+  const [mode, setMode] = useState(assignedMode || "stage1");
 
   useEffect(() => {
     if (assignedMode) {
@@ -713,11 +904,7 @@ export default function ArtifactsComparison() {
   const [rightSummaryStatus, setRightSummaryStatus] = useState("idle");
 
   // Labeling states for bug tasks
-  const [leftCategory, setLeftCategory] = useState(""); // participant 1 or stage1 label
-  const [rightCategory, setRightCategory] = useState(""); // participant 2 or AI label
-  const [matchCorrectness, setMatchCorrectness] = useState(""); // "correct" | "incorrect" | ""
-  const [finalCategory, setFinalCategory] = useState(""); // final choice in stage2
-  const [finalOtherCategory, setFinalOtherCategory] = useState(""); // if reviewer chooses "other"
+  const [leftCategory, setLeftCategory] = useState(""); // participant label for bug category
   const [bugCategoryOptions, setBugCategoryOptions] = useState(BUG_CATEGORIES);
 
   // SOLID mode classification
@@ -752,6 +939,10 @@ export default function ArtifactsComparison() {
   const [selectedMetadataId, setSelectedMetadataId] = useState("");
   const [metadataLoadingId, setMetadataLoadingId] = useState("");
   const [metadataPane, setMetadataPane] = useState("left");
+  const [customQuestions, setCustomQuestions] = useState([]);
+  const [customResponses, setCustomResponses] = useState({});
+  const [customArtifacts, setCustomArtifacts] = useState([]);
+  const [customActivePane, setCustomActivePane] = useState(null);
 
   const paneHasContent = useCallback((pane) => {
     if (!pane) return false;
@@ -830,6 +1021,10 @@ export default function ArtifactsComparison() {
     setAssessmentError("");
     setAssessmentSuccess("");
     setSnapshotAssets({ reference: null, failure: null, diff: null });
+    setCustomQuestions([]);
+    setCustomResponses({});
+    setCustomArtifacts([]);
+    setCustomActivePane(null);
   }, [studyContext.studyId, studyContext.studyArtifactId]);
 
   // 🔹 Initial Load
@@ -858,14 +1053,6 @@ export default function ArtifactsComparison() {
 
             if (typeof saved.leftCategory === "string")
               setLeftCategory(saved.leftCategory);
-            if (typeof saved.rightCategory === "string")
-              setRightCategory(saved.rightCategory);
-            if (typeof saved.matchCorrectness === "string")
-              setMatchCorrectness(saved.matchCorrectness);
-            if (typeof saved.finalCategory === "string")
-              setFinalCategory(saved.finalCategory);
-            if (typeof saved.finalOtherCategory === "string")
-              setFinalOtherCategory(saved.finalOtherCategory);
             if (
               Array.isArray(saved.bugCategoryOptions) &&
               saved.bugCategoryOptions.length
@@ -896,6 +1083,11 @@ export default function ArtifactsComparison() {
             if (typeof saved.assessmentComment === "string")
               setAssessmentComment(saved.assessmentComment);
 
+            if (Array.isArray(saved.customArtifacts)) setCustomArtifacts(saved.customArtifacts);
+            if (Array.isArray(saved.customQuestions)) setCustomQuestions(saved.customQuestions);
+            if (saved.customResponses && typeof saved.customResponses === "object")
+              setCustomResponses(saved.customResponses);
+
             if (saved.evaluationRatings && typeof saved.evaluationRatings === "object") {
               pendingCriteriaScoresRef.current = saved.evaluationRatings;
             }
@@ -903,7 +1095,11 @@ export default function ArtifactsComparison() {
               setCriteriaRatings(saved.evaluationStarRatings);
             }
 
-            if (paneHasContent(saved.left) || paneHasContent(saved.right)) {
+            if (
+              paneHasContent(saved.left) ||
+              paneHasContent(saved.right) ||
+              (Array.isArray(saved.customArtifacts) && saved.customArtifacts.length)
+            ) {
               setHasLocalDraft(true);
             }
           }
@@ -989,6 +1185,31 @@ export default function ArtifactsComparison() {
           setMode((prev) => (prev === serverMode ? prev : serverMode));
         }
 
+        const incomingCustomQuestions = Array.isArray(assignment.customQuestions)
+          ? assignment.customQuestions
+          : [];
+        setCustomQuestions(incomingCustomQuestions);
+        setCustomResponses((prev) => {
+          const next = {};
+          incomingCustomQuestions.forEach((q) => {
+            next[q.id] =
+              typeof prev[q.id] === "string" || typeof prev[q.id] === "number"
+                ? prev[q.id]
+                : "";
+          });
+          return next;
+        });
+
+        const incomingCustomArtifacts = Array.isArray(assignment.customArtifacts)
+          ? assignment.customArtifacts
+              .map((pane, idx) =>
+                normalizeAssignmentPane(pane, `Custom artifact ${idx + 1}`)
+              )
+              .filter(Boolean)
+          : [];
+        setCustomArtifacts(incomingCustomArtifacts);
+        setCustomActivePane(null);
+
         if (panes) {
           const leftPane = normalizeAssignmentPane(panes.left, "Researcher artifact A");
           const rightPane = normalizeAssignmentPane(panes.right, "Researcher artifact B");
@@ -1059,10 +1280,6 @@ export default function ArtifactsComparison() {
       leftSummary,
       rightSummary,
       leftCategory,
-      rightCategory,
-      matchCorrectness,
-      finalCategory,
-      finalOtherCategory,
       bugCategoryOptions,
       solidViolation,
       solidComplexity,
@@ -1074,6 +1291,9 @@ export default function ArtifactsComparison() {
       snapshotChangeType,
       snapshotChangeTypeOther,
       snapshotDiffData: snapshotAssets.diff,
+      customQuestions,
+      customResponses,
+      customArtifacts,
       assessmentComment,
       evaluationRatings: computeCriteriaScores(),
       evaluationStarRatings: criteriaRatings,
@@ -1091,10 +1311,6 @@ export default function ArtifactsComparison() {
       leftSummary,
       rightSummary,
       leftCategory,
-      rightCategory,
-      matchCorrectness,
-      finalCategory,
-      finalOtherCategory,
       bugCategoryOptions,
       solidViolation,
       solidComplexity,
@@ -1106,6 +1322,9 @@ export default function ArtifactsComparison() {
       snapshotChangeType,
       snapshotChangeTypeOther,
       snapshotAssets.diff,
+      customQuestions,
+      customResponses,
+      customArtifacts,
       assessmentComment,
       criteriaRatings,
       computeCriteriaScores,
@@ -1124,11 +1343,6 @@ export default function ArtifactsComparison() {
       if (payload.rightSummary) setRightSummary(payload.rightSummary);
       if (payload.mode && !assignedMode) setMode(payload.mode);
       if (typeof payload.leftCategory === "string") setLeftCategory(payload.leftCategory);
-      if (typeof payload.rightCategory === "string") setRightCategory(payload.rightCategory);
-      if (typeof payload.matchCorrectness === "string") setMatchCorrectness(payload.matchCorrectness);
-      if (typeof payload.finalCategory === "string") setFinalCategory(payload.finalCategory);
-      if (typeof payload.finalOtherCategory === "string")
-        setFinalOtherCategory(payload.finalOtherCategory);
       if (Array.isArray(payload.bugCategoryOptions) && payload.bugCategoryOptions.length)
         setBugCategoryOptions(payload.bugCategoryOptions);
       if (typeof payload.solidViolation === "string") setSolidViolation(payload.solidViolation);
@@ -1145,6 +1359,11 @@ export default function ArtifactsComparison() {
         setSnapshotAssets((prev) => ({ ...prev, diff: payload.snapshotDiffData }));
       }
       if (typeof payload.assessmentComment === "string") setAssessmentComment(payload.assessmentComment);
+      if (Array.isArray(payload.customArtifacts)) setCustomArtifacts(payload.customArtifacts);
+      if (Array.isArray(payload.customQuestions)) setCustomQuestions(payload.customQuestions);
+      if (payload.customResponses && typeof payload.customResponses === "object") {
+        setCustomResponses(payload.customResponses);
+      }
       if (payload.evaluationStarRatings && typeof payload.evaluationStarRatings === "object") {
         setCriteriaRatings(payload.evaluationStarRatings);
       } else if (payload.evaluationRatings && typeof payload.evaluationRatings === "object") {
@@ -2046,6 +2265,50 @@ export default function ArtifactsComparison() {
     );
   };
 
+  const renderCustomArtifactPane = (pane) => {
+    if (!pane) {
+      return (
+        <div className="text-xs text-muted-foreground">
+          Artifact missing.
+        </div>
+      );
+    }
+    if (pane.type === "image") {
+      return (
+        <img
+          src={pane.url}
+          alt={pane.name || "Artifact image"}
+          className="border rounded-md max-h-[320px] object-contain mx-auto bg-white"
+        />
+      );
+    }
+    if (pane.type === "pdf") {
+      const url = pane.url?.startsWith("data:") ? base64ToBlobUrl(pane.url) : pane.url;
+      return (
+        <object data={url} type="application/pdf" className="w-full h-[320px]">
+          <div className="text-xs text-muted-foreground text-center p-2">
+            Unable to display PDF. Download to view.
+          </div>
+        </object>
+      );
+    }
+    return (
+      <pre className="text-xs bg-white border rounded-md p-3 overflow-auto max-h-[320px] whitespace-pre-wrap">
+        {pane.text || "Text artifact attached."}
+      </pre>
+    );
+  };
+
+  const openCustomArtifactWithTools = (pane) => {
+    if (!pane) return;
+    setCustomActivePane(pane);
+    setLeftData(pane);
+    setLeftAnn([]);
+    setLeftDraw(false);
+    setLeftEditing(false);
+    setLeftSummary("");
+  };
+
   const AISummary = ({ side }) => {
     const summary = side === "left" ? leftSummary : rightSummary;
     const status = side === "left" ? leftSummaryStatus : rightSummaryStatus;
@@ -2072,9 +2335,6 @@ export default function ArtifactsComparison() {
     );
   };
 
-  const labelsMatch =
-    leftCategory && rightCategory && leftCategory === rightCategory;
-
   const currentSolidRecord =
     solidRecords.length > 0
       ? solidRecords[
@@ -2089,12 +2349,13 @@ export default function ArtifactsComparison() {
     (assignmentMode ? MODE_LABELS[assignmentMode] || assignmentMode : "");
   const allowSyncAndSwap = SYNC_SWAP_MODES.has(mode);
   const studyProgressStatus = useMemo(() => {
+    if (timerStatus === "not_started") return "not_started";
     if (submissionLocked) return "completed";
     if (hasLocalDraft || activeAssessmentId || assignmentHydratedRef.current) {
       return "in_progress";
     }
     return "not_started";
-  }, [submissionLocked, hasLocalDraft, activeAssessmentId]);
+  }, [submissionLocked, hasLocalDraft, activeAssessmentId, timerStatus]);
   const studyProgressLabel =
     studyProgressStatus === "completed"
       ? "Completed"
@@ -2106,20 +2367,27 @@ export default function ArtifactsComparison() {
       ? "Submitted"
       : timerStatus === "running"
       ? "Running"
-      : "Paused";
+      : timerStatus === "paused"
+      ? "Paused"
+      : "Not started";
   const timerDurationLabel = formatDuration(timerDisplayMs);
   const timerBadgeClass =
     timerStatus === "submitted"
       ? "border-slate-200 bg-slate-50 text-slate-700"
       : timerStatus === "running"
       ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-      : "border-amber-200 bg-amber-50 text-amber-800";
+      : timerStatus === "paused"
+      ? "border-amber-200 bg-amber-50 text-amber-800"
+      : "border-slate-200 bg-slate-50 text-slate-600";
   const timerDotClass =
     timerStatus === "submitted"
       ? "bg-slate-400"
       : timerStatus === "running"
       ? "bg-emerald-500 animate-pulse"
-      : "bg-amber-500";
+      : timerStatus === "paused"
+      ? "bg-amber-500"
+      : "bg-slate-400";
+  const formDisabled = !submissionLocked && timerStatus !== "running";
 
   const blockingReasons = [];
   if (missingStudyContext) {
@@ -2170,21 +2438,22 @@ export default function ArtifactsComparison() {
       if (!leftCategory) {
         return "Please choose a category for the bug report before saving.";
       }
-    } else if (mode === "stage2") {
-      if (!leftCategory || !rightCategory) {
-        return "Please record both participant labels first.";
+    } else if (mode === "custom") {
+      if (!customArtifacts.length) {
+        return "Researcher did not attach artifacts for this custom task.";
       }
-      if (labelsMatch) {
-        if (!matchCorrectness) {
-          return "Confirm whether the matching labels are correct.";
+      if (!customQuestions.length) {
+        return "This custom task is missing questions. Please contact your researcher.";
+      }
+      const unanswered = customQuestions.find((q) => {
+        const value = customResponses[q.id];
+        if (q.type === "answer") {
+          return !value || !String(value).trim();
         }
-        if (matchCorrectness === "incorrect" && !finalCategory) {
-          return "Select the corrected bug category.";
-        }
-      } else if (!finalCategory) {
-        return "Resolve the mismatch by selecting the final category.";
-      } else if (finalCategory === "other" && !finalOtherCategory) {
-        return "Choose which category should replace both labels.";
+        return !value;
+      });
+      if (unanswered) {
+        return `Please answer: "${unanswered.prompt}".`;
       }
     } else if (mode === "solid") {
       if (!solidViolation || !solidComplexity) {
@@ -2219,6 +2488,11 @@ export default function ArtifactsComparison() {
     setAssessmentError("");
     setAssessmentSuccess("");
 
+    if (timerStatus === "not_started" || timerStatus === "paused") {
+      setAssessmentError("Start the timer before submitting your assessment.");
+      return;
+    }
+
     if (submissionLocked) {
       setAssessmentError(
         "You've already submitted this task. Researchers are reviewing your work."
@@ -2228,16 +2502,21 @@ export default function ArtifactsComparison() {
 
     const commentText = mode === "patch" ? patchCloneComment : assessmentComment;
     const words = (commentText || "").trim().split(/\s+/).filter(Boolean);
-    if (!words.length) {
-      setAssessmentError("A comment is required to submit.");
-      return;
-    }
-    if (words.length < 20) {
-      setAssessmentError(
-        mode === "patch"
-          ? "Please provide at least 20 words explaining your clone decision."
-          : "Please provide at least 20 words in the comment."
-      );
+    if (mode !== "custom") {
+      if (!words.length) {
+        setAssessmentError("A comment is required to submit.");
+        return;
+      }
+      if (words.length < 20) {
+        setAssessmentError(
+          mode === "patch"
+            ? "Please provide at least 20 words explaining your clone decision."
+            : "Please provide at least 20 words in the comment."
+        );
+        return;
+      }
+    } else if (words.length > 0 && words.length < 5) {
+      setAssessmentError("Add at least 5 words to your optional notes or leave it blank.");
       return;
     }
 
@@ -2274,6 +2553,8 @@ export default function ArtifactsComparison() {
         ? "clone"
         : mode === "snapshot"
         ? "snapshot"
+        : mode === "custom"
+        ? "custom"
         : "bug_stage";
 
     setAssessmentSaving(true);
@@ -2308,7 +2589,7 @@ export default function ArtifactsComparison() {
           hydrateAssessmentPayload(saved.payload);
         }
         setSubmissionLocked(true);
-        pauseTimer(true);
+        pauseTimer(true, true);
       }
       setAssessmentSuccess("Assessment submitted successfully.");
     } catch (error) {
@@ -2375,9 +2656,9 @@ export default function ArtifactsComparison() {
     );
   }
 
-  return (
-    <div className="min-h-screen bg-white p-6 text-gray-900 font-sans">
-      <div className="max-w-[1400px] mx-auto space-y-6">
+    return (
+      <div className={`min-h-screen bg-white p-6 text-gray-900 font-sans ${formDisabled ? "opacity-95" : ""}`}>
+        <div className="max-w-[1400px] mx-auto space-y-6">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex flex-col gap-1">
             <span className="text-xs uppercase tracking-wide text-gray-500">
@@ -2405,17 +2686,6 @@ export default function ArtifactsComparison() {
           </div>
           <div className="flex flex-col gap-2 items-start lg:items-end">
             <div className="flex flex-wrap items-center gap-3">
-              <span
-                className={`text-xs px-2 py-1 rounded-full border ${
-                  studyProgressStatus === "completed"
-                    ? "border-emerald-200 text-emerald-700 bg-emerald-50"
-                    : studyProgressStatus === "in_progress"
-                    ? "border-amber-200 text-amber-700 bg-amber-50"
-                    : "border-slate-200 text-slate-600 bg-slate-50"
-                }`}
-              >
-                {studyProgressLabel}
-              </span>
               <div
                 className={`flex items-center gap-2 rounded-full border px-3 py-1 ${timerBadgeClass}`}
                 title="Tracks your time on this study task"
@@ -2426,10 +2696,26 @@ export default function ArtifactsComparison() {
                     Time on task
                   </span>
                   <span className="text-[11px] text-gray-600">
-                    {timerDurationLabel} • {timerStatusLabel}
+                    {timerStatus === "not_started"
+                      ? "Not started yet"
+                      : `${timerDurationLabel} - ${timerStatusLabel}`}
                   </span>
                 </div>
               </div>
+              {timerStatus !== "submitted" && timerStatus !== "running" && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => startTimer()}
+                >
+                  {timerStatus === "paused" ? "Resume timer" : "Start study counter"}
+                </Button>
+              )}
+              {formDisabled && !submissionLocked && (
+                <span className="text-[11px] text-amber-700">
+                  Start the timer to unlock this task.
+                </span>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-3 justify-end">
               {allowSyncAndSwap && (
@@ -2439,6 +2725,7 @@ export default function ArtifactsComparison() {
                       id="sync-mode"
                       checked={syncScroll}
                       onCheckedChange={(checked) => setSyncScroll(!!checked)}
+                      disabled={formDisabled}
                     />
                     <label
                       htmlFor="sync-mode"
@@ -2460,35 +2747,35 @@ export default function ArtifactsComparison() {
                       const tS = leftSummary;
                       setLeftSummary(rightSummary);
                       setRightSummary(tS);
-                      const tC = leftCategory;
-                      setLeftCategory(rightCategory);
-                      setRightCategory(tC);
                     }}
+                    disabled={formDisabled}
                   >
                     Swap Sides
                   </Button>
                 </>
               )}
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => setShowBig(true)}
-                title="Full Screen"
-              >
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
+              {(mode !== "custom" || customActivePane) && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setShowBig(true)}
+                  title="Full Screen"
                 >
-                  <polyline points="15 3 21 3 21 9" />
-                  <polyline points="9 21 3 21 3 15" />
-                  <line x1="21" y1="3" x2="14" y2="10" />
-                  <line x1="3" y1="21" x2="10" y2="14" />
-                </svg>
-              </Button>
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                  >
+                    <polyline points="15 3 21 3 21 9" />
+                    <polyline points="9 21 3 21 3 15" />
+                    <line x1="21" y1="3" x2="14" y2="10" />
+                    <line x1="3" y1="21" x2="10" y2="14" />
+                  </svg>
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -2578,6 +2865,7 @@ export default function ArtifactsComparison() {
               value={selectedMetadataId}
               onChange={(e) => handleMetadataSelection(e.target.value)}
               className="border rounded px-2 py-1 bg-white text-gray-700"
+              disabled={formDisabled}
             >
               {!selectedMetadataId && (
                 <option value="" disabled>
@@ -2602,6 +2890,7 @@ export default function ArtifactsComparison() {
                   }
                 }}
                 className="border rounded px-2 py-1 bg-white text-gray-700"
+                disabled={formDisabled}
               >
                 <option value="left">Artifact A (left)</option>
                 <option value="right">Artifact B (right)</option>
@@ -2662,63 +2951,119 @@ export default function ArtifactsComparison() {
         )}
 
         {/* MAIN VIEWER */}
-        <div className="flex border rounded-lg h-[650px] shadow-sm overflow-hidden">
-          {/* LEFT always visible */}
-          <div
-            className={`flex-1 flex flex-col min-w-0 border-r relative ${
-              mode === "stage1" || mode === "solid" ? "w-full" : "w-1/2"
-            }`}
-          >
-            <PaneToolbar
-              side="left"
-              title={
-                mode === "patch"
-                  ? "Patch A"
-                  : mode === "stage1"
-                  ? "Bug Report"
-                  : mode === "solid"
-                  ? "Violating Code (input)"
-                  : mode === "snapshot"
-                  ? "Reference / Failure / Diff (A)"
-                  : "Bug Report / Artifact A"
-              }
-            />
-            <div className="flex-1 relative overflow-hidden">
-              {renderContent(
-                "left",
-                false,
-                mode === "patch" ? rightNormSet : null
-              )}
-            </div>
-            {mode !== "patch" && <AnnotationList side="left" />}
-            <AISummary side="left" />
-          </div>
-
-          {/* RIGHT pane: Stage 2, Patch & Snapshot */}
-          {(mode === "stage2" || mode === "patch" || mode === "snapshot") && (
-            <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
+        {mode !== "custom" && (
+          <div className="flex border rounded-lg h-[650px] shadow-sm overflow-hidden">
+            {/* LEFT always visible */}
+            <div
+              className={`flex-1 flex flex-col min-w-0 border-r relative ${
+                mode === "stage1" || mode === "solid" ? "w-full" : "w-1/2"
+              }`}
+            >
               <PaneToolbar
-                side="right"
+                side="left"
                 title={
                   mode === "patch"
-                    ? "Patch B"
+                    ? "Patch A"
+                    : mode === "stage1"
+                    ? "Bug Report"
+                    : mode === "solid"
+                    ? "Violating Code (input)"
                     : mode === "snapshot"
-                    ? "Reference / Failure / Diff (B)"
-                    : "Participant 2 / AI Label Artifact"
+                    ? "Reference / Failure / Diff (A)"
+                    : "Bug Report / Artifact A"
                 }
               />
               <div className="flex-1 relative overflow-hidden">
                 {renderContent(
-                  "right",
+                  "left",
                   false,
-                  mode === "patch" ? leftNormSet : null
+                  mode === "patch" ? rightNormSet : null
                 )}
               </div>
-              {mode !== "patch" && <AnnotationList side="right" />}
-              <AISummary side="right" />
+              {mode !== "patch" && <AnnotationList side="left" />}
+              <AISummary side="left" />
             </div>
-          )}
-        </div>
+
+            {/* RIGHT pane: Patch & Snapshot */}
+            {(mode === "patch" || mode === "snapshot") && (
+              <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
+                <PaneToolbar
+                  side="right"
+                  title={
+                    mode === "patch"
+                      ? "Patch B"
+                      : mode === "snapshot"
+                      ? "Reference / Failure / Diff (B)"
+                      : "Participant 2 / AI Label Artifact"
+                  }
+                />
+                <div className="flex-1 relative overflow-hidden">
+                  {renderContent(
+                    "right",
+                    false,
+                    mode === "patch" ? leftNormSet : null
+                  )}
+                </div>
+                {mode !== "patch" && <AnnotationList side="right" />}
+                <AISummary side="right" />
+              </div>
+            )}
+          </div>
+        )}
+
+        {mode === "custom" && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-800">Attached artifacts</h3>
+              <Badge variant="outline" className="text-[11px]">
+                {customArtifacts.length} file{customArtifacts.length === 1 ? "" : "s"}
+              </Badge>
+            </div>
+            {customArtifacts.length === 0 ? (
+              <div className="text-xs text-muted-foreground border border-dashed rounded-md p-3">
+                Researcher did not attach artifacts for this custom task.
+              </div>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-2">
+                {customArtifacts.map((pane, idx) => (
+                  <Card key={pane.studyArtifactId || pane.artifactId || idx} className="overflow-hidden">
+                    <CardHeader className="space-y-1 pb-2">
+                      <CardTitle className="text-sm">
+                        {pane.name || pane.artifactName || `Artifact ${idx + 1}`}
+                      </CardTitle>
+                      {pane.fileOriginalName && (
+                        <CardDescription className="text-xs">
+                          {pane.fileOriginalName}
+                        </CardDescription>
+                      )}
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {renderCustomArtifactPane(pane)}
+                      <div className="flex justify-end">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => openCustomArtifactWithTools(pane)}
+                        >
+                          Open with tools
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+            {customActivePane && (
+              <div className="border rounded-lg shadow-sm bg-white">
+                <PaneToolbar side="left" title={customActivePane.name || customActivePane.artifactName || "Custom Artifact"} />
+                <div className="h-[500px]">
+                  {renderContent("left", false, null)}
+                </div>
+                <AnnotationList side="left" />
+              </div>
+            )}
+          </div>
+        )}
 
         {mode === "snapshot" && (
           <div className="border rounded-lg p-4 bg-gray-50 space-y-3">
@@ -2777,8 +3122,8 @@ export default function ArtifactsComparison() {
             <CardTitle className="text-lg">
               {mode === "stage1"
                 ? "Stage 1: Participant Bug Label"
-                : mode === "stage2"
-                ? "Stage 2: Reviewer Bug Label Comparison"
+                : mode === "custom"
+                ? "Custom Stage: Researcher Questions"
                 : mode === "solid"
                 ? "SOLID Violations: Code & Complexity Labeling"
                 : mode === "snapshot"
@@ -2787,7 +3132,108 @@ export default function ArtifactsComparison() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            {mode === "patch" ? (
+            {mode === "custom" ? (
+              <>
+                <p className="text-xs text-gray-500">
+                  Answer the researcher-defined questions for this custom task. Notes are optional.
+                </p>
+                <div className="space-y-4">
+                  {customQuestions.length === 0 ? (
+                    <div className="text-xs text-muted-foreground border border-dashed rounded-md p-3">
+                      No questions were configured for this task.
+                    </div>
+                  ) : (
+                    customQuestions.map((q, idx) => {
+                      const response = customResponses[q.id] ?? "";
+                      if (q.type === "answer") {
+                        return (
+                          <div className="space-y-2" key={q.id}>
+                            <Label htmlFor={`custom-answer-${q.id}`}>
+                              Q{idx + 1}. {q.prompt}
+                            </Label>
+                            <Textarea
+                              id={`custom-answer-${q.id}`}
+                              value={response}
+                              onChange={(e) =>
+                                setCustomResponses((prev) => ({
+                                  ...prev,
+                                  [q.id]: e.target.value,
+                                }))
+                              }
+                              rows={3}
+                              placeholder="Type your answer..."
+                            />
+                          </div>
+                        );
+                      }
+                      if (q.type === "dropdown") {
+                        return (
+                          <div className="space-y-2" key={q.id}>
+                            <Label>
+                              Q{idx + 1}. {q.prompt}
+                            </Label>
+                            <select
+                              value={response}
+                              onChange={(e) =>
+                                setCustomResponses((prev) => ({
+                                  ...prev,
+                                  [q.id]: e.target.value,
+                                }))
+                              }
+                              className="border rounded px-2 py-1 text-sm w-full bg-white"
+                            >
+                              <option value="">Choose an option...</option>
+                              {(q.options || []).map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      }
+                      // Default to MCQ (single select)
+                      return (
+                        <div className="space-y-2" key={q.id}>
+                          <Label>
+                            Q{idx + 1}. {q.prompt}
+                          </Label>
+                          <RadioGroup
+                            value={response}
+                            onValueChange={(v) =>
+                              setCustomResponses((prev) => ({ ...prev, [q.id]: v }))
+                            }
+                            className="flex flex-wrap gap-3"
+                            disabled={formDisabled || submissionLocked}
+                          >
+                            {(q.options || []).map((opt) => (
+                              <div key={opt} className="flex items-center space-x-2">
+                        <RadioGroupItem value={opt} id={`${q.id}-${opt}`} className={radioClass} />
+                        <Label htmlFor={`${q.id}-${opt}`}>{opt}</Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="custom-notes">Optional notes</Label>
+                  <Textarea
+                    id="custom-notes"
+                    value={assessmentComment}
+                    onChange={(e) => setAssessmentComment(e.target.value)}
+                    rows={3}
+                    placeholder="Add any context or rationale (optional)."
+                    disabled={formDisabled || submissionLocked}
+                  />
+                  {assessmentError && (
+                    <p className="text-xs text-destructive">{assessmentError}</p>
+                  )}
+                </div>
+              </>
+            ) : mode === "patch" ? (
               <>
                 <p className="text-xs text-gray-500">
                   Review the two code blocks shown above and determine whether they represent the same logical change (a clone) before answering below.
@@ -2803,6 +3249,7 @@ export default function ArtifactsComparison() {
                       }
                     }}
                     className="flex flex-wrap gap-4 mt-1"
+                    disabled={formDisabled || submissionLocked}
                   >
                     <div className="flex items-center space-x-2">
                       <RadioGroupItem
@@ -2834,6 +3281,7 @@ export default function ArtifactsComparison() {
                       value={patchCloneType}
                       onChange={(e) => setPatchCloneType(e.target.value)}
                       className="border rounded px-2 py-1 text-sm w-full bg-white"
+                      disabled={formDisabled || submissionLocked}
                     >
                       <option value="">Choose clone type...</option>
                       {PATCH_CLONE_TYPES.map((t) => (
@@ -2859,44 +3307,7 @@ export default function ArtifactsComparison() {
                     onChange={(e) => setPatchCloneComment(e.target.value)}
                     rows={3}
                     placeholder="E.g., 'Both patches change the same API call and condition, only variable names differ, so Type-2.'"
-                  />
-                  {assessmentError && (
-                    <p className="text-xs text-destructive">{assessmentError}</p>
-                  )}
-                </div>
-              </>
-            ) : mode === "stage1" ? (
-              <>
-                <div className="space-y-2">
-                  <Label>Select bug category for this report</Label>
-                  <select
-                    value={leftCategory}
-                    onChange={(e) => setLeftCategory(e.target.value)}
-                    className="border rounded px-2 py-1 text-sm w-full bg-white"
-                  >
-                    <option value="">Choose category...</option>
-                    {bugCategoryOptions.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[11px] text-gray-400">
-                    Participant labels the bug report using the provided
-                    taxonomy.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="overall-comment-stage1">
-                    Optional comment (why did you choose this category?)
-                  </Label>
-                  <Textarea
-                    id="overall-comment-stage1"
-                    value={assessmentComment}
-                    onChange={(e) => setAssessmentComment(e.target.value)}
-                    rows={3}
-                    placeholder="E.g., 'The description mentions UI layout breaking after resize, so I chose GUI.'"
+                    disabled={formDisabled || submissionLocked}
                   />
                   {assessmentError && (
                     <p className="text-xs text-destructive">{assessmentError}</p>
@@ -2911,6 +3322,7 @@ export default function ArtifactsComparison() {
                     value={solidViolation}
                     onChange={(e) => setSolidViolation(e.target.value)}
                     className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    disabled={formDisabled || submissionLocked}
                   >
                     <option value="">Choose violation...</option>
                     {SOLID_VIOLATIONS.map((v) => (
@@ -2931,6 +3343,7 @@ export default function ArtifactsComparison() {
                     value={solidComplexity}
                     onValueChange={setSolidComplexity}
                     className="flex flex-wrap gap-4 mt-1"
+                    disabled={formDisabled || submissionLocked}
                   >
                     {COMPLEXITY_LEVELS.map((lvl) => (
                       <div
@@ -2964,6 +3377,7 @@ export default function ArtifactsComparison() {
                     onChange={(e) => setSolidFixedCode(e.target.value)}
                     rows={6}
                     placeholder="Paste or write a refactored version that no longer violates the chosen principle (optional)."
+                    disabled={formDisabled || submissionLocked}
                   />
                 </div>
 
@@ -2977,6 +3391,7 @@ export default function ArtifactsComparison() {
                   onChange={(e) => setAssessmentComment(e.target.value)}
                   rows={3}
                   placeholder="E.g., 'Class handles both persistence and business logic, so SRP is violated; refactoring requires splitting responsibilities, so I marked it MEDIUM.'"
+                  disabled={formDisabled || submissionLocked}
                 />
                 {assessmentError && (
                   <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3018,6 +3433,7 @@ export default function ArtifactsComparison() {
                     value={snapshotOutcome}
                     onValueChange={setSnapshotOutcome}
                     className="flex flex-wrap gap-4 mt-1"
+                    disabled={formDisabled || submissionLocked}
                   >
                     {SNAPSHOT_OUTCOMES.map((o) => (
                       <div
@@ -3048,6 +3464,7 @@ export default function ArtifactsComparison() {
                     value={snapshotChangeType}
                     onChange={(e) => setSnapshotChangeType(e.target.value)}
                     className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    disabled={formDisabled || submissionLocked}
                   >
                     <option value="">Choose change type...</option>
                     {SNAPSHOT_CHANGE_TYPES.map((t) => (
@@ -3062,6 +3479,7 @@ export default function ArtifactsComparison() {
                       onChange={(e) => setSnapshotChangeTypeOther(e.target.value)}
                       className="border rounded px-2 py-1 text-sm w-full"
                       placeholder="Describe the UI change"
+                      disabled={formDisabled || submissionLocked}
                     />
                   )}
                   <p className="text-[11px] text-gray-400">
@@ -3081,6 +3499,7 @@ export default function ArtifactsComparison() {
                   onChange={(e) => setAssessmentComment(e.target.value)}
                   rows={3}
                   placeholder="E.g., 'Layout change matches updated design specs, text and icons align with new style guide, so this is an intended UI change.'"
+                  disabled={formDisabled || submissionLocked}
                 />
                 {assessmentError && (
                   <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3089,168 +3508,38 @@ export default function ArtifactsComparison() {
               </>
             ) : (
               <>
-                {/* Stage 2: Reviewer sees two labels */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Participant 1 Label (Artifact A)</Label>
-                    <select
-                      value={leftCategory}
-                      onChange={(e) => setLeftCategory(e.target.value)}
-                      className="border rounded px-2 py-1 text-sm w-full bg-white"
-                    >
-                      <option value="">Select...</option>
-                      {bugCategoryOptions.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Participant 2 / AI Label (Artifact B)</Label>
-                    <select
-                      value={rightCategory}
-                      onChange={(e) => setRightCategory(e.target.value)}
-                      className="border rounded px-2 py-1 text-sm w-full bg-white"
-                    >
-                      <option value="">Select...</option>
-                      {bugCategoryOptions.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div className="space-y-2">
+                  <Label>Select bug category for this report</Label>
+                  <select
+                    value={leftCategory}
+                    onChange={(e) => setLeftCategory(e.target.value)}
+                    className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    disabled={formDisabled || submissionLocked}
+                  >
+                    <option value="">Choose category...</option>
+                    {bugCategoryOptions.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-gray-400">
+                    Participant labels the bug report using the provided
+                    taxonomy.
+                  </p>
                 </div>
 
-                {leftCategory && rightCategory && (
-                  <>
-                    {labelsMatch ? (
-                      <div className="space-y-3">
-                        <div className="space-y-1">
-                          <Label>
-                            The two labels match ({leftCategory}). Is this
-                            category correct?
-                          </Label>
-                          <RadioGroup
-                            value={matchCorrectness}
-                            onValueChange={(v) => {
-                              setMatchCorrectness(v);
-                              if (v === "correct") {
-                                setFinalCategory(leftCategory);
-                                setFinalOtherCategory("");
-                              } else {
-                                setFinalCategory("");
-                                setFinalOtherCategory("");
-                              }
-                            }}
-                            className="flex gap-4 mt-1"
-                          >
-                            <div className="flex items-center space-x-2">
-                              <RadioGroupItem
-                                value="correct"
-                                id="match-correct"
-                                className={radioClass}
-                              />
-                              <Label htmlFor="match-correct">Correct</Label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <RadioGroupItem
-                                value="incorrect"
-                                id="match-incorrect"
-                                className={radioClass}
-                              />
-                              <Label htmlFor="match-incorrect">
-                                Incorrect
-                              </Label>
-                            </div>
-                          </RadioGroup>
-                        </div>
-
-                        {matchCorrectness === "incorrect" && (
-                          <div className="space-y-2">
-                            <Label>Select the correct category</Label>
-                            <select
-                              value={finalCategory}
-                              onChange={(e) => {
-                                setFinalCategory(e.target.value);
-                                setFinalOtherCategory("");
-                              }}
-                              className="border rounded px-2 py-1 text-sm w-full bg-white"
-                            >
-                              <option value="">Choose category...</option>
-                              {bugCategoryOptions.map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        <Label>
-                          The labels differ ({leftCategory} vs {rightCategory}).
-                          Choose a final category:
-                        </Label>
-                        <select
-                          value={finalCategory}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setFinalCategory(val);
-                            if (val !== "other") {
-                              setFinalOtherCategory("");
-                            }
-                          }}
-                          className="border rounded px-2 py-1 text-sm w-full bg-white"
-                        >
-                          <option value="">Select...</option>
-                          <option value={leftCategory}>
-                            Accept Participant 1: {leftCategory}
-                          </option>
-                          <option value={rightCategory}>
-                            Accept Participant 2 / AI: {rightCategory}
-                          </option>
-                          <option value="other">
-                            Neither – choose another category
-                          </option>
-                        </select>
-
-                        {finalCategory === "other" && (
-                          <div className="space-y-2">
-                            <Label>Choose alternative category</Label>
-                            <select
-                              value={finalOtherCategory}
-                              onChange={(e) =>
-                                setFinalOtherCategory(e.target.value)
-                              }
-                              className="border rounded px-2 py-1 text-sm w-full bg-white"
-                            >
-                              <option value="">Select...</option>
-                              {bugCategoryOptions.map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-
                 <div className="space-y-2">
-                  <Label htmlFor="overall-comment-stage2">
-                    Reviewer notes (brief explanation of your decision)
+                  <Label htmlFor="overall-comment-stage1">
+                    Optional comment (why did you choose this category?)
                   </Label>
                   <Textarea
-                    id="overall-comment-stage2"
+                    id="overall-comment-stage1"
                     value={assessmentComment}
                     onChange={(e) => setAssessmentComment(e.target.value)}
                     rows={3}
-                    placeholder="E.g., 'Although both labeled it as Performance, the description mentions incorrect configuration of environment variables, so I chose Configuration.'"
+                    placeholder="E.g., 'The description mentions UI layout breaking after resize, so I chose GUI.'"
+                    disabled={formDisabled || submissionLocked}
                   />
                   {assessmentError && (
                     <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3288,20 +3577,29 @@ export default function ArtifactsComparison() {
                               key={value}
                               type="button"
                               className="p-1"
+                              disabled={formDisabled || submissionLocked}
                               onMouseEnter={() =>
-                                setCriteriaHover((prev) => ({
-                                  ...prev,
-                                  [criterion.label]: value,
-                                }))
+                                (formDisabled || submissionLocked
+                                  ? undefined
+                                  : setCriteriaHover((prev) => ({
+                                      ...prev,
+                                      [criterion.label]: value,
+                                    })))
                               }
                               onMouseLeave={() =>
-                                setCriteriaHover((prev) => {
-                                  const next = { ...prev };
-                                  delete next[criterion.label];
-                                  return next;
-                                })
+                                (formDisabled || submissionLocked
+                                  ? undefined
+                                  : setCriteriaHover((prev) => {
+                                      const next = { ...prev };
+                                      delete next[criterion.label];
+                                      return next;
+                                    }))
                               }
-                              onClick={() => handleCriteriaRating(criterion.label, value)}
+                              onClick={() =>
+                                !formDisabled &&
+                                !submissionLocked &&
+                                handleCriteriaRating(criterion.label, value)
+                              }
                             >
                               <Star
                                 className={
@@ -3333,7 +3631,10 @@ export default function ArtifactsComparison() {
                 className="bg-black text-white hover:bg-gray-800"
                 onClick={handleSaveAssessment}
                 disabled={
-                  assessmentSaving || submissionLocked || !hasAssignmentContext
+                  assessmentSaving ||
+                  submissionLocked ||
+                  !hasAssignmentContext ||
+                  formDisabled
                 }
               >
                 {submissionLocked
@@ -3386,7 +3687,7 @@ export default function ArtifactsComparison() {
         )}
 
         {/* Fullscreen mode */}
-        {showBig && (
+        {showBig && (mode !== "custom" || customActivePane) && (
           <div className="fixed inset-0 z-50 bg-white flex flex-col animate-in fade-in duration-200">
             <div className="border-b p-4 flex justify-between items-center bg-gray-50">
               <h2 className="font-bold text-lg">Full Screen View</h2>
@@ -3397,7 +3698,7 @@ export default function ArtifactsComparison() {
             <div className="flex-1 flex overflow-hidden">
               <div
                 className={`flex-1 flex flex-col min-w-0 border-r relative ${
-                  mode === "stage1" || mode === "solid" ? "w-full" : "w-1/2"
+                  mode === "stage1" || mode === "solid" || mode === "custom" ? "w-full" : "w-1/2"
                 }`}
               >
                 <PaneToolbar
@@ -3405,13 +3706,15 @@ export default function ArtifactsComparison() {
                   title={
                     mode === "patch"
                       ? "Patch A"
-                      : mode === "stage1"
-                      ? "Bug Report"
-                      : mode === "solid"
-                      ? "Violating Code (input)"
-                      : mode === "snapshot"
-                      ? "Reference / Failure / Diff (A)"
-                      : "Bug Report / Artifact A"
+                    : mode === "stage1"
+                    ? "Bug Report"
+                    : mode === "solid"
+                    ? "Violating Code (input)"
+                    : mode === "snapshot"
+                    ? "Reference / Failure / Diff (A)"
+                    : mode === "custom"
+                    ? "Custom Artifact"
+                    : "Bug Report / Artifact A"
                   }
                 />
                 <div className="flex-1 relative overflow-hidden">
@@ -3424,7 +3727,7 @@ export default function ArtifactsComparison() {
                 {mode !== "patch" && <AnnotationList side="left" />}
                 <AISummary side="left" />
               </div>
-              {(mode === "stage2" || mode === "patch" || mode === "snapshot") && (
+              {(mode === "patch" || mode === "snapshot") && (
                 <div className="flex-1 w-1/2 flex flex-col min-w-0 relative">
                   <PaneToolbar
                     side="right"
