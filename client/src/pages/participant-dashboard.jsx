@@ -822,13 +822,6 @@ export default function ParticipantDashboard() {
                       </div>
 
                       <div className="grid gap-4 md:grid-cols-3">
-                        {isGuest ? null : (
-                          <div className="space-y-1">
-                            <p className="text-sm font-medium">Competency assessment</p>
-                            <p className="text-sm text-muted-foreground">{competency.statusLabel || "Not assigned"}</p>
-                            <Progress value={clampPercent(competency.completionPercent)} className="h-2" />
-                          </div>
-                        )}
                         <div className="space-y-1">
                           <p className="text-sm font-medium">Artifact submissions</p>
                           <p className="text-sm text-muted-foreground">{artifactTotals} submitted</p>
