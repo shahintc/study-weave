@@ -18,11 +18,12 @@ import {
   DropdownMenuTrigger,
   DropdownMenuCheckboxItem
 } from "@/components/ui/dropdown-menu";
-import { IconPlus, IconBolt, IconX } from "@tabler/icons-react";
+import { IconPlus, IconBolt, IconX, IconSquarePlus } from "@tabler/icons-react";
 import api from '@/api/axios';
 import { ManageModal } from '@/pages/artifactManagement/ManageModal';
 import { DetailedUploadModal } from '@/pages/artifactManagement/DetailedUploadModal';
 import { GenerateArtifactModal } from "./GenerateArtifactModal"; // Assuming this is also used for collections
+import { SelectArtifactModal } from "./SelectArtifactModal"; // Import the new modal
 
 export function ViewCollectionModal({ isOpen, setIsOpen, collectionId, currentUserId, onCollectionUpdated, onCollectionDeleted }) {
   const [collection, setCollection] = useState(null);
@@ -33,6 +34,7 @@ export function ViewCollectionModal({ isOpen, setIsOpen, collectionId, currentUs
   const [artifactToManage, setArtifactToManage] = useState(null);
   const [isNewArtifactModalOpen, setIsNewArtifactModalOpen] = useState(false); // For adding new artifact to collection
   const [isGenerateArtifactModalOpen, setIsGenerateArtifactModalOpen] = useState(false);
+  const [isSelectArtifactModalOpen, setIsSelectArtifactModalOpen] = useState(false); // State for SelectArtifactModal
 
   // Filter states for artifacts within the collection
   const [selectedType, setSelectedType] = useState(null);
@@ -185,6 +187,14 @@ export function ViewCollectionModal({ isOpen, setIsOpen, collectionId, currentUs
               <h3 className="text-lg font-semibold">Artifacts in Collection ({collection.artifacts?.length || 0})</h3>
               <div className="flex gap-2">
                 <Button
+                  onClick={() => setIsSelectArtifactModalOpen(true)}
+                  className="flex items-center gap-2"
+                  size="sm"
+                >
+                  <IconSquarePlus className="h-4 w-4" />
+                  Add Existing
+                </Button>
+                <Button
                   onClick={() => setIsNewArtifactModalOpen(true)}
                   className="flex items-center gap-2"
                   size="sm"
@@ -200,7 +210,6 @@ export function ViewCollectionModal({ isOpen, setIsOpen, collectionId, currentUs
                   <IconBolt className="h-4 w-4" />
                   Generate New Artifact
                 </Button>
-                {/* Potentially add a button here to add existing artifacts */}
               </div>
             </div>
 
@@ -341,6 +350,18 @@ export function ViewCollectionModal({ isOpen, setIsOpen, collectionId, currentUs
       onGenerateSuccess={handleAddArtifactSuccess}
       currentUserId={currentUserId}
       collectionId={collectionId} // Pass collection ID to associate new artifact
+    />
+    <SelectArtifactModal
+      isOpen={isSelectArtifactModalOpen}
+      setIsOpen={setIsSelectArtifactModalOpen}
+      onClose={() => {
+        setIsSelectArtifactModalOpen(false);
+        fetchCollectionDetails(); // Re-fetch collection to update its artifact list
+        if (onCollectionUpdated) onCollectionUpdated(); // Notify parent
+      }}
+      currentUserId={currentUserId}
+      collectionId={collectionId}
+      existingArtifactIdsInCollection={collection?.artifacts?.map(a => a.id) || []}
     />
   </Dialog>
 );

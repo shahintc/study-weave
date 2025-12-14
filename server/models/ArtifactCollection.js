@@ -340,6 +340,86 @@ class ArtifactCollection {
       throw error;
     }
   }
+
+  // Method to add multiple artifacts to a collection
+  static async addMultipleArtifactsToCollection(collectionId, userId, artifactIds) {
+    if (!Array.isArray(artifactIds) || artifactIds.length === 0) {
+      throw new Error('An array of artifactIds is required.');
+    }
+
+    try {
+      const collection = await SequelizeArtifactCollection.findOne({
+        where: { id: collectionId, userId },
+      });
+
+      if (!collection) {
+        throw new Error('Collection not found or not owned by user.');
+      }
+
+      // Find artifacts, ensuring they belong to the same user and are not already in the collection
+      const existingArtifactAssociations = await collection.getArtifacts({
+        where: { id: artifactIds },
+        attributes: ['id']
+      });
+      const existingArtifactIdSet = new Set(existingArtifactAssociations.map(art => art.id));
+
+      const newArtifactsToAdd = await Artifact.findAll({
+        where: {
+          id: artifactIds.filter(id => !existingArtifactIdSet.has(id)), // Filter out already associated artifacts
+          userId: userId, // Ensure artifacts belong to the same user
+        },
+      });
+
+      if (newArtifactsToAdd.length === 0 && artifactIds.length > 0) {
+        // If no new artifacts were found but IDs were provided, it means all were already associated
+        // Or provided IDs did not belong to the user
+        const requestedArtifactsNotFoundOrNotOwned = artifactIds.filter(id =>
+          !existingArtifactIdSet.has(id) && !newArtifactsToAdd.some(art => art.id === id)
+        );
+        if (requestedArtifactsNotFoundOrNotOwned.length > 0) {
+            throw new Error('One or more artifacts not found or do not belong to the user.');
+        }
+      }
+
+      if (newArtifactsToAdd.length > 0) {
+        await collection.addArtifacts(newArtifactsToAdd);
+      }
+      
+      // Re-fetch the collection with updated artifacts for the response
+      const updatedCollection = await SequelizeArtifactCollection.findOne({
+        where: { id: collectionId },
+        include: [{
+          model: Artifact,
+          as: 'artifacts',
+          attributes: ['id', 'name', 'type', 'fileMimeType', 'fileOriginalName', 'createdAt'],
+          through: { attributes: [] },
+          include: [{
+            model: Tag,
+            as: 'tags',
+            attributes: ['id', 'name'],
+            through: { attributes: [] }
+          }]
+        }],
+      });
+
+      const plainCollection = updatedCollection.get({ plain: true });
+      return {
+        ...plainCollection,
+        artifacts: plainCollection.artifacts ? plainCollection.artifacts.map(art => ({
+          id: art.id,
+          name: art.name,
+          type: art.type,
+          fileMimeType: art.fileMimeType,
+          fileOriginalName: art.fileOriginalName,
+          createdAt: art.createdAt,
+          tags: art.tags ? art.tags.map(tag => ({ id: tag.id, name: tag.name })) : [],
+        })) : [],
+      };
+    } catch (error) {
+      console.error(`Error adding multiple artifacts to collection ${collectionId}:`, error);
+      throw error;
+    }
+  }
 }
 
 module.exports = ArtifactCollection;
