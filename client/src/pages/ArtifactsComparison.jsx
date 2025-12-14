@@ -245,6 +245,17 @@ const numberLines = (text) => {
     .join("\n");
 };
 
+const normalizeTimerState = (timer = {}) => {
+  const elapsedMs = Math.max(0, Number(timer.elapsedMs) || 0);
+  const lastStart = Number(timer.lastStart);
+  return {
+    elapsedMs,
+    running: Boolean(timer.running),
+    submitted: Boolean(timer.submitted),
+    lastStart: Number.isFinite(lastStart) ? lastStart : null,
+  };
+};
+
 const formatBugReportText = (report) => {
   if (typeof report === "string") return report;
   if (!report || typeof report !== "object") {
@@ -455,11 +466,13 @@ export default function ArtifactsComparison() {
   const [hasLocalDraft, setHasLocalDraft] = useState(false);
   const [submissionLocked, setSubmissionLocked] = useState(false);
   const [timerDisplayMs, setTimerDisplayMs] = useState(0);
-  const [timerStatus, setTimerStatus] = useState("paused"); // running | paused | submitted
+  const [timerStatus, setTimerStatus] = useState("not_started"); // not_started | running | paused | submitted
   const timerStartRef = useRef(null);
   const timerIntervalRef = useRef(null);
   const timerBaseRef = useRef(0);
-  const timerStatusRef = useRef("paused");
+  const timerStatusRef = useRef("not_started");
+  const timerSyncTimeoutRef = useRef(null);
+  const timerPendingStateRef = useRef(null);
 
   const activeParticipantId =
     resolvedStudyParticipantId ||
@@ -475,6 +488,10 @@ export default function ArtifactsComparison() {
         studyParticipantId: activeParticipantId,
       }),
     [activeParticipantId, studyContext.studyArtifactId, studyContext.studyId]
+  );
+  const timerApiBase = useMemo(
+    () => (api?.defaults?.baseURL ? api.defaults.baseURL.replace(/\/$/, "") : ""),
+    []
   );
 
   useEffect(() => {
@@ -512,14 +529,6 @@ export default function ArtifactsComparison() {
     [evaluationCriteria],
   );
 
-  const persistTimerState = useCallback(
-    (nextState) => {
-      if (!timerStorageKey) return;
-      writeStoredTimer(timerStorageKey, nextState);
-    },
-    [timerStorageKey],
-  );
-
   const stopTimerInterval = useCallback(() => {
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
@@ -527,17 +536,106 @@ export default function ArtifactsComparison() {
     }
   }, []);
 
+  const syncTimerToServer = useCallback(
+    async (timerPayload, keepalive = false) => {
+      if (missingStudyContext) return;
+      const token =
+        authToken ||
+        (typeof window !== "undefined"
+          ? window.localStorage.getItem("token")
+          : null);
+      if (!token) return;
+      const body = {
+        studyId: studyContext.studyId,
+        studyArtifactId: studyContext.studyArtifactId,
+        studyParticipantId: activeParticipantId,
+        ...timerPayload,
+      };
+      try {
+        await fetch(`${timerApiBase}/api/participant/timer`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(body),
+          keepalive,
+        });
+      } catch (error) {
+        console.warn("Failed to sync timer", error);
+      }
+    },
+    [
+      activeParticipantId,
+      authToken,
+      missingStudyContext,
+      studyContext.studyArtifactId,
+      studyContext.studyId,
+      timerApiBase,
+    ],
+  );
+
+  const queueTimerSync = useCallback(
+    (timerPayload, { immediate = false, keepalive = false } = {}) => {
+      if (!timerPayload) return;
+      timerPendingStateRef.current = {
+        ...(timerPendingStateRef.current || {}),
+        ...timerPayload,
+      };
+
+      if (immediate) {
+        const payload = timerPendingStateRef.current;
+        timerPendingStateRef.current = null;
+        if (payload) {
+          syncTimerToServer(payload, keepalive);
+        }
+        return;
+      }
+
+      if (timerSyncTimeoutRef.current) return;
+      timerSyncTimeoutRef.current = setTimeout(() => {
+        const payload = timerPendingStateRef.current;
+        timerPendingStateRef.current = null;
+        timerSyncTimeoutRef.current = null;
+        if (payload) {
+          syncTimerToServer(payload, false);
+        }
+      }, 3000);
+    },
+    [syncTimerToServer],
+  );
+
+  const persistTimerState = useCallback(
+    (nextState, { immediate = false, keepalive = false } = {}) => {
+      if (!timerStorageKey) return;
+      const normalized = {
+        elapsedMs: Math.max(0, Number(nextState.elapsedMs) || 0),
+        running: Boolean(nextState.running),
+        lastStart:
+          typeof nextState.lastStart === "number" ? nextState.lastStart : null,
+        submitted: Boolean(nextState.submitted),
+      };
+      writeStoredTimer(timerStorageKey, normalized);
+      queueTimerSync(normalized, { immediate, keepalive });
+    },
+    [queueTimerSync, timerStorageKey],
+  );
+
   const updateTimerDisplay = useCallback(() => {
     const now = Date.now();
-    const delta = timerStartRef.current ? Math.max(0, now - timerStartRef.current) : 0;
+    const delta = timerStartRef.current
+      ? Math.max(0, now - timerStartRef.current)
+      : 0;
     setTimerDisplayMs(timerBaseRef.current + delta);
   }, []);
 
   const pauseTimer = useCallback(
-    (markSubmitted = false) => {
+    (markSubmitted = false, keepalive = false) => {
       if (!timerStorageKey) return;
       const now = Date.now();
-      const delta = timerStartRef.current ? Math.max(0, now - timerStartRef.current) : 0;
+      const delta = timerStartRef.current
+        ? Math.max(0, now - timerStartRef.current)
+        : 0;
       const total = timerBaseRef.current + delta;
       timerBaseRef.current = total;
       timerStartRef.current = null;
@@ -545,13 +643,21 @@ export default function ArtifactsComparison() {
       setTimerDisplayMs(total);
       const finalSubmitted =
         markSubmitted || timerStatusRef.current === "submitted";
-      setTimerStatus(finalSubmitted ? "submitted" : "paused");
-      persistTimerState({
-        elapsedMs: total,
-        running: false,
-        lastStart: null,
-        submitted: finalSubmitted,
-      });
+      const nextStatus = finalSubmitted
+        ? "submitted"
+        : total > 0
+        ? "paused"
+        : "not_started";
+      setTimerStatus(nextStatus);
+      persistTimerState(
+        {
+          elapsedMs: total,
+          running: false,
+          lastStart: null,
+          submitted: finalSubmitted,
+        },
+        { immediate: true, keepalive },
+      );
     },
     [persistTimerState, stopTimerInterval, timerStorageKey],
   );
@@ -563,54 +669,133 @@ export default function ArtifactsComparison() {
     setTimerStatus("running");
     stopTimerInterval();
     updateTimerDisplay();
-    persistTimerState({
-      elapsedMs: timerBaseRef.current,
-      running: true,
-      lastStart: now,
-      submitted: false,
-    });
-    timerIntervalRef.current = setInterval(updateTimerDisplay, 1000);
+    persistTimerState(
+      {
+        elapsedMs: timerBaseRef.current,
+        running: true,
+        lastStart: now,
+        submitted: false,
+      },
+      { immediate: true },
+    );
+    timerIntervalRef.current = setInterval(() => {
+      updateTimerDisplay();
+      const deltaNow = timerStartRef.current
+        ? Math.max(0, Date.now() - timerStartRef.current)
+        : 0;
+      queueTimerSync(
+        {
+          elapsedMs: timerBaseRef.current + deltaNow,
+          running: true,
+          lastStart: timerStartRef.current,
+          submitted: false,
+        },
+        { immediate: false },
+      );
+    }, 1000);
   }, [
     persistTimerState,
+    queueTimerSync,
     stopTimerInterval,
     submissionLocked,
     timerStorageKey,
     updateTimerDisplay,
   ]);
 
-  const hydrateTimerFromStorage = useCallback(() => {
-    if (!timerStorageKey || missingStudyContext) return;
-    const saved = readStoredTimer(timerStorageKey);
-    const now = Date.now();
-    let baseElapsed = Number(saved?.elapsedMs) || 0;
-    const submittedFlag = Boolean(saved?.submitted || submissionLocked);
-    if (!submittedFlag && saved?.running && saved?.lastStart) {
-      baseElapsed += Math.max(0, now - Number(saved.lastStart));
-    }
-
-    timerBaseRef.current = baseElapsed;
-    setTimerDisplayMs(baseElapsed);
-
-    if (submittedFlag) {
-      setTimerStatus("submitted");
-      persistTimerState({
-        elapsedMs: baseElapsed,
-        running: false,
-        lastStart: null,
-        submitted: true,
+  const fetchTimerFromServer = useCallback(async () => {
+    if (missingStudyContext) return null;
+    const token =
+      authToken ||
+      (typeof window !== "undefined"
+        ? window.localStorage.getItem("token")
+        : null);
+    if (!token) return null;
+    try {
+      const { data } = await api.get("/api/participant/timer", {
+        params: {
+          studyId: studyContext.studyId,
+          studyArtifactId: studyContext.studyArtifactId,
+          studyParticipantId: activeParticipantId || undefined,
+        },
+        headers: { Authorization: `Bearer ${token}` },
       });
-      stopTimerInterval();
+      if (data?.timer) {
+        return normalizeTimerState(data.timer);
+      }
+    } catch (error) {
+      if (error?.response?.status !== 404) {
+        console.warn("Failed to fetch timer from server", error);
+      }
+    }
+    return null;
+  }, [
+    activeParticipantId,
+    authToken,
+    missingStudyContext,
+    studyContext.studyArtifactId,
+    studyContext.studyId,
+  ]);
+
+  const hydrateTimerState = useCallback(async () => {
+    if (!timerStorageKey) return;
+    const [serverTimer] = await Promise.all([fetchTimerFromServer()]);
+    const localTimerRaw = readStoredTimer(timerStorageKey);
+    const localTimer = localTimerRaw ? normalizeTimerState(localTimerRaw) : null;
+    const source = serverTimer || localTimer;
+    if (!source) {
+      setTimerStatus("not_started");
+      setTimerDisplayMs(0);
       return;
     }
-
-    startTimer();
+    timerBaseRef.current = Math.max(0, Number(source.elapsedMs) || 0);
+    const submittedFlag = Boolean(source.submitted || submissionLocked);
+    if (submittedFlag) {
+      setTimerStatus("submitted");
+      setTimerDisplayMs(timerBaseRef.current);
+      persistTimerState(
+        {
+          elapsedMs: timerBaseRef.current,
+          running: false,
+          lastStart: null,
+          submitted: true,
+        },
+        { immediate: true },
+      );
+      return;
+    }
+    if (source.running && source.lastStart) {
+      timerStartRef.current = Number(source.lastStart);
+      setTimerStatus("running");
+      stopTimerInterval();
+      updateTimerDisplay();
+      timerIntervalRef.current = setInterval(() => {
+        updateTimerDisplay();
+        const deltaNow = timerStartRef.current
+          ? Math.max(0, Date.now() - timerStartRef.current)
+          : 0;
+        queueTimerSync(
+          {
+            elapsedMs: timerBaseRef.current + deltaNow,
+            running: true,
+            lastStart: timerStartRef.current,
+            submitted: false,
+          },
+          { immediate: false },
+        );
+      }, 1000);
+    } else {
+      timerStartRef.current = null;
+      setTimerDisplayMs(timerBaseRef.current);
+      setTimerStatus(timerBaseRef.current > 0 ? "paused" : "not_started");
+    }
   }, [
-    missingStudyContext,
+    fetchTimerFromServer,
     persistTimerState,
-    startTimer,
-    submissionLocked,
     stopTimerInterval,
+    queueTimerSync,
+    submissionLocked,
     timerStorageKey,
+    updateTimerDisplay,
   ]);
 
   useEffect(() => {
@@ -652,16 +837,21 @@ export default function ArtifactsComparison() {
 
   useEffect(() => {
     if (!timerStorageKey) return;
-    hydrateTimerFromStorage();
+    hydrateTimerState();
 
-    const onBeforeUnload = () => pauseTimer(false);
+    const onBeforeUnload = () => pauseTimer(false, true);
     window.addEventListener("beforeunload", onBeforeUnload);
 
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
-      pauseTimer(false);
+      pauseTimer(false, true);
+      stopTimerInterval();
+      if (timerSyncTimeoutRef.current) {
+        clearTimeout(timerSyncTimeoutRef.current);
+        timerSyncTimeoutRef.current = null;
+      }
     };
-  }, [hydrateTimerFromStorage, pauseTimer, timerStorageKey]);
+  }, [hydrateTimerState, pauseTimer, stopTimerInterval, timerStorageKey]);
 
   useEffect(() => {
     if (submissionLocked) {
@@ -2159,12 +2349,13 @@ export default function ArtifactsComparison() {
     (assignmentMode ? MODE_LABELS[assignmentMode] || assignmentMode : "");
   const allowSyncAndSwap = SYNC_SWAP_MODES.has(mode);
   const studyProgressStatus = useMemo(() => {
+    if (timerStatus === "not_started") return "not_started";
     if (submissionLocked) return "completed";
     if (hasLocalDraft || activeAssessmentId || assignmentHydratedRef.current) {
       return "in_progress";
     }
     return "not_started";
-  }, [submissionLocked, hasLocalDraft, activeAssessmentId]);
+  }, [submissionLocked, hasLocalDraft, activeAssessmentId, timerStatus]);
   const studyProgressLabel =
     studyProgressStatus === "completed"
       ? "Completed"
@@ -2176,20 +2367,27 @@ export default function ArtifactsComparison() {
       ? "Submitted"
       : timerStatus === "running"
       ? "Running"
-      : "Paused";
+      : timerStatus === "paused"
+      ? "Paused"
+      : "Not started";
   const timerDurationLabel = formatDuration(timerDisplayMs);
   const timerBadgeClass =
     timerStatus === "submitted"
       ? "border-slate-200 bg-slate-50 text-slate-700"
       : timerStatus === "running"
       ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-      : "border-amber-200 bg-amber-50 text-amber-800";
+      : timerStatus === "paused"
+      ? "border-amber-200 bg-amber-50 text-amber-800"
+      : "border-slate-200 bg-slate-50 text-slate-600";
   const timerDotClass =
     timerStatus === "submitted"
       ? "bg-slate-400"
       : timerStatus === "running"
       ? "bg-emerald-500 animate-pulse"
-      : "bg-amber-500";
+      : timerStatus === "paused"
+      ? "bg-amber-500"
+      : "bg-slate-400";
+  const formDisabled = !submissionLocked && timerStatus !== "running";
 
   const blockingReasons = [];
   if (missingStudyContext) {
@@ -2290,6 +2488,11 @@ export default function ArtifactsComparison() {
     setAssessmentError("");
     setAssessmentSuccess("");
 
+    if (timerStatus === "not_started" || timerStatus === "paused") {
+      setAssessmentError("Start the timer before submitting your assessment.");
+      return;
+    }
+
     if (submissionLocked) {
       setAssessmentError(
         "You've already submitted this task. Researchers are reviewing your work."
@@ -2386,7 +2589,7 @@ export default function ArtifactsComparison() {
           hydrateAssessmentPayload(saved.payload);
         }
         setSubmissionLocked(true);
-        pauseTimer(true);
+        pauseTimer(true, true);
       }
       setAssessmentSuccess("Assessment submitted successfully.");
     } catch (error) {
@@ -2453,9 +2656,9 @@ export default function ArtifactsComparison() {
     );
   }
 
-  return (
-    <div className="min-h-screen bg-white p-6 text-gray-900 font-sans">
-      <div className="max-w-[1400px] mx-auto space-y-6">
+    return (
+      <div className={`min-h-screen bg-white p-6 text-gray-900 font-sans ${formDisabled ? "opacity-95" : ""}`}>
+        <div className="max-w-[1400px] mx-auto space-y-6">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="flex flex-col gap-1">
             <span className="text-xs uppercase tracking-wide text-gray-500">
@@ -2483,17 +2686,6 @@ export default function ArtifactsComparison() {
           </div>
           <div className="flex flex-col gap-2 items-start lg:items-end">
             <div className="flex flex-wrap items-center gap-3">
-              <span
-                className={`text-xs px-2 py-1 rounded-full border ${
-                  studyProgressStatus === "completed"
-                    ? "border-emerald-200 text-emerald-700 bg-emerald-50"
-                    : studyProgressStatus === "in_progress"
-                    ? "border-amber-200 text-amber-700 bg-amber-50"
-                    : "border-slate-200 text-slate-600 bg-slate-50"
-                }`}
-              >
-                {studyProgressLabel}
-              </span>
               <div
                 className={`flex items-center gap-2 rounded-full border px-3 py-1 ${timerBadgeClass}`}
                 title="Tracks your time on this study task"
@@ -2504,10 +2696,26 @@ export default function ArtifactsComparison() {
                     Time on task
                   </span>
                   <span className="text-[11px] text-gray-600">
-                    {timerDurationLabel} • {timerStatusLabel}
+                    {timerStatus === "not_started"
+                      ? "Not started yet"
+                      : `${timerDurationLabel} - ${timerStatusLabel}`}
                   </span>
                 </div>
               </div>
+              {timerStatus !== "submitted" && timerStatus !== "running" && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => startTimer()}
+                >
+                  {timerStatus === "paused" ? "Resume timer" : "Start study counter"}
+                </Button>
+              )}
+              {formDisabled && !submissionLocked && (
+                <span className="text-[11px] text-amber-700">
+                  Start the timer to unlock this task.
+                </span>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-3 justify-end">
               {allowSyncAndSwap && (
@@ -2517,6 +2725,7 @@ export default function ArtifactsComparison() {
                       id="sync-mode"
                       checked={syncScroll}
                       onCheckedChange={(checked) => setSyncScroll(!!checked)}
+                      disabled={formDisabled}
                     />
                     <label
                       htmlFor="sync-mode"
@@ -2539,6 +2748,7 @@ export default function ArtifactsComparison() {
                       setLeftSummary(rightSummary);
                       setRightSummary(tS);
                     }}
+                    disabled={formDisabled}
                   >
                     Swap Sides
                   </Button>
@@ -2655,6 +2865,7 @@ export default function ArtifactsComparison() {
               value={selectedMetadataId}
               onChange={(e) => handleMetadataSelection(e.target.value)}
               className="border rounded px-2 py-1 bg-white text-gray-700"
+              disabled={formDisabled}
             >
               {!selectedMetadataId && (
                 <option value="" disabled>
@@ -2679,6 +2890,7 @@ export default function ArtifactsComparison() {
                   }
                 }}
                 className="border rounded px-2 py-1 bg-white text-gray-700"
+                disabled={formDisabled}
               >
                 <option value="left">Artifact A (left)</option>
                 <option value="right">Artifact B (right)</option>
@@ -2992,14 +3204,15 @@ export default function ArtifactsComparison() {
                               setCustomResponses((prev) => ({ ...prev, [q.id]: v }))
                             }
                             className="flex flex-wrap gap-3"
+                            disabled={formDisabled || submissionLocked}
                           >
                             {(q.options || []).map((opt) => (
                               <div key={opt} className="flex items-center space-x-2">
-                                <RadioGroupItem value={opt} id={`${q.id}-${opt}`} className={radioClass} />
-                                <Label htmlFor={`${q.id}-${opt}`}>{opt}</Label>
-                              </div>
-                            ))}
-                          </RadioGroup>
+                        <RadioGroupItem value={opt} id={`${q.id}-${opt}`} className={radioClass} />
+                        <Label htmlFor={`${q.id}-${opt}`}>{opt}</Label>
+                      </div>
+                    ))}
+                  </RadioGroup>
                         </div>
                       );
                     })
@@ -3013,6 +3226,7 @@ export default function ArtifactsComparison() {
                     onChange={(e) => setAssessmentComment(e.target.value)}
                     rows={3}
                     placeholder="Add any context or rationale (optional)."
+                    disabled={formDisabled || submissionLocked}
                   />
                   {assessmentError && (
                     <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3035,6 +3249,7 @@ export default function ArtifactsComparison() {
                       }
                     }}
                     className="flex flex-wrap gap-4 mt-1"
+                    disabled={formDisabled || submissionLocked}
                   >
                     <div className="flex items-center space-x-2">
                       <RadioGroupItem
@@ -3066,6 +3281,7 @@ export default function ArtifactsComparison() {
                       value={patchCloneType}
                       onChange={(e) => setPatchCloneType(e.target.value)}
                       className="border rounded px-2 py-1 text-sm w-full bg-white"
+                      disabled={formDisabled || submissionLocked}
                     >
                       <option value="">Choose clone type...</option>
                       {PATCH_CLONE_TYPES.map((t) => (
@@ -3091,6 +3307,7 @@ export default function ArtifactsComparison() {
                     onChange={(e) => setPatchCloneComment(e.target.value)}
                     rows={3}
                     placeholder="E.g., 'Both patches change the same API call and condition, only variable names differ, so Type-2.'"
+                    disabled={formDisabled || submissionLocked}
                   />
                   {assessmentError && (
                     <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3105,6 +3322,7 @@ export default function ArtifactsComparison() {
                     value={solidViolation}
                     onChange={(e) => setSolidViolation(e.target.value)}
                     className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    disabled={formDisabled || submissionLocked}
                   >
                     <option value="">Choose violation...</option>
                     {SOLID_VIOLATIONS.map((v) => (
@@ -3125,6 +3343,7 @@ export default function ArtifactsComparison() {
                     value={solidComplexity}
                     onValueChange={setSolidComplexity}
                     className="flex flex-wrap gap-4 mt-1"
+                    disabled={formDisabled || submissionLocked}
                   >
                     {COMPLEXITY_LEVELS.map((lvl) => (
                       <div
@@ -3158,6 +3377,7 @@ export default function ArtifactsComparison() {
                     onChange={(e) => setSolidFixedCode(e.target.value)}
                     rows={6}
                     placeholder="Paste or write a refactored version that no longer violates the chosen principle (optional)."
+                    disabled={formDisabled || submissionLocked}
                   />
                 </div>
 
@@ -3171,6 +3391,7 @@ export default function ArtifactsComparison() {
                   onChange={(e) => setAssessmentComment(e.target.value)}
                   rows={3}
                   placeholder="E.g., 'Class handles both persistence and business logic, so SRP is violated; refactoring requires splitting responsibilities, so I marked it MEDIUM.'"
+                  disabled={formDisabled || submissionLocked}
                 />
                 {assessmentError && (
                   <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3212,6 +3433,7 @@ export default function ArtifactsComparison() {
                     value={snapshotOutcome}
                     onValueChange={setSnapshotOutcome}
                     className="flex flex-wrap gap-4 mt-1"
+                    disabled={formDisabled || submissionLocked}
                   >
                     {SNAPSHOT_OUTCOMES.map((o) => (
                       <div
@@ -3242,6 +3464,7 @@ export default function ArtifactsComparison() {
                     value={snapshotChangeType}
                     onChange={(e) => setSnapshotChangeType(e.target.value)}
                     className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    disabled={formDisabled || submissionLocked}
                   >
                     <option value="">Choose change type...</option>
                     {SNAPSHOT_CHANGE_TYPES.map((t) => (
@@ -3256,6 +3479,7 @@ export default function ArtifactsComparison() {
                       onChange={(e) => setSnapshotChangeTypeOther(e.target.value)}
                       className="border rounded px-2 py-1 text-sm w-full"
                       placeholder="Describe the UI change"
+                      disabled={formDisabled || submissionLocked}
                     />
                   )}
                   <p className="text-[11px] text-gray-400">
@@ -3275,6 +3499,7 @@ export default function ArtifactsComparison() {
                   onChange={(e) => setAssessmentComment(e.target.value)}
                   rows={3}
                   placeholder="E.g., 'Layout change matches updated design specs, text and icons align with new style guide, so this is an intended UI change.'"
+                  disabled={formDisabled || submissionLocked}
                 />
                 {assessmentError && (
                   <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3289,6 +3514,7 @@ export default function ArtifactsComparison() {
                     value={leftCategory}
                     onChange={(e) => setLeftCategory(e.target.value)}
                     className="border rounded px-2 py-1 text-sm w-full bg-white"
+                    disabled={formDisabled || submissionLocked}
                   >
                     <option value="">Choose category...</option>
                     {bugCategoryOptions.map((c) => (
@@ -3313,6 +3539,7 @@ export default function ArtifactsComparison() {
                     onChange={(e) => setAssessmentComment(e.target.value)}
                     rows={3}
                     placeholder="E.g., 'The description mentions UI layout breaking after resize, so I chose GUI.'"
+                    disabled={formDisabled || submissionLocked}
                   />
                   {assessmentError && (
                     <p className="text-xs text-destructive">{assessmentError}</p>
@@ -3350,20 +3577,29 @@ export default function ArtifactsComparison() {
                               key={value}
                               type="button"
                               className="p-1"
+                              disabled={formDisabled || submissionLocked}
                               onMouseEnter={() =>
-                                setCriteriaHover((prev) => ({
-                                  ...prev,
-                                  [criterion.label]: value,
-                                }))
+                                (formDisabled || submissionLocked
+                                  ? undefined
+                                  : setCriteriaHover((prev) => ({
+                                      ...prev,
+                                      [criterion.label]: value,
+                                    })))
                               }
                               onMouseLeave={() =>
-                                setCriteriaHover((prev) => {
-                                  const next = { ...prev };
-                                  delete next[criterion.label];
-                                  return next;
-                                })
+                                (formDisabled || submissionLocked
+                                  ? undefined
+                                  : setCriteriaHover((prev) => {
+                                      const next = { ...prev };
+                                      delete next[criterion.label];
+                                      return next;
+                                    }))
                               }
-                              onClick={() => handleCriteriaRating(criterion.label, value)}
+                              onClick={() =>
+                                !formDisabled &&
+                                !submissionLocked &&
+                                handleCriteriaRating(criterion.label, value)
+                              }
                             >
                               <Star
                                 className={
@@ -3395,7 +3631,10 @@ export default function ArtifactsComparison() {
                 className="bg-black text-white hover:bg-gray-800"
                 onClick={handleSaveAssessment}
                 disabled={
-                  assessmentSaving || submissionLocked || !hasAssignmentContext
+                  assessmentSaving ||
+                  submissionLocked ||
+                  !hasAssignmentContext ||
+                  formDisabled
                 }
               >
                 {submissionLocked
