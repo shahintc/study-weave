@@ -73,10 +73,8 @@ export function useDashboardPreferences(userKey, defaults = noopDefaults, authTo
         setLastSavedAt(new Date().toISOString());
       } catch (error) {
         console.warn("Dashboard preference save failed", error?.response || error);
-        setSaveError(
-          error?.response?.data?.message ||
-            "Could not save preferences to your profile.",
-        );
+        // Swallow server save errors to keep UX silent; local save already applied.
+        setSaveError("");
       } finally {
         setSaving(false);
       }

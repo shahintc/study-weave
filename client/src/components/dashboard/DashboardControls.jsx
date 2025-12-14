@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { GripVertical, RefreshCcw, Save, Undo2 } from "lucide-react";
+import { GripVertical, RefreshCcw, Undo2 } from "lucide-react";
 
 const formatTimestamp = (value) => {
   if (!value) return "";
@@ -110,7 +110,7 @@ export default function DashboardControls({
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Filters are remembered automatically. Use save to sync to your profile.
+            Filters and layout are remembered automatically.
           </p>
         </div>
 
@@ -149,28 +149,12 @@ export default function DashboardControls({
       <Separator className="mx-6" />
       <CardFooter className="flex flex-wrap items-center justify-between gap-3 rounded-b-2xl bg-muted/20 px-6 py-4">
         <div className="text-xs text-muted-foreground">
-          {lastSavedAt ? `Last saved ${formatTimestamp(lastSavedAt)}` : "Not saved to profile yet."}
-          {saveError ? (
-            <span className="ml-2 text-destructive">{saveError}</span>
-          ) : null}
+          {lastSavedAt ? `Last saved ${formatTimestamp(lastSavedAt)}` : "Preferences are saved automatically."}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" onClick={onReset}>
             <RefreshCcw className="mr-2 h-4 w-4" />
             Reset layout
-          </Button>
-          <Button size="sm" onClick={onSave} disabled={saving}>
-            {saving ? (
-              <span className="flex items-center gap-2">
-                <Save className="h-4 w-4 animate-spin" />
-                Saving
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <Save className="h-4 w-4" />
-                Save preferences
-              </span>
-            )}
           </Button>
         </div>
       </CardFooter>
