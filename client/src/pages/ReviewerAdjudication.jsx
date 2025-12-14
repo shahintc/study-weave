@@ -1398,6 +1398,33 @@ export default function ReviewerAdjudication() {
 
               {isReviewer ? (
                 <>
+                  {selected?.review ? (
+                    <section className="space-y-2 rounded-lg border border-border/70 bg-muted/30 p-3">
+                      <h3 className="text-sm font-semibold text-muted-foreground">Researcher decision</h3>
+                      <div className="flex flex-wrap items-center gap-3 text-sm">
+                        <span className="flex items-center gap-1">
+                          <span className="text-muted-foreground">Status:</span>
+                          {getStatusBadge(selected.review.status || "pending")}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="text-muted-foreground">Decision:</span>
+                          {getDecisionBadge(selected.review.decision)}
+                        </span>
+                        {selected.review.adjudicatedLabel ? (
+                          <span className="flex items-center gap-1">
+                            <span className="text-muted-foreground">Label:</span>
+                            <Badge variant="outline">{selected.review.adjudicatedLabel}</Badge>
+                          </span>
+                        ) : null}
+                      </div>
+                      {selected.review.notes ? (
+                        <p className="text-sm text-muted-foreground">
+                          {selected.review.notes}
+                        </p>
+                      ) : null}
+                    </section>
+                  ) : null}
+
                   <section className="space-y-4">
                     <div className="flex items-center justify-between gap-3">
                       <div>

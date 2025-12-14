@@ -13,6 +13,8 @@ const {
   ArtifactAssessment,
   User,
   StudyComparison,
+  Evaluation,
+  ReviewerNote,
 } = require('../models');
 
 const ARTIFACT_MODE_OPTIONS = [
@@ -113,6 +115,54 @@ const normalizeTimerState = (timer = {}) => {
     lastStart: Number.isFinite(lastStart) ? lastStart : null,
     studyArtifactId: timer.studyArtifactId ? Number(timer.studyArtifactId) : null,
     updatedAt: timer.updatedAt || new Date().toISOString(),
+  };
+};
+
+const formatParticipantEvaluation = (evaluation) => {
+  if (!evaluation) return null;
+  const plain = typeof evaluation.get === 'function' ? evaluation.get({ plain: true }) : evaluation;
+  const study = plain.study || {};
+
+  return {
+    id: String(plain.id),
+    study: study
+      ? {
+          id: String(study.id),
+          title: study.title,
+          description: study.description || null,
+        }
+      : null,
+    review: {
+      status: plain.reviewStatus || 'pending',
+      decision: plain.reviewerDecision || null,
+      adjudicatedLabel: plain.adjudicatedLabel || null,
+      notes: plain.reviewerNotes || null,
+      reviewedAt: plain.reviewedAt || null,
+      comments: Array.isArray(plain.reviewerNotesList)
+        ? plain.reviewerNotesList.map((note) => ({
+            id: String(note.id),
+            comment: note.comment,
+            rating: note.rating,
+            createdAt: note.createdAt,
+            reviewer: note.author
+              ? {
+                  id: String(note.author.id),
+                  name: note.author.name,
+                  email: note.author.email,
+                }
+              : null,
+          }))
+        : [],
+    },
+    participantAnswer: {
+      preference: plain.preference || null,
+      rating: plain.rating || null,
+      summary: plain.summary || null,
+      notes: plain.notes || null,
+      metrics: plain.metrics || null,
+    },
+    submittedAt: plain.submittedAt || null,
+    updatedAt: plain.updatedAt || null,
   };
 };
 
@@ -323,6 +373,37 @@ router.get('/assignments', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Participant assignments error', error);
     return res.status(500).json({ message: 'Unable to load assignments right now.' });
+  }
+});
+
+router.get('/evaluations', authMiddleware, async (req, res) => {
+  try {
+    if (!req.user || !['participant', 'guest'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Only participants can view their evaluations.' });
+    }
+
+    const rows = await Evaluation.findAll({
+      where: { participantId: req.user.id },
+      include: [
+        {
+          model: Study,
+          as: 'study',
+          attributes: ['id', 'title', 'description'],
+        },
+        {
+          model: ReviewerNote,
+          as: 'reviewerNotesList',
+          include: [{ model: User, as: 'author', attributes: ['id', 'name', 'email'] }],
+        },
+      ],
+      order: [['updatedAt', 'DESC']],
+    });
+
+    const evaluations = rows.map((row) => formatParticipantEvaluation(row));
+    return res.json({ evaluations });
+  } catch (error) {
+    console.error('Participant evaluations fetch error', error);
+    return res.status(500).json({ message: 'Unable to load your study evaluations right now.' });
   }
 });
 

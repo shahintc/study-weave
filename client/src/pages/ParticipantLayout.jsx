@@ -232,6 +232,7 @@ export default function ParticipantLayout() {
   const nav = [
     { to: "/participant", label: "Dashboard", key: "dashboard" },
     { to: "/participant/competency", label: "Competency", key: "competency" },
+    { to: "/participant/studies", label: "My studies", key: "studies" },
   ];
 
   const isGuest = user?.role === "guest";

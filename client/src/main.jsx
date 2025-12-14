@@ -17,6 +17,7 @@ import AssessmentCreation from "./pages/AssessmentCreationPage";
 import ParticipantCompetencyAssessment from "./pages/participant_competency_assessment";
 import ResearcherLayout from "./pages/ResearcherLayout";
 import ParticipantLayout from "./pages/ParticipantLayout";
+import ParticipantStudies from "./pages/ParticipantStudies";
 import ParticipantsListPage from "./pages/ParticipantsListPage";
 import AdminRoleManagementPage from "./pages/AdminRoleManagementPage";
 import CompetencyEvaluationReview from "./pages/CompetencyEvaluationReview";
@@ -58,6 +59,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <Route index element={<ParticipantDashboard />} />
           <Route path="artifacts-comparison" element={<ArtifactsComparison />} />
           <Route path="competency" element={<ParticipantCompetencyAssessment />} />
+          <Route path="studies" element={<ParticipantStudies />} />
         </Route>
 
         {/* Aliases for older root-level links */}
