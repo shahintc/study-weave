@@ -9,6 +9,30 @@ Ali Demir
 Shahin Ibrahimli  
 Farrukh Mammadov  
 
+🛠️ My Individual Contributions
+As a core developer, I architected and implemented critical modules across the frontend and backend, ensuring the platform met the rigorous requirements for human-subject research. My work included:
+
+Core Research & Evaluation Features
+Study Creation Wizard: Designed and implemented the multi-step "Study Creation Wizard" UI and logic, enabling researchers to configure complex studies seamlessly.
+
+Blinded Evaluation Module: Developed the "Blinded Evaluation" feature to hide artifact origin/authorship, a critical requirement for preventing participant bias.
+
+Artifact Assignment Logic: Built the system for assigning specific artifacts to studies and managing participant selection criteria.
+
+Full-Stack Development & UI/UX
+Admin & Reviewer Dashboards: Created the comprehensive Admin page and Reviewer interfaces, including "hide and filter" functionality for managing large datasets.
+
+Authentication System: Developed the initial UI for the secure login and registration pages, establishing the project's user access foundation.
+
+Notification System: Built automated notification triggers for both researchers and participants to track study deadlines and updates.
+
+Analytics, Export & Quality Assurance
+Data Analytics & Export: Implemented study analytics and the engine to export reports as PDF/PNG, allowing researchers to analyze results offline.
+
+Integration Testing: Developed and integrated automated integration tests to ensure system stability across the study lifecycle.
+
+Bug Resolution: Actively maintained system health by identifying and fixing bugs within the researcher page, blinded evaluation logic, and UI layouts.
+
 ## Description 
 Study Weave is a web application that is designed for the CS 319 Object Oriented Software Engineering course. This project's main goal is to create a platform that will allow researchers to conduct systematic human-subject studies so that they can evaluate and compare software engineering artifacts, such as source code, test cases, UML diagrams, and requirements documents. The system will not only facilitate the upload and management but also compare artifacts generated both manually by developers and automatically by AI tools like Large Language Models (LLMs). The participants will take part in a structured comparison of tasks where they will be providing annotations, ratings, and feedback without knowing who created the artifacts, to ensure fair and unbiased evaluation. The app will support multiple user roles, including researchers, participants, admins, and potentially others identified during the development process, with secure role-based access control.
 This project uses React.js for a dynamic frontend and Node.js for  backend. The purpose is to address the growing need to fairly evaluate a variety of artifacts, especially as AI-generated content is becoming more common lately. Through this work, the team aims to demonstrate practical skills in object-oriented design, full-stack development, and collaborative project management.
